@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+build/
+dist/
+
+# Working notes (per tapestry_handoff.md's own convention) — keep tracked for now
+# since they're not yet actually relocated into docs/plans/; revisit if they move.
