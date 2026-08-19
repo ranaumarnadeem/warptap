@@ -405,10 +405,23 @@ license before vendoring fixtures) — start with its "Basic" category, which sh
 flat-tree scope. Note: this is also where the §0 decision needs to be resolved, since it
 determines whether the manifest/spec-ingestion layer needs to speak openMBIST's schema.
 
-**Stage 6 — ICL connectivity check.** The "over-shifting" technique from Mentor's diagnosis
-work (§ ICL self-check): flush a bit pattern longer than the currently-configured scan-path
-length through TDI, verify arrival against ICL-declared register widths at TDO. Cheap,
-simulator-free — do this before investing in a full functional simulator.
+**Stage 6 — ICL connectivity check.** The "over-shifting" technique, attributed to Dr. Martin
+Keim (Mentor Graphics/Siemens EDA), "Automated Debugging of IJTAG Networks," Nordic Test
+Forum, Nov 2017 (a vendor conference-talk deck, not the IEEE 1687 standard text or a
+peer-reviewed paper — the only source found using this exact technique by name; the earlier
+`(§ ICL self-check)` cross-reference in this paragraph was dangling and has been removed):
+flush a bit pattern longer than the currently-configured scan-path length through TDI, verify
+arrival against ICL-declared register widths at TDO. warptap's implementation
+(`src/warptap/sib_overshift.py`) upgrades this from Keim's arrival-timing-only comparison to
+exact bit-for-bit stream comparison against a fresh `TapModel`/`SibNetworkRegister` oracle,
+since warptap already owns a full behavioral model — stronger (also catches content-only
+defects), but empirically found to change what `margin` guarantees: with an exact-comparison
+oracle, most structural defects are caught even at `margin=0`, and margin's real role is
+improving *reliability* against defects whose content happens to coincidentally alias at a
+given probe length, not providing a hard `margin >= delta` guarantee the way Keim's own
+narrower technique implies (see `sib_overshift.py`'s module docstring and
+`tests/test_sib_overshift.py`'s margin-sweep tests for the full, execution-verified finding).
+Cheap, simulator-free — do this before investing in a full functional simulator.
 
 **Stage 7 — TAP-transaction IR + SVF/STAPL emitters.** §3.4 + §6. SVF first (simplest: always
 emit every field, no sticky-default optimization yet). STAPL second, reusing the same IR walk.
