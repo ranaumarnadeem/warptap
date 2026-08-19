@@ -28,7 +28,12 @@ def _search(node: SibNode, instrument_name: str, path: tuple[str, ...]) -> tuple
     return None
 
 
-def open_path_to(graph: PhysicalGraph, instrument_name: str) -> frozenset[str]:
+def open_path_to(
+    graph: PhysicalGraph,
+    instrument_name: str,
+    *,
+    network_configuration: frozenset[str] = frozenset(),
+) -> frozenset[str]:
     """The SIB ancestor chain that must be OPEN to reach ``instrument_name``. For a
     directly-gated instrument (v1's only real case, since networks are flat/static per
     §7 Stage 4's scope), this is exactly ``frozenset({that_sib_name})`` -- the recursion
@@ -36,8 +41,18 @@ def open_path_to(graph: PhysicalGraph, instrument_name: str) -> frozenset[str]:
     deep today, not as a special case but as the natural result of walking a currently-shallow
     tree; it only needs to keep working once nested SIB-gating-SIB networks land.
 
+    ``network_configuration`` (implementation_plan.md §3.3) names whatever SIBs are
+    *currently* open, ahead of a future SAT-based ``existPr`` extension whose answer would
+    genuinely depend on it (dynamic reachability, §1's confirmed finding). v1's static
+    ancestor-chain answer never depends on it -- accepted and ignored here -- so this is a
+    pure signature seam, not yet load-bearing for this function's own return value. (It *is*
+    load-bearing elsewhere: ``pdl_interpreter.PDLInterpreter`` tracks the same "currently
+    open" set itself to size phase 1 of each ``iApply``, per implementation_plan.md §7
+    Stage 5 §3.)
+
     Raises :class:`SibRetargetError`, naming ``instrument_name``, if no SIB in ``graph``
     gates an instrument by that name."""
+    del network_configuration  # v1: accepted for the future existPr seam, unused today
     for node in graph.chain:
         found = _search(node, instrument_name, ())
         if found is not None:
