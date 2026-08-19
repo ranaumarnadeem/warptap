@@ -21,3 +21,8 @@ wsl bash -lc "cd /mnt/c/path/to/tapestry && ./.venv/bin/python -m pytest"
 reinstalling it. If a real `yosys` isn't available at all, `WARPTAP_YOSYS_CMD` can point at any
 Yosys-compatible executable — `tests/conftest.py` falls back to a pip-installed
 `yowasp-yosys` (WASM build, see the `dev` extra) if nothing is found on `PATH`.
+
+Some tests also cross-simulate hand-authored RTL against its Python behavioral-model
+counterpart using Icarus Verilog (`iverilog`/`vvp`, already present in the documented WSL
+environment). There's no WASM fallback for these — if neither is on `PATH` nor pointed at via
+`WARPTAP_IVERILOG_CMD`/`WARPTAP_VVP_CMD`, those tests skip cleanly rather than failing.
