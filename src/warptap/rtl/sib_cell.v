@@ -13,8 +13,20 @@ module sib_cell (
     output wire so,              // this SIB's own shift_ff, open or closed
     input  wire nested_so,       // scan-out fed back from the nested segment this SIB gates
     output wire nested_si,       // = si, unconditionally
-    output wire nested_select,   // = po & select -- exposed for future nested-SIB use;
-                                  // v1 never wires it to anything that consumes it
+    output wire nested_select,   // = po & shift_ff & select: open both *before* and *after*
+                                  // this edge, not just before -- implementation_plan.md §7
+                                  // Stage 9's first real consumer (instrument_write.v's own
+                                  // update-latch gate) needs exactly this stronger form: `po`
+                                  // alone (open before) would still let a segment's own
+                                  // closing Update-DR -- the edge that flips po from 1 to 0 --
+                                  // commit whatever "don't care" bits phase 1's retargeting
+                                  // shift happened to feed it (compose_bits.py's 0-fill,
+                                  // documented as "no lasting effect", which only held while
+                                  // no instrument had a real update latch). `shift_ff` is
+                                  // exactly the value about to become the new `po` this same
+                                  // edge, so `po & shift_ff` is true only while a segment
+                                  // stays open across the edge, never while it's opening or
+                                  // closing.
     input  wire select,          // AND-ed into every local action; v1 ties this to the
                                   // constant 1 for every top-level SIB (unconditionally
                                   // reachable directly off the TAP)
@@ -47,5 +59,5 @@ module sib_cell (
 
     assign so = shift_ff;
     assign nested_si = si;
-    assign nested_select = po & select;
+    assign nested_select = po & shift_ff & select;
 endmodule

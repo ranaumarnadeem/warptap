@@ -20,13 +20,35 @@ BsrPlan).
 
 from __future__ import annotations
 
+import enum
 from typing import NamedTuple, Optional
+
+
+class InstrumentDirection(enum.Enum):
+    """Which way an instrument's bits move real design data (implementation_plan.md §7
+    Stage 9). One direction per instrument, not per-bit and not real ICL's bidirectional
+    DataInPort+DataOutPort-on-one-TDR shape -- every real signal this project binds so far
+    is cleanly either read-only status or write-only control, never both."""
+
+    READ = "read"
+    WRITE = "write"
+
+
+class SignalBinding(NamedTuple):
+    """One instrument bit's real host-net binding: bit ``bit`` of top-level port
+    ``port_name`` on the module being inserted into. An ``InstrumentNode`` with no
+    ``signal_bits`` has no real binding -- v1's original stub behavior, unchanged."""
+
+    port_name: str
+    bit: int = 0
 
 
 class InstrumentNode(NamedTuple):
     name: str
     width: int
     capture_value: int  # fixed deterministic stub, mirrors tap_model.IDCODE_VALUE's role
+    direction: InstrumentDirection = InstrumentDirection.READ
+    signal_bits: tuple[SignalBinding, ...] = ()  # () or exactly `width` long
 
 
 class SibNode(NamedTuple):

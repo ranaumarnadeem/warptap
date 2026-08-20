@@ -56,3 +56,40 @@ def vvp_command() -> str:
 @pytest.fixture(scope="session")
 def fixtures_dir() -> Path:
     return Path(__file__).parent / "fixtures"
+
+
+def _default_openmbist_dir() -> Path:
+    if os.environ.get("WARPTAP_OPENMBIST_DIR"):
+        return Path(os.environ["WARPTAP_OPENMBIST_DIR"])
+    # tests/conftest.py -> tests -> tapestry -> tapestry's own parent: openMBIST is a sibling
+    # checkout, not nested inside this repo (implementation_plan.md §7 Stage 9 §5.2).
+    return Path(__file__).resolve().parents[2] / "openMBIST"
+
+
+@pytest.fixture(scope="session")
+def openmbist_dir() -> Path:
+    """The real openMBIST checkout this project cross-simulates Stage 9's functional
+    instruments against -- a sibling project, never vendored into tapestry (implementation_
+    plan.md §7 Stage 9 §5.2's own licensing note: read live from the sibling checkout at test
+    time). Skips (not fails) when not found, mirroring iverilog_command/vvp_command's own
+    "optional external dependency" discipline."""
+    candidate = _default_openmbist_dir()
+    if not candidate.is_dir():
+        pytest.skip(f"openMBIST checkout not found at {candidate} (set WARPTAP_OPENMBIST_DIR)")
+    return candidate
+
+
+@pytest.fixture(scope="session")
+def autombist_generator(openmbist_dir: Path):
+    """``autombist.generator.generate_from_config`` imported live from the sibling openMBIST
+    checkout's own ``src/`` tree (confirmed pure Python + Jinja2, no subprocess/WSL/cocotb
+    needed) -- same skip-if-not-importable guard as ``openmbist_dir``, not a hard failure,
+    since a missing/incompatible sibling checkout is an environment gap, not a warptap bug."""
+    src_dir = str(openmbist_dir / "src")
+    if src_dir not in sys.path:
+        sys.path.insert(0, src_dir)
+    try:
+        from autombist.generator import generate_from_config
+    except ImportError as exc:
+        pytest.skip(f"autombist.generator not importable from {src_dir}: {exc}")
+    return generate_from_config

@@ -434,10 +434,28 @@ network model instead of a SoC chain-offset table, emit via the Stage 7 backends
 where the faultflow-side optional-dependency wrapper (`ff.py jtag`/`ijtag` subcommands,
 already speced in `tapestry_handoff.md`) becomes real.
 
-**Stage 9 (v1.x/v2) — PDL functional verification.** Either a narrow purpose-built simulator
-(warptap already knows the exact structure it just inserted) or, if `simulate_scan_pattern()`
-turns out to compose cleanly with a warptap-side TMS sequencer (§5.1), depend on faultflow's
-exposed golden-reference simulator instead of building a second one.
+**Stage 9 (built) — real functional instruments + PDL functional verification.** Superseded
+both options originally sketched above once actually built, per an explicit user decision to
+verify against real observed behavior on a real external design
+(`openMBIST/flow/multimem/mbist/mem_subsystem_mbist.sv`) rather than warptap's own predictions.
+Two parts, deliberately separate:
+
+- A genuinely new RTL primitive, `rtl/instrument_write.v` — a real (non-stub) write-target
+  TDR cell with an update latch permanently wired to a real host signal (`icl_model.
+  InstrumentDirection`/`SignalBinding`, `sib_insert.py`'s direction-branched wiring). Discovered
+  during implementation: the naive gate ("commit only while the gating SIB is open," i.e. its
+  `po`) is insufficient — phase 1's "don't-care" 0-fill (`sib_layout.compose_bits`, safe only
+  for a cell with no update latch) would still clobber a WRITE instrument on the very edge that
+  opens *or* closes its SIB. The fix redefines `sib_cell.v`'s previously-unconsumed
+  `nested_select` as `po & shift_ff` (open both before *and* after the edge) — the correct,
+  general form its own "future nested-SIB use" framing anticipated. A narrower, documented v1
+  limitation remains: retargeting to the *same* still-open WRITE instrument twice with no
+  intervening different target clobbers it (see `pdl_interpreter.py`'s `iApply` docstring).
+- `pdl_verify.py` (`check_reads`/`correlate_observed`): compares a real Icarus-observed TDO
+  trace against `PDLInterpreter`'s own PDL-declared `iRead` expectations — no fault model, no
+  second Python-side functional prediction. Proven both generically (`real_signal.v`, Tier 1)
+  and against the real target (`mem_subsystem_mbist`, Tier 2: write `self_repair_start`, confirm
+  `self_repair_busy` reads back 1 from the real march-C/on-chip-BISR FSM).
 
 **Explicitly not in this plan** (matches existing v1 scope, reconfirmed by this research):
 nested/hierarchical SIB trees, dynamic `existPr` reachability, STIL emission, hierarchical
@@ -460,7 +478,9 @@ multi-instrument networks, any conformance claim against a specific IEEE standar
   `svf` command), not a self-written parser.
 - **PDL functional verification** (Stage 9): replay a retargeted sequence, compare against the
   PDL-declared expected value — no fault model involved, this is warptap checking its own
-  output, not faultflow's job.
+  output, not faultflow's job. Built as `pdl_verify.check_reads()`, proven against a real
+  external design's real FSM behavior (`mem_subsystem_mbist`'s self-repair controller), not
+  just warptap's own stub predictions.
 
 ---
 

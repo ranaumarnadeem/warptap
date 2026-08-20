@@ -113,9 +113,25 @@ class PDLInterpreter:
         _currently_open``), not a static ``len(graph.chain)`` baseline -- if a previous
         ``iApply`` targeting a different instrument left some other SIB open, phase 1 must
         shift through that instrument's still-physically-present content (as don't-care
-        garbage -- ``bc1_shift_only.v`` has no update latch, so this has zero lasting
-        effect) to close it. This is load-bearing for correctly sequencing back-to-back
+        garbage) to close it. This is load-bearing for correctly sequencing back-to-back
         ``iApply`` calls, not merely future-SAT-extension bookkeeping.
+
+        For a READ instrument this garbage shift has zero lasting effect (``bc1_shift_only.v``
+        has no update latch). **For a WRITE instrument it does** (implementation_plan.md §7
+        Stage 9): phase 1 always feeds ``0`` for a non-target slot's content (``sib_layout.
+        compose_bits``'s own documented behavior), and ``instrument_write.v``'s update-latch
+        commits on any edge that leaves its gating SIB open both before and after -- which
+        includes phase 1's own Update-DR whenever a WRITE instrument stays open across it.
+        Retargeting *away* from an open WRITE instrument (closing it) is safe -- the closing
+        edge itself is gated off (open-before but not-open-after) -- and a value survives
+        being closed and later reopened via a *different* intermediate target, since it's
+        never touched while closed. The one case this does NOT protect: calling ``iApply``
+        twice in a row for the *same* still-open WRITE instrument with no intervening
+        different target -- phase 1 of the second call sees that instrument open both before
+        and after (nothing changed), so its 0 don't-care fill commits, clobbering the value
+        before phase 2 ever runs. A real PDL sequence naturally avoids this (a second touch
+        without going elsewhere would normally carry a fresh ``iWrite`` anyway); it is not
+        specially detected or rejected here.
         """
         scope = self._require_scope("iApply")
         instrument_name = scope.name

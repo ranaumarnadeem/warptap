@@ -65,7 +65,11 @@ def run_yosys_script(
 
 
 def ingest(
-    verilog_files: list[Path | str], top: str, *, yosys_command: str | None = None
+    verilog_files: list[Path | str],
+    top: str,
+    *,
+    yosys_command: str | None = None,
+    use_sv: bool = False,
 ) -> dict[str, Any]:
     """Ingest pass (plan §4.1 step 1): lower Verilog source(s) for ``top`` into
     Yosys's JSON netlist representation.
@@ -74,6 +78,11 @@ def ingest(
     This step is mandatory, not optional, before any pure-Python JSON surgery:
     ``write_json`` rejects modules that still contain unlowered behavioral processes
     (``$proc``/``always`` blocks).
+
+    ``use_sv``, when set, adds ``-sv`` to ``read_verilog`` so SystemVerilog constructs
+    (``always_comb``/``always_ff``, ``logic``) parse. Off by default: every existing
+    caller passes plain Verilog-2001 sources, and this keeps their output byte-for-byte
+    unaffected (plan §7 Stage 9 §5.3).
     """
     with tempfile.TemporaryDirectory(prefix="warptap-ingest-") as tmpdir:
         tmp = Path(tmpdir)
@@ -86,7 +95,8 @@ def ingest(
             local_names.append(src.name)
 
         out_name = "netlist.json"
-        read_cmds = " ".join(f"read_verilog {name};" for name in local_names)
+        sv_flag = "-sv " if use_sv else ""
+        read_cmds = " ".join(f"read_verilog {sv_flag}{name};" for name in local_names)
         script = (
             f"{read_cmds} "
             f"hierarchy -top {top}; "

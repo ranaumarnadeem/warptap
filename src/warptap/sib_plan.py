@@ -12,13 +12,22 @@ from __future__ import annotations
 
 from typing import NamedTuple
 
-from warptap.icl_model import InstrumentNode, ModuleInstance, PhysicalGraph, SibNode
+from warptap.icl_model import (
+    InstrumentDirection,
+    InstrumentNode,
+    ModuleInstance,
+    PhysicalGraph,
+    SibNode,
+    SignalBinding,
+)
 
 
 class InstrumentSpec(NamedTuple):
     name: str
     width: int
     capture_value: int
+    direction: InstrumentDirection = InstrumentDirection.READ
+    signal_bits: tuple[SignalBinding, ...] = ()
 
 
 def build_sib_plan(specs: list[InstrumentSpec]) -> tuple[PhysicalGraph, ModuleInstance]:
@@ -45,7 +54,11 @@ def build_sib_plan(specs: list[InstrumentSpec]) -> tuple[PhysicalGraph, ModuleIn
         seen.add(spec.name)
 
         instrument = InstrumentNode(
-            name=spec.name, width=spec.width, capture_value=spec.capture_value
+            name=spec.name,
+            width=spec.width,
+            capture_value=spec.capture_value,
+            direction=spec.direction,
+            signal_bits=spec.signal_bits,
         )
         chain.append(SibNode(sib_name=f"sib_{spec.name}", instrument=instrument))
         children.append(ModuleInstance(name=spec.name))
