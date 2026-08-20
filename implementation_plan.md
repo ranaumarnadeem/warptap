@@ -426,7 +426,16 @@ Cheap, simulator-free — do this before investing in a full functional simulato
 **Stage 7 — TAP-transaction IR + SVF/STAPL emitters.** §3.4 + §6. SVF first (simplest: always
 emit every field, no sticky-default optimization yet). STAPL second, reusing the same IR walk.
 Validate by shelling out to an existing player (OpenOCD `svf`, etc.), not a self-written
-parser.
+parser. **Live OpenOCD validation done** (`svf_openocd_check.py`,
+`tests/test_svf_openocd_validation.py`) — real ops from `PDLInterpreter` (SIR/SDR/RUNTEST,
+both write-only and read/TDO-MASK) run through a real `openocd svf` command against the
+`dummy` adapter driver (a software-only JTAG interface, no hardware needed, so no chain
+auto-probe noise once one TAP is explicitly declared). This validates grammar, not content:
+the dummy driver has no real chip, so a TDO/MASK op reports a content ("tdo check error")
+mismatch, but OpenOCD's own independently-decoded `WANT`/`MASK` hex values match warptap's
+emitted literals exactly, confirmed byte-for-byte. STAPL has no equivalent available
+player in this environment (OpenOCD doesn't implement JESD71) and remains unvalidated
+against an independent tool.
 
 **Stage 8 (v1.x, gated on §0 and on faultflow demand) — Pattern retargeting (problem 3c).**
 Consume faultflow's `--export-patterns` JSON (§5.1), remap through warptap's own ICL/TAP
@@ -475,7 +484,8 @@ multi-instrument networks, any conformance claim against a specific IEEE standar
 - **STAPL CRC16** unit-tested directly against JESD71 Annex A's worked example (expected CRC
   `3759`) — a free, spec-provided oracle.
 - **SVF/STAPL emission** validated by feeding output through an existing consumer (OpenOCD
-  `svf` command), not a self-written parser.
+  `svf` command), not a self-written parser. **Done for SVF** (Stage 7) — no equivalent
+  independent STAPL player found in this environment.
 - **PDL functional verification** (Stage 9): replay a retargeted sequence, compare against the
   PDL-declared expected value — no fault model involved, this is warptap checking its own
   output, not faultflow's job. Built as `pdl_verify.check_reads()`, proven against a real

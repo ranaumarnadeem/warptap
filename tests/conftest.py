@@ -54,6 +54,14 @@ def vvp_command() -> str:
 
 
 @pytest.fixture(scope="session")
+def openocd_command() -> str:
+    cmd = _default_tool_command("WARPTAP_OPENOCD_CMD", "openocd")
+    if cmd is None:
+        pytest.skip("openocd not found on PATH and WARPTAP_OPENOCD_CMD not set")
+    return cmd
+
+
+@pytest.fixture(scope="session")
 def fixtures_dir() -> Path:
     return Path(__file__).parent / "fixtures"
 
