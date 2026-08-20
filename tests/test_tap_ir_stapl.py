@@ -62,11 +62,52 @@ def test_irscan_and_drscan_render_bits_and_hex():
     assert "DRSCAN 16, $0001;" in stapl
 
 
-def test_tdo_or_mask_present_raises_named_error():
+def test_exactly_one_of_tdo_or_mask_raises_named_error():
+    """STAPL's COMPARE clause needs a compare value AND a mask together (JESD71's grammar
+    has no "compare without mask" form) -- an op with only one set is a malformed/impossible
+    request, distinct from the normal "no COMPARE at all" case."""
     with pytest.raises(TapIrStaplError, match="COMPARE"):
         to_stapl([ShiftDR(bits=4, tdi=0, tdo=0)], **_KWARGS)
     with pytest.raises(TapIrStaplError, match="COMPARE"):
         to_stapl([ShiftIR(bits=4, tdi=0, mask=0xF)], **_KWARGS)
+
+
+def test_compare_clause_renders_boolean_declaration_and_enforcement_if():
+    """The full COMPARE idiom this emitter reproduces (JESD71 §8.8/§8.18, confirmed against
+    real vendor STAPL files and the Altera Jam reference player source): a BOOLEAN result
+    variable declared immediately before use, the DRSCAN/IRSCAN's own trailing COMPARE
+    clause, then an IF checking that result -- without the IF, a failed COMPARE would
+    silently not abort (STAPL's own documented behavior), unlike SVF's TDO/MASK which a
+    real player enforces automatically."""
+    ops = [ShiftDR(bits=8, tdi=0x00, tdo=0x41, mask=0xFF)]
+    stapl = to_stapl(ops, **_KWARGS)
+    assert "BOOLEAN compare_result_0;" in stapl
+    assert "DRSCAN 8, $00, COMPARE $41, $FF, compare_result_0;" in stapl
+    assert "IF compare_result_0 == 0 THEN EXIT (1);" in stapl
+    # Declaration must precede use, and the IF must follow it -- not just be present anywhere.
+    decl_idx = stapl.index("BOOLEAN compare_result_0;")
+    scan_idx = stapl.index("DRSCAN 8, $00, COMPARE")
+    if_idx = stapl.index("IF compare_result_0 == 0")
+    assert decl_idx < scan_idx < if_idx
+
+
+def test_compare_clause_works_for_irscan_too():
+    ops = [ShiftIR(bits=5, tdi=0x00, tdo=0b10101, mask=0b11111)]
+    stapl = to_stapl(ops, **_KWARGS)
+    assert "IRSCAN 5, $00, COMPARE $15, $1F, compare_result_0;" in stapl
+
+
+def test_each_compare_op_gets_its_own_uniquely_named_result_variable():
+    ops = [
+        ShiftDR(bits=4, tdi=0x0, tdo=0x1, mask=0xF),
+        ShiftDR(bits=4, tdi=0x0),  # bare scan in between -- no result variable, no gap in numbering
+        ShiftIR(bits=4, tdi=0x0, tdo=0x2, mask=0xF),
+    ]
+    stapl = to_stapl(ops, **_KWARGS)
+    assert "compare_result_0" in stapl
+    assert "compare_result_1" in stapl
+    assert "compare_result_2" not in stapl
+    assert stapl.count("BOOLEAN compare_result_") == 2
 
 
 def test_runtest_renders_as_wait_cycles():
@@ -98,11 +139,12 @@ def test_crc_matches_a_real_recomputation_over_the_body():
     stapl = to_stapl(ops, **_KWARGS)
     body, _sep, crc_line = stapl.rpartition("\nCRC ")
     assert crc_line  # confirms the split actually found the marker
-    # rpartition's `body` already includes the body's own trailing newline (the "\n" the
-    # separator "\nCRC " matched belongs to the one to_stapl() explicitly prepends before
-    # "CRC", not body's own) -- body is exactly what to_stapl() itself passed to
-    # stapl_file_crc(), with no adjustment needed.
-    expected_crc = stapl_file_crc(body)
+    # rpartition's `body` includes the body's own trailing newline but NOT the second one
+    # (the blank line between ENDPROC; and CRC) -- that second newline is itself covered by
+    # the CRC (confirmed against the real Altera Jam STAPL Player reference source; see
+    # tap_ir_stapl.py's to_stapl() comment), so it must be added back here to match exactly
+    # what to_stapl() itself passed to stapl_file_crc().
+    expected_crc = stapl_file_crc(body + "\n")
     written_crc = int(crc_line[:-2], 16)  # strip trailing ";\n"
     assert written_crc == expected_crc
 

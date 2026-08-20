@@ -62,6 +62,21 @@ def openocd_command() -> str:
 
 
 @pytest.fixture(scope="session")
+def jam_command() -> str:
+    """Deliberately env-var-only, no PATH fallback (unlike every other *_command fixture
+    here) -- "jam" collides with the name of an unrelated, real, historically-common
+    Perforce/Jam build tool, and a bare PATH lookup risks silently running the wrong
+    program. See jamplayer_check.py's module docstring for how to build a real one."""
+    cmd = os.environ.get("WARPTAP_JAM_CMD")
+    if cmd is None:
+        pytest.skip(
+            "WARPTAP_JAM_CMD not set -- see jamplayer_check.py's module docstring for how "
+            "to build a real Jam STAPL Player"
+        )
+    return cmd
+
+
+@pytest.fixture(scope="session")
 def fixtures_dir() -> Path:
     return Path(__file__).parent / "fixtures"
 

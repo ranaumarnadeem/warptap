@@ -433,9 +433,27 @@ both write-only and read/TDO-MASK) run through a real `openocd svf` command agai
 auto-probe noise once one TAP is explicitly declared). This validates grammar, not content:
 the dummy driver has no real chip, so a TDO/MASK op reports a content ("tdo check error")
 mismatch, but OpenOCD's own independently-decoded `WANT`/`MASK` hex values match warptap's
-emitted literals exactly, confirmed byte-for-byte. STAPL has no equivalent available
-player in this environment (OpenOCD doesn't implement JESD71) and remains unvalidated
-against an independent tool.
+emitted literals exactly, confirmed byte-for-byte. **STAPL's `COMPARE` clause done** (was a
+documented scope gap; `to_stapl()` now emits it), and **live STAPL validation done** too, via
+an independently-built copy of Altera's real "Jam STAPL Player" reference C interpreter
+(`jamplayer_check.py`, `tests/test_stapl_jamplayer_validation.py`) — no off-the-shelf package
+exists for this the way OpenOCD's does, so it's a from-source build (`PORT UNIX`, which makes
+the player's own real-hardware JTAG I/O function fall through to a built-in `tdo = 0`
+software-only stub with zero code changes, mirroring OpenOCD's `dummy` driver); see
+`jamplayer_check.py`'s module docstring for the exact build steps. **This live validation
+caught a real, previously-shipped bug**: `to_stapl()`'s `CRC` statement was computed one
+newline byte short of what JESD71 Annex B (and the reference player's own `jamcrc.c`)
+require — self-consistent against this project's own prior unit tests (which re-derived the
+same wrong boundary independently rather than checking it against ground truth), but a real
+`CRC mismatch` against the reference player until fixed. The `COMPARE` clause's own grammar
+(`DRSCAN`/`IRSCAN <length>, <data> [,COMPARE <compare>,<mask>,<result>];`, a previously-declared
+scalar `BOOLEAN` result variable, no separate `MASK` keyword) was confirmed by five
+independently-converging sources: the JESD71 spec text itself, real vendor-generated `.jam`/
+`.stp` files (Altera, Microsemi), and two independent copies of that same reference player's
+source. Because `COMPARE` doesn't abort STAPL execution by itself (unlike SVF's `TDO`/`MASK`,
+which a real player enforces automatically), `to_stapl()` also emits an enforcement
+`IF <result> == 0 THEN EXIT (1);` after each `COMPARE` — proven at runtime against the real
+player, both the passing and the enforcement-firing path.
 
 **Stage 8 (v1.x, gated on §0 and on faultflow demand) — Pattern retargeting (problem 3c).**
 Consume faultflow's `--export-patterns` JSON (§5.1), remap through warptap's own ICL/TAP
@@ -484,8 +502,10 @@ multi-instrument networks, any conformance claim against a specific IEEE standar
 - **STAPL CRC16** unit-tested directly against JESD71 Annex A's worked example (expected CRC
   `3759`) — a free, spec-provided oracle.
 - **SVF/STAPL emission** validated by feeding output through an existing consumer (OpenOCD
-  `svf` command), not a self-written parser. **Done for SVF** (Stage 7) — no equivalent
-  independent STAPL player found in this environment.
+  `svf` command for SVF, an independently-built copy of Altera's real Jam STAPL Player
+  reference interpreter for STAPL), not a self-written parser. **Done for both** (Stage 7) —
+  the STAPL live validation caught a real CRC-boundary bug this project's own unit tests had
+  missed (see Stage 7's own writeup above).
 - **PDL functional verification** (Stage 9): replay a retargeted sequence, compare against the
   PDL-declared expected value — no fault model involved, this is warptap checking its own
   output, not faultflow's job. Built as `pdl_verify.check_reads()`, proven against a real

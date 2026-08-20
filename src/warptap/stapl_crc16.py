@@ -55,8 +55,15 @@ def crc16_x25(data: bytes) -> int:
 def stapl_file_crc(text_before_crc_statement: str) -> int:
     """The STAPL-specific wrapper JESD71 Annex B actually specifies: strip every ``\\r``
     byte, encode as ASCII, and run :func:`crc16_x25` over the result. ``text_before_crc_
-    statement`` must be exactly the file's own text up to (not including) its own ``CRC
-    <hex4>;`` statement -- since :mod:`warptap.tap_ir_stapl` *constructs* the file forward
-    (compute the CRC, then append the CRC line), this boundary is exact by construction
-    and needs none of a streaming parser's own "rewind past the CRC keyword" logic."""
+    statement`` must be exactly the file's own text up to (not including) the ``CRC``
+    *keyword itself* -- which includes any whitespace/blank line immediately preceding it
+    (confirmed directly against a compiled copy of Altera's real Jam STAPL Player reference
+    source, ``jamcrc.c``'s own ``jam_check_crc()``: it rewinds its running CRC to the state
+    right after the single whitespace character immediately preceding "CRC", not further
+    back). :mod:`warptap.tap_ir_stapl` *constructs* the file forward (compute the CRC, then
+    append the CRC line) and is responsible for passing a string that ends exactly at that
+    boundary, including any such trailing whitespace -- getting this one byte short is a
+    real, previously-shipped bug this module's own docstring used to (wrongly) claim was
+    "exact by construction," caught only by live validation against the real reference
+    player, not by this project's own (self-consistent but not spec-verified) unit tests."""
     return crc16_x25(text_before_crc_statement.replace("\r", "").encode("ascii"))
