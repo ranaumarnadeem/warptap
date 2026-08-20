@@ -57,6 +57,34 @@ class Runtest(NamedTuple):
     end_state: TapState = TapState.RUN_TEST_IDLE
 
 
+#: Canonical SVF/STAPL state names for each of the 16 IEEE 1149.1 TAP states -- verbatim from
+#: the SVF Specification Rev. E p.6 and JESD71 (STAPL) Annex A, which name all 16 states
+#: identically (only the *stable_state* argument of STATE/RUNTEST/ENDIR/ENDDR/IRSTOP/DRSTOP is
+#: restricted to the 4-member subset RESET/IDLE/IRPAUSE/DRPAUSE). Shared here rather than
+#: duplicated per emitter -- unlike sib_layout.py's live-vs-static counting rule (a genuine
+#: algorithmic duplication case), this is a single static lookup table with one unambiguous
+#: correct answer per standard, so two independently-hand-copied dicts would only ever be a
+#: drift risk, not a meaningful separation of concerns.
+TAP_STATE_NAMES: dict[TapState, str] = {
+    TapState.TEST_LOGIC_RESET: "RESET",
+    TapState.RUN_TEST_IDLE: "IDLE",
+    TapState.SELECT_DR_SCAN: "DRSELECT",
+    TapState.CAPTURE_DR: "DRCAPTURE",
+    TapState.SHIFT_DR: "DRSHIFT",
+    TapState.EXIT1_DR: "DREXIT1",
+    TapState.PAUSE_DR: "DRPAUSE",
+    TapState.EXIT2_DR: "DREXIT2",
+    TapState.UPDATE_DR: "DRUPDATE",
+    TapState.SELECT_IR_SCAN: "IRSELECT",
+    TapState.CAPTURE_IR: "IRCAPTURE",
+    TapState.SHIFT_IR: "IRSHIFT",
+    TapState.EXIT1_IR: "IREXIT1",
+    TapState.PAUSE_IR: "IRPAUSE",
+    TapState.EXIT2_IR: "IREXIT2",
+    TapState.UPDATE_IR: "IRUPDATE",
+}
+
+
 def bits_to_int(bits: list[int]) -> int:
     """Pack a chronological-order bit list (index 0 = cycle 1) into this module's
     LSB-first int convention."""
