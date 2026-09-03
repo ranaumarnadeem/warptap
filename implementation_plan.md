@@ -548,7 +548,50 @@ PDL semantics. Stated permanently in `pdl_emit.py`'s own module docstring: this 
 equivalent-strength to Stage 7's OpenOCD/Jam-player validation or Stage 10's `icl_parser`
 validation, and must never be cited as such.
 
-**Stage 12 (ICL/PDL import)** — planned (see the approved plan for full design), not yet built.
+**Stage 12 (built) — ICL import.** `icl_import.py`'s `import_icl()` parses real `.icl` files
+entirely via the vendored `icl_parser` submodule (never touching raw ICL text directly),
+converting its parsed representation into warptap's own `PhysicalGraph`/`ModuleInstance` —
+extending the "shell out to a real independent tool, never round-trip through a self-written
+parser" discipline to *parsing*, not just validation, for the first time. PDL import isn't
+built: the approved plan scoped it to "if the spike is positive," and Stage 11 already
+established the spike is negative (no working PDL parser exists anywhere to import via), so
+there is nothing to shell out to. Deliberately narrow scope, matching the plan's own language:
+recognizes only *warptap's own canonical SIB-network shape* — a top module whose direct
+children are `SIB_MODULE_TYPE`-typed instances (now exported from `icl_emit.py` alongside
+`INSTRUMENT_MODULE_PREFIX`/`SIB_INSTANCE_PREFIX`, so both directions share one source of
+truth) chained `InputPort SI = <prev>.SO;` from `tdi` to `tdo`, each gating one instrument
+instance found via its own `fromSO` binding. Direction (READ vs WRITE) is detected
+structurally — presence of a `DataRegister` sibling — not by name.
+
+**A real, permanent round-trip limitation, found and documented rather than papered over**:
+`icl_emit.py` records which real host net/bit an instrument's `CaptureSource`/
+`WriteDataSource` represents *only in a `//` comment* — the clause ICL text itself actually
+carries is always a self-reference, because ICL has no confirmed mechanism for naming an
+external signal there. ANTLR discards comments during parsing, so `import_icl()` can never
+recover a `SignalBinding`, nor a READ instrument's original fixed `capture_value` stub —
+every imported `InstrumentNode` has `signal_bits=()` and `capture_value=0`, regardless of the
+original. Chain order, instrument names, widths, and direction all round-trip exactly (proven
+by `tests/test_icl_import_roundtrip.py`, which explicitly asserts the original network *did*
+have real `signal_bits` before confirming they don't survive the round trip — not a vacuous
+check).
+
+**Validated two ways.** Primary: round-trip through Stage A/Stage 10 (`build_sib_plan` → `to_icl()`
+→ `import_icl()` → compare). Only a single-SIB single-WRITE-instrument network round-trips
+completely clean — the same `IclRegisterModel` retargeting-graph `AssertionError` Stage 10
+already documented blocks anything else, now surfaced as a named `IclImportError` instead of a
+bare third-party traceback (import genuinely needs `Ijtag()`'s returned object, unlike Stage
+10's structural-only checks, which only needed the file to parse). A separate test pins this
+exact, expected outcome for a realistic multi-instrument network, and a third pins the
+already-known "Not supported" `AccessLink` gap the same way. Secondary: the vendored tool's
+own real fixture corpus (`third_party/icl_parser/tests/test_icls/*.icl`) — a parametrized
+generic-instrument library, bare `ScanMux` edge cases, an IR-decoded DR-mux TAP with no SIB
+pattern at all. Every fixture is correctly rejected, each with its own pinned reason (not a
+loose pass/fail) — mostly "no SIB-typed instances found," one a genuine pre-existing bug in
+the vendored fixture itself (a case-sensitive parameter reference), one hitting the same
+retargeting-graph issue. A useful negative data point fell out of this: the DR-mux TAP shape
+and one `ScanMux`-heavy fixture do *not* trip the retargeting-graph bug, while others do —
+confirming that issue is shape-dependent, not universal, without fully diagnosing its root
+cause (still open, as Stage 10 already stated).
 
 **Explicitly not in this plan** (matches existing v1 scope, reconfirmed by this research):
 nested/hierarchical SIB trees, dynamic `existPr` reachability, STIL emission, hierarchical

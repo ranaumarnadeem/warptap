@@ -1,0 +1,247 @@
+"""ICL import (implementation_plan.md §7 Stage 12): parses real ``.icl`` files entirely via
+the vendored ``Honza255/icl_parser`` (the same submodule Stage 10's ``icl_emit.py`` validates
+against), never touching raw ICL text directly -- extending this project's established
+"shell out to a real independent tool, never round-trip through a self-written parser"
+discipline to *parsing*, not just validation.
+
+**Scope, narrowed deliberately, matching the approved plan's own language**: this recognizes
+only *warptap's own canonical SIB-network shape* -- a top module whose direct children are
+:data:`~warptap.icl_emit.SIB_MODULE_TYPE`-typed instances chained ``InputPort SI = <prev>.SO;``
+from the top module's own ``tdi`` through to its ``tdo``, each gating exactly one instrument
+instance (found via that SIB's own ``fromSO`` binding) named with
+:data:`~warptap.icl_emit.INSTRUMENT_MODULE_PREFIX`. This is *not* a general IEEE 1687 SIB-network
+importer -- the approved plan itself scopes Stage 12 to "flat and simple hierarchical networks
+using warptap's canonical 2-arm self-select ScanMux shape," not arbitrary real-world ICL. Every
+fixture in the vendored tool's own ``tests/test_icls`` corpus uses a genuinely different shape
+(parametrized generic instruments, bare ``ScanMux`` edge cases, an IR-decoded DR-mux TAP with no
+SIB pattern at all) and is correctly rejected here, not silently misinterpreted --
+see ``tests/test_icl_import_external_fixtures.py`` for the specific, pinned rejection reason
+each one hits.
+
+**Direction is detected structurally, not by name**: an instrument instance carrying an
+``IclDataRegister`` (``DataRegister`` in ICL text) is WRITE; one with only an
+``IclScanRegister`` is READ -- matches :mod:`warptap.icl_emit`'s own real ``DataRegister``-vs-
+``ScanRegister`` grammar distinction (Stage 10's own hard-won finding) exactly.
+
+**A real, permanent round-trip limitation, not a bug**: :mod:`warptap.icl_emit` records which
+real host net/bit an instrument's ``CaptureSource``/``WriteDataSource`` represents *only in a
+``//`` comment* (e.g. ``// CaptureSource fans out from real host port bit(s): bist_start[0]``)
+-- the ``CaptureSource``/``WriteDataSource`` clause ICL text itself actually carries is always a
+self-reference (``CaptureSource DR[...]``/``WriteDataSource SR[...]``), because ICL has no
+confirmed mechanism for naming an external signal there that this project's own research found
+(see ``icl_emit.py``'s own module docstring). ANTLR discards comments during parsing, so
+:func:`import_icl` has no way to recover the original :class:`~warptap.icl_model.SignalBinding`
+values, nor a READ instrument's original fixed ``capture_value`` stub (also comment-only). Every
+imported :class:`~warptap.icl_model.InstrumentNode` therefore always has ``signal_bits=()`` and
+``capture_value=0``, regardless of what the original network actually had -- stated here
+permanently rather than silently returning plausible-looking but fabricated values. Chain
+order, instrument names, widths, and READ/WRITE direction all round-trip exactly.
+
+**The vendored tool's own confirmed real gaps are translated into named, honest
+:class:`IclImportError`\\ s, not silently swallowed**: ``Ijtag(...)`` raises a bare
+``AssertionError`` from its own retargeting-graph construction (``IclRegisterModel``) for most
+network shapes -- the same open issue Stage 10 already documented, confirmed there to fully
+succeed only for a single-SIB single-WRITE-instrument network. It also raises ``ValueError``
+unconditionally for any ``AccessLink`` block, regardless of content (also already confirmed in
+Stage 10). Both are caught here and re-raised as :class:`IclImportError` naming the real cause,
+rather than letting a bare third-party traceback surface as this project's own failure.
+"""
+
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+from typing import List, Tuple
+
+from warptap.icl_emit import INSTRUMENT_MODULE_PREFIX, SIB_INSTANCE_PREFIX, SIB_MODULE_TYPE
+from warptap.icl_model import (
+    InstrumentDirection,
+    InstrumentNode,
+    ModuleInstance,
+    PhysicalGraph,
+    SibNode,
+)
+from warptap.tap_ports import TDI, TDO
+
+
+class IclImportError(RuntimeError):
+    """Raised when the given ``.icl`` file(s) don't describe a network :func:`import_icl` can
+    recognize -- not a warptap-shaped SIB network at all, a nested SIB (Stage 4's own flat-only
+    scope, re-validated here on the way in), or a real, already-documented gap in the vendored
+    ``icl_parser`` itself (its own retargeting-graph ``AssertionError``, or its "Not supported"
+    ``AccessLink`` gap) -- rather than a bare, undiagnosed exception from third-party code."""
+
+
+def _icl_item_classes(icl_parser_module):
+    """``IclInstance``/``IclDataRegister``/``IclScanRegister`` aren't part of ``Ijtag``'s own
+    public surface, but the module ``Ijtag`` (``icl_parser_module``) is defined in re-exports
+    them as plain module attributes via its own ``from .icl_process import *`` chain
+    (``icl_process.py`` itself does ``from .icl_items import *``) -- pulled off that already-
+    imported module object directly rather than a second, separate absolute import, so this
+    works regardless of how the caller set ``sys.path`` up to make ``icl_parser_module``
+    importable in the first place (see ``tests/conftest.py``'s ``icl_parser_module`` fixture)."""
+    mod = sys.modules[icl_parser_module.__module__]
+    return mod.IclInstance, mod.IclDataRegister, mod.IclScanRegister
+
+
+def _resolve_single(concat_sig):
+    """A ``ConcatSig`` (an ICL binding's right-hand side) resolved to the single real
+    ``IclItem``/port it names -- every binding warptap's own emitter writes is exactly one
+    signal wide (no concatenation), so anything else here means this isn't warptap's own
+    shape."""
+    items = concat_sig.get_all_icl_items()
+    if len(items) != 1:
+        raise IclImportError(
+            f"expected a single-signal binding, got {len(items)} items in {items!r} -- "
+            "not a shape this importer recognizes"
+        )
+    return items[0]
+
+
+def _input_binding(instance, port_name: str):
+    """The resolved source item bound to ``instance``'s own ``InputPort <port_name> = ...;``,
+    or ``None`` if no such binding exists."""
+    for connection in instance.connections:
+        (sig, concat_sig) = next(iter(connection.items()))
+        if sig.get_name() == port_name:
+            return _resolve_single(concat_sig)
+    return None
+
+
+def _instrument_node(instr_instance, icl_data_register_type, icl_scan_register_type) -> InstrumentNode:
+    """Recover an :class:`~warptap.icl_model.InstrumentNode`'s name/width/direction from its
+    parsed module instance -- see this module's own docstring for why ``signal_bits``/
+    ``capture_value`` can never be recovered and are always the empty/zero default."""
+    instance_name = instr_instance.get_name()
+    if not instance_name.startswith(INSTRUMENT_MODULE_PREFIX):
+        raise IclImportError(
+            f"instrument instance {instance_name!r} doesn't start with "
+            f"{INSTRUMENT_MODULE_PREFIX!r} -- this importer only recovers an instrument's "
+            "original name from warptap's own naming convention"
+        )
+    name = instance_name[len(INSTRUMENT_MODULE_PREFIX) :]
+
+    data_registers = instr_instance.get_icl_item_type(icl_data_register_type)
+    if data_registers:
+        width = data_registers[0].get_vector_size()
+        direction = InstrumentDirection.WRITE
+    else:
+        scan_registers = instr_instance.get_icl_item_type(icl_scan_register_type)
+        if len(scan_registers) != 1:
+            raise IclImportError(
+                f"instrument instance {instance_name!r} has {len(scan_registers)} "
+                "ScanRegisters, expected exactly 1 for a READ instrument -- not a shape this "
+                "importer recognizes"
+            )
+        width = scan_registers[0].get_vector_size()
+        direction = InstrumentDirection.READ
+
+    return InstrumentNode(name=name, width=width, capture_value=0, direction=direction)
+
+
+def _chain_order(top, sib_instances: List) -> List[Tuple[str, object]]:
+    """Walk ``tdi`` -> SIB -> SIB -> ... -> ``tdo`` via each SIB instance's own ``SI`` binding,
+    TDI-side-first, matching :mod:`warptap.icl_emit`'s own ``prev_so`` threading exactly.
+    Returns ``(recovered_sib_name, sib_instance)`` pairs in chain order. Raises
+    :class:`IclImportError` if any SIB instance doesn't chain (a dangling/foreign network) or
+    the last one's ``SO`` doesn't feed ``tdo``."""
+    remaining = list(sib_instances)
+    ordered: List[Tuple[str, object]] = []
+    current = top.get_icl_item_name(TDI)
+
+    while remaining:
+        next_sib = next(
+            (sib for sib in remaining if _input_binding(sib, "SI") is current), None
+        )
+        if next_sib is None:
+            raise IclImportError(
+                f"{len(remaining)} of {len(sib_instances)} {SIB_MODULE_TYPE!r} instance(s) "
+                "never chain back to tdi via a prior SIB's SO -- not a flat, TDI-to-TDO SIB "
+                "chain this importer recognizes"
+            )
+        instance_name = next_sib.get_name()
+        sib_name = (
+            instance_name[len(SIB_INSTANCE_PREFIX) :]
+            if instance_name.startswith(SIB_INSTANCE_PREFIX)
+            else instance_name
+        )
+        ordered.append((sib_name, next_sib))
+        remaining.remove(next_sib)
+        current = next_sib.get_icl_item_name("SO")
+
+    tdo_port = top.get_icl_item_name(TDO)
+    tdo_source = _resolve_single(next(iter(tdo_port.sources.values())))
+    if tdo_source is not current:
+        raise IclImportError(
+            "the last SIB in the chain doesn't feed tdo -- not a flat, TDI-to-TDO SIB chain "
+            "this importer recognizes"
+        )
+    return ordered
+
+
+def import_icl(
+    icl_paths: List[Path], top_module: str, *, icl_parser_module
+) -> Tuple[PhysicalGraph, ModuleInstance]:
+    """Parse ``icl_paths`` entirely via ``icl_parser_module`` (the vendored ``Ijtag`` class,
+    injected the same way ``tests/conftest.py``'s ``icl_parser_module`` fixture already
+    provides it to Stage 10's validation tests) and convert the result into warptap's own
+    :class:`~warptap.icl_model.PhysicalGraph`/:class:`~warptap.icl_model.ModuleInstance`.
+
+    Raises :class:`IclImportError` for: a real ``icl_parser`` gap (its own retargeting-graph
+    ``AssertionError``, or its "Not supported" ``AccessLink`` rejection -- both already
+    documented in Stage 10); a top module with no :data:`~warptap.icl_emit.SIB_MODULE_TYPE`
+    instances at all; a SIB chain that doesn't run cleanly from ``tdi`` to ``tdo``; an
+    instrument instance not named per :data:`~warptap.icl_emit.INSTRUMENT_MODULE_PREFIX`
+    convention; or a READ instrument with other than exactly one ``ScanRegister``. Explicitly
+    does **not** support nested SIB networks (matches :mod:`warptap.icl_emit`'s and
+    :mod:`warptap.sib_insert`'s own v1 flat-network scope) -- not reachable in v1 since nothing
+    upstream can build one, but stated here rather than left as a silent assumption.
+    """
+    try:
+        ijtag = icl_parser_module(top_module, [str(p) for p in icl_paths])
+    except AssertionError as exc:
+        raise IclImportError(
+            "icl_parser's own retargeting-graph construction (IclRegisterModel) failed for "
+            f"module {top_module!r} -- a real, unresolved issue in the vendored tool itself "
+            "for most network shapes (implementation_plan.md Stage 10); only a single-SIB "
+            "single-WRITE-instrument network is confirmed to build cleanly"
+        ) from exc
+    except ValueError as exc:
+        if "AccessLink" in str(exc):
+            raise IclImportError(
+                "icl_parser does not support AccessLink blocks at all (a real, confirmed gap "
+                "in the vendored tool, not of the ICL itself -- see implementation_plan.md "
+                "Stage 10); re-emit/re-author the file with include_access_link=False"
+            ) from exc
+        raise
+
+    top = ijtag.icl_instance
+    IclInstance, IclDataRegister, IclScanRegister = _icl_item_classes(icl_parser_module)
+
+    children = top.get_icl_item_type(IclInstance)
+    sib_instances = [c for c in children if c.get_module_scope() == SIB_MODULE_TYPE]
+    if not sib_instances:
+        raise IclImportError(
+            f"no {SIB_MODULE_TYPE!r}-typed instances found in top module {top_module!r} -- "
+            "this ICL file doesn't describe a warptap-shaped SIB network"
+        )
+
+    ordered_sibs = _chain_order(top, sib_instances)
+
+    chain_nodes: List[SibNode] = []
+    instrument_children: List[ModuleInstance] = []
+    for sib_name, sib_instance in ordered_sibs:
+        instrument_out = _input_binding(sib_instance, "fromSO")
+        if instrument_out is None:
+            raise IclImportError(
+                f"SIB instance {sib_instance.get_name()!r} has no fromSO binding -- not a "
+                "warptap-shaped SIB instance"
+            )
+        instr_instance = instrument_out.get_instance()
+        instrument = _instrument_node(instr_instance, IclDataRegister, IclScanRegister)
+        chain_nodes.append(SibNode(sib_name=sib_name, instrument=instrument))
+        instrument_children.append(ModuleInstance(name=instrument.name))
+
+    graph = PhysicalGraph(chain=tuple(chain_nodes))
+    root = ModuleInstance(name=top_module, children=tuple(instrument_children))
+    return graph, root

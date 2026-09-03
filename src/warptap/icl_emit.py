@@ -105,7 +105,22 @@ from typing import List
 from warptap.icl_model import InstrumentDirection, InstrumentNode, ModuleInstance, PhysicalGraph
 from warptap.tap_ports import TCK, TDI, TDO, TMS, TRST_N
 
-_SIB_MODULE_TYPE = "warptap_sib"
+SIB_MODULE_TYPE = "warptap_sib"
+"""The one fixed ICL module-type name every SIB instance is ``Instance ... Of`` -- exported
+(not module-private) because :mod:`warptap.icl_import` (Stage 12) needs the exact same string
+to recognize a SIB instance when walking a parsed network back in, the other direction."""
+
+INSTRUMENT_MODULE_PREFIX = "warptap_instr_"
+"""Prefix every instrument module type/instance name carries (``warptap_instr_<name>``) --
+exported for the same reason as :data:`SIB_MODULE_TYPE`: :mod:`warptap.icl_import` strips it
+back off an instrument instance's own name to recover the original instrument name."""
+
+SIB_INSTANCE_PREFIX = "warptap_"
+"""Prefix every SIB *instance* name carries (``warptap_<sib_name>``, via
+:func:`_sib_instance_name`) -- distinct from :data:`SIB_MODULE_TYPE` (the shared *module type*
+every SIB instance is ``Of``, not a per-instance name). Exported so
+:mod:`warptap.icl_import` strips the exact same prefix back off, rather than re-deriving a
+second literal that could silently drift out of sync with this one."""
 
 
 class IclEmitError(RuntimeError):
@@ -120,7 +135,7 @@ class IclEmitError(RuntimeError):
 
 
 def _sib_instance_name(sib_name: str) -> str:
-    return f"warptap_{sib_name}"
+    return f"{SIB_INSTANCE_PREFIX}{sib_name}"
 
 
 def render_sib_module_type() -> str:
@@ -139,7 +154,7 @@ def render_sib_module_type() -> str:
     any ``ScanInterface`` lacking one -- confirmed empirically this session, not assumed from
     the grammar alone."""
     return (
-        f"Module {_SIB_MODULE_TYPE} {{\n"
+        f"Module {SIB_MODULE_TYPE} {{\n"
         "    ScanInPort SI;\n"
         "    SelectPort SEL;\n"
         "    ScanOutPort SO { Source SR; }\n"
@@ -183,7 +198,7 @@ def render_instrument_module(instrument: InstrumentNode) -> str:
     Raises :class:`IclEmitError` for a WRITE instrument with no ``signal_bits`` -- nothing
     real for it to drive, the same precondition :mod:`warptap.sib_insert` itself enforces."""
     name = instrument.name
-    module_name = f"warptap_instr_{name}"
+    module_name = f"{INSTRUMENT_MODULE_PREFIX}{name}"
     width = instrument.width
 
     if instrument.direction is InstrumentDirection.WRITE:
@@ -280,11 +295,11 @@ def render_sib_instances(graph: PhysicalGraph) -> List[str]:
             )
 
         sib_instance = _sib_instance_name(node.sib_name)
-        instr_instance = f"warptap_instr_{node.instrument.name}"
-        instr_module = f"warptap_instr_{node.instrument.name}"
+        instr_instance = f"{INSTRUMENT_MODULE_PREFIX}{node.instrument.name}"
+        instr_module = f"{INSTRUMENT_MODULE_PREFIX}{node.instrument.name}"
 
         lines.append(
-            f"Instance {sib_instance} Of {_SIB_MODULE_TYPE} {{ InputPort SI = {prev_so}; "
+            f"Instance {sib_instance} Of {SIB_MODULE_TYPE} {{ InputPort SI = {prev_so}; "
             f"InputPort fromSO = {instr_instance}.SO; }}"
         )
         lines.append(
