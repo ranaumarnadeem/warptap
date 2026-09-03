@@ -1,0 +1,3 @@
+[submodule "third_party/icl_parser"]
+	path = third_party/icl_parser
+	url = https://github.com/Honza255/icl_parser

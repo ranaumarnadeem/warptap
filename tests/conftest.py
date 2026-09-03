@@ -116,3 +116,51 @@ def autombist_generator(openmbist_dir: Path):
     except ImportError as exc:
         pytest.skip(f"autombist.generator not importable from {src_dir}: {exc}")
     return generate_from_config
+
+
+def _default_icl_parser_dir() -> Path:
+    if os.environ.get("WARPTAP_ICL_PARSER_DIR"):
+        return Path(os.environ["WARPTAP_ICL_PARSER_DIR"])
+    # tests/conftest.py -> tests -> tapestry -> third_party/icl_parser (a git submodule
+    # checked out inside this repo, unlike openmbist_dir's sibling-checkout convention --
+    # icl_parser is vendored, per implementation_plan.md §7 Stage 10's own reasoning: it has
+    # no setup.py/pyproject.toml, so pip install isn't available, and there's no established
+    # precedent here for silently copying external source with no update mechanism).
+    return Path(__file__).resolve().parents[1] / "third_party" / "icl_parser"
+
+
+@pytest.fixture(scope="session")
+def icl_parser_dir() -> Path:
+    candidate = _default_icl_parser_dir()
+    if not candidate.is_dir() or not any(candidate.iterdir()):
+        pytest.skip(
+            f"third_party/icl_parser not checked out at {candidate} -- run "
+            "`git submodule update --init third_party/icl_parser`"
+        )
+    return candidate
+
+
+@pytest.fixture(scope="session")
+def icl_parser_module(icl_parser_dir: Path):
+    """``Ijtag`` (the vendored ``Honza255/icl_parser``'s own public API class) imported live
+    from ``third_party/icl_parser`` -- MIT-licensed, git-submodule-vendored (see
+    ``icl_parser_dir``), not pip-installable. Requires ``antlr4-python3-runtime`` (pinned to
+    4.7.2, matching the exact version the submodule's checked-in generated lexer/parser were
+    produced by -- ANTLR-generated code is not reliably forward/backward compatible across
+    runtime versions), ``z3-solver``, ``sympy``, and ``networkx`` -- dev/test only, never a
+    runtime dependency of warptap itself (``pyproject.toml``'s own ``dependencies = []`` stays
+    empty). Skips (not fails) when the submodule isn't checked out or any of those aren't
+    importable, matching every other external-tool fixture's "optional dependency" discipline
+    in this file."""
+    src_dir = str(icl_parser_dir)
+    if src_dir not in sys.path:
+        sys.path.insert(0, src_dir)
+    try:
+        from src.ijtag import Ijtag
+    except ImportError as exc:
+        pytest.skip(
+            f"icl_parser not importable from {src_dir}: {exc} -- run `git submodule update "
+            "--init third_party/icl_parser` and `pip install antlr4-python3-runtime==4.7.2 "
+            "z3-solver networkx` (sympy is a warptap dependency already)"
+        )
+    return Ijtag

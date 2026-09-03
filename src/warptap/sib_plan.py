@@ -30,7 +30,9 @@ class InstrumentSpec(NamedTuple):
     signal_bits: tuple[SignalBinding, ...] = ()
 
 
-def build_sib_plan(specs: list[InstrumentSpec]) -> tuple[PhysicalGraph, ModuleInstance]:
+def build_sib_plan(
+    specs: list[InstrumentSpec], *, top_name: str = "top"
+) -> tuple[PhysicalGraph, ModuleInstance]:
     """One top-level SIB per instrument, chained in ``specs`` order (index 0 nearest TDI --
     ``PhysicalGraph.chain``'s own documented ordering). Each SIB is named ``f"sib_{spec.name}"``,
     deterministic and human-legible in emitted RTL/attributes.
@@ -40,6 +42,15 @@ def build_sib_plan(specs: list[InstrumentSpec]) -> tuple[PhysicalGraph, ModuleIn
     represented as ModuleInstance nodes, since dotted-address resolution only ever needs to
     reach an instrument, and each instrument's gating SIB is already recorded on its
     :class:`~warptap.icl_model.SibNode` in the returned graph.
+
+    ``top_name`` defaults to the placeholder ``"top"`` every prior stage's own tests already
+    use, but a real caller wanting the returned tree's root to name the actual target module
+    (implementation_plan.md §7 Stage 10's own need: ``icl_emit.to_icl()`` renders
+    ``root.name`` as the emitted ICL file's real ``Module <name> { ... }`` name) should pass
+    the same string given to ``sib_insert.insert_sib_network``'s own ``top`` argument --
+    nothing today enforces the two calls agree, since there is no single orchestration entry
+    point yet threading one value to both; document the invariant here rather than silently
+    assume it.
 
     Raises :class:`ValueError` on a duplicate instrument name -- silently letting two
     instruments share a name would make both ``resolve_dotted_address`` and
@@ -64,5 +75,5 @@ def build_sib_plan(specs: list[InstrumentSpec]) -> tuple[PhysicalGraph, ModuleIn
         children.append(ModuleInstance(name=spec.name))
 
     graph = PhysicalGraph(chain=tuple(chain))
-    root = ModuleInstance(name="top", children=tuple(children))
+    root = ModuleInstance(name=top_name, children=tuple(children))
     return graph, root

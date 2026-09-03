@@ -484,6 +484,42 @@ Two parts, deliberately separate:
   and against the real target (`mem_subsystem_mbist`, Tier 2: write `self_repair_start`, confirm
   `self_repair_busy` reads back 1 from the real march-C/on-chip-BISR FSM).
 
+**Stage 10 (built) — ICL emission.** Extends the SVF/STAPL "stateless pretty-printer over one
+model" family up one abstraction level: `icl_emit.py`'s `to_icl()` renders real ICL text
+describing an inserted SIB/instrument network from `icl_model.PhysicalGraph`/`ModuleInstance`
+directly (network *topology*, not a `tap_ir` scan-pattern ops list — hence its own
+`IclEmitError` family, not `TapIr*Error`). Real ICL grammar was confirmed against three
+independent primary sources (an ANTLR4 grammar, a Ruby/Treetop grammar, a C++ tool's real
+fixtures): `Module <name> { ... }` has no `endmodule`; a SIB has no dedicated keyword at all —
+it's a `ScanRegister` whose `ScanInSource` is a `ScanMux` gated by the register's own value,
+mapping directly onto `sib_cell.v`'s `shift_ff`/`po`/`select` shape. Two small, additive
+prerequisite fixes: `sib_plan.build_sib_plan()` gained a `top_name` kwarg (was hardcoded
+`"top"`), and the five JTAG pin-name literals — previously duplicated independently in both
+`sib_insert.py` and `bsr_insert.py` — moved to a shared `tap_ports.py` once `icl_emit.py`
+became a genuine third occurrence.
+
+**Live-validated against a real, vendored tool** — `Honza255/icl_parser` (MIT, git submodule
+at `third_party/icl_parser/`; no `setup.py`/`pyproject.toml`, so not pip-installable, hence
+vendoring rather than a dependency) — the first time this project imports (not just shells
+out to) external code, still consistent with the "shell out to a real independent tool, never
+round-trip through a self-written parser" discipline: `icl_import.py`/parsing logic is
+*theirs*, warptap only calls it. This live validation iteratively found and fixed several
+real bugs no amount of re-reading research notes surfaced: every `ScanInterface` needs a
+classifiable port (`SelectPort`/`ShiftEnPort`/`TMSPort`); a TAP-level reset must be a
+`TRSTPort`, not a generic `ResetPort`; `WriteDataSource`/`WriteEnSource` belong to
+`DataRegister`, never `ScanRegister` (an assumption this project got wrong on its first pass,
+corrected against the real grammar file); a leaf instrument module needs no `ScanInterface`
+wrapper; scan ports must be width-matched to their register, not left at an implicit 1 bit.
+With those fixed, every module this emitter produces passes the real tool's own structural
+check cleanly. The tool's *deeper* retargeting-vector computation (`IclRegisterModel`) hits a
+real, unresolved internal issue for most network shapes (confirmed to fully succeed, with
+zero exceptions, only for a single-SIB single-WRITE-instrument network) — reported as open
+work, exactly the risk this stage's own plan anticipated ("icl_parser's own retargeting-vector
+API surface needs direct inspection once vendored"), not silently hidden.
+
+**Stages 11 (PDL emission) and 12 (ICL/PDL import)** — planned (see the approved plan for
+full design), not yet built.
+
 **Explicitly not in this plan** (matches existing v1 scope, reconfirmed by this research):
 nested/hierarchical SIB trees, dynamic `existPr` reachability, STIL emission, hierarchical
 multi-instrument networks, any conformance claim against a specific IEEE standard edition.

@@ -28,6 +28,7 @@ from pathlib import Path
 
 from warptap.icl_model import InstrumentDirection, PhysicalGraph
 from warptap.netlist import Bit, Module, Netlist
+from warptap.tap_ports import TCK, TDI, TDO, TMS, TRST_N
 from warptap.yosys_io import ingest
 
 _RTL_DIR = Path(__file__).resolve().parent / "rtl"
@@ -79,6 +80,11 @@ def insert_sib_network(
     coexist with ``bsr_insert.insert_bsr`` on the same module; implementation_plan.md §7
     Stage 4 §1's documented scoping decision).
 
+    ``top`` should be the same string passed as ``sib_plan.build_sib_plan``'s own
+    ``top_name`` when that graph's accompanying :class:`~warptap.icl_model.ModuleInstance`
+    tree was built (Stage 10's ``icl_emit.to_icl()`` renders that tree's root name as the
+    emitted ICL file's real module name) -- nothing here enforces that the two agree.
+
     Each slot in ``graph.chain`` becomes one ``sib_cell`` instance (its ``select`` tied to
     the constant 1 -- every v1 network is a flat list of top-level, unconditionally
     reachable SIBs) plus ``slot.instrument.width`` chained instrument-bit cells wired
@@ -118,11 +124,11 @@ def insert_sib_network(
     _import_template(netlist, _SIB_CELL, yosys_command=yosys_command)
     _import_template(netlist, _INSTRUMENT_WRITE, yosys_command=yosys_command)
 
-    tck_bits = top_mod.add_port("tck", "input")
-    tms_bits = top_mod.add_port("tms", "input")
-    tdi_bits = top_mod.add_port("tdi", "input")
-    trst_n_bits = top_mod.add_port("trst_n", "input")
-    tdo_bits = top_mod.add_port("tdo", "output")
+    tck_bits = top_mod.add_port(TCK, "input")
+    tms_bits = top_mod.add_port(TMS, "input")
+    tdi_bits = top_mod.add_port(TDI, "input")
+    trst_n_bits = top_mod.add_port(TRST_N, "input")
+    tdo_bits = top_mod.add_port(TDO, "output")
 
     tap_state_bits = top_mod.new_wire(4, name="warptap_tap_state")
     current_instruction_bits = top_mod.new_wire(ir_width, name="warptap_current_instruction")

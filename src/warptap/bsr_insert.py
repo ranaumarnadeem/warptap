@@ -19,6 +19,7 @@ from pathlib import Path
 
 from warptap.bsr_plan import BsrFunction, BsrPlan
 from warptap.netlist import Bit, Module, Netlist
+from warptap.tap_ports import TCK, TDI, TDO, TMS, TRST_N
 from warptap.yosys_io import ingest
 
 _RTL_DIR = Path(__file__).resolve().parent / "rtl"
@@ -122,11 +123,11 @@ def insert_bsr(
     _import_template(netlist, _BC1_FULL, yosys_command=yosys_command)
     _import_template(netlist, _BC7_BIDIR, yosys_command=yosys_command)
 
-    tck_bits = top_mod.add_port("tck", "input")
-    tms_bits = top_mod.add_port("tms", "input")
-    tdi_bits = top_mod.add_port("tdi", "input")
-    trst_n_bits = top_mod.add_port("trst_n", "input")
-    tdo_bits = top_mod.add_port("tdo", "output")
+    tck_bits = top_mod.add_port(TCK, "input")
+    tms_bits = top_mod.add_port(TMS, "input")
+    tdi_bits = top_mod.add_port(TDI, "input")
+    trst_n_bits = top_mod.add_port(TRST_N, "input")
+    tdo_bits = top_mod.add_port(TDO, "output")
 
     # Allocated up front (bit IDs, not drivers) so the chain-building loop below can
     # reference them before tap_core itself is instantiated at the end, once the
