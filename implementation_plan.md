@@ -517,8 +517,38 @@ zero exceptions, only for a single-SIB single-WRITE-instrument network) — repo
 work, exactly the risk this stage's own plan anticipated ("icl_parser's own retargeting-vector
 API surface needs direct inspection once vendored"), not silently hidden.
 
-**Stages 11 (PDL emission) and 12 (ICL/PDL import)** — planned (see the approved plan for
-full design), not yet built.
+**Stage 11 (built) — PDL emission.** `pdl_emit.py`'s `to_pdl()` renders real PDL statement
+text from a `PDLInterpreter`'s own recorded intent — but that intent didn't previously exist
+anywhere retrievable: `iApply()` lowers straight to bit-packed `tap_ir.ShiftDR` ops over the
+*whole* physically-open network (one flat integer), and which instrument/value a given call
+actually targeted is provably unrecoverable from those ops alone. `pdl_history.py` adds a
+parallel, strictly additive `PDLInterpreter.history` list — one `PdlTargetStmt`/`PdlWriteStmt`/
+`PdlReadStmt`/`PdlRunLoopStmt`/`PdlApplyStmt` per successful command call, recorded at the call
+site in call order (not batched at `iApply` the way `self.program` is). Zero existing behavior
+changed: every pre-existing `pdl_interpreter` test still passes unmodified, reconfirmed by a
+dedicated regression-lock test file. Field addressing uses the target instrument's own name
+(`iTarget sensor_a; iWrite sensor_a 0x5;`) — `PDLInterpreter.iWrite`/`iRead` have no named
+sub-field argument to draw a narrower field from (a real, already-documented gap), so naming
+anything narrower would fabricate a capability v1 doesn't have. Values render as a
+zero-padded `0x`-hex literal sized to the target instrument's width; `iRunLoop` always renders
+`-tck`, honestly matching that `iRunLoop()` itself has no `-sck` concept yet.
+
+**No independent validation oracle exists for this stage — confirmed, not assumed.** The
+plan's own mandatory first step was inspecting whether the vendored `icl_parser` submodule's
+bundled `src/pdl_parser` is a real, wired parser: it is not. It contains exactly one file
+(`pdl.g4`), a bare ANTLR grammar with zero generated lexer/parser code, zero Python wiring, and
+zero other reference anywhere in that repository — confirmed by an exhaustive search of the
+whole submodule, not just a glance at the directory. This was this session's exhaustive PDL
+research already flagged as the likely outcome. Validation therefore falls back to the
+explicitly-weaker, plan-anticipated tier: `tests/test_pdl_emit_integration.py` cross-checks
+each rendered `iWrite`/`iRead` statement against the *actual* bits landing in the corresponding
+low-level `ShiftDR.tdi`/`tdo` within `self.program` for the same `iApply` call — proving the
+high-level record and the low-level lowering agree with *each other*, not conformance to real
+PDL semantics. Stated permanently in `pdl_emit.py`'s own module docstring: this is not
+equivalent-strength to Stage 7's OpenOCD/Jam-player validation or Stage 10's `icl_parser`
+validation, and must never be cited as such.
+
+**Stage 12 (ICL/PDL import)** — planned (see the approved plan for full design), not yet built.
 
 **Explicitly not in this plan** (matches existing v1 scope, reconfirmed by this research):
 nested/hierarchical SIB trees, dynamic `existPr` reachability, STIL emission, hierarchical

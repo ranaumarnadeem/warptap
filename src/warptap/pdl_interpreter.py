@@ -10,6 +10,12 @@ walks the same ops list, demonstrating the "stateless pretty-printers over one I
 Never touches the netlist/insertion layer -- constructed directly from
 ``sib_plan.build_sib_plan``'s two return values, mirroring ``SibNetworkRegister(graph)``'s own
 dependency shape, matching Stage 4's "keep it fully independent" precedent.
+
+Stage 11 adds ``self.history`` (:mod:`warptap.pdl_history`) alongside ``self.program``: a
+parallel, additive-only record of each successful command call in call order, needed because
+which instrument/value a given ``iApply`` actually targeted is provably unrecoverable from the
+low-level ``ShiftDR`` ops alone (see ``pdl_history``'s own module docstring). Nothing about
+``self.program``'s own deferred/batched lowering changes.
 """
 
 from __future__ import annotations
@@ -17,6 +23,14 @@ from __future__ import annotations
 from typing import Optional, Union
 
 from warptap.icl_model import ModuleInstance, PhysicalGraph, resolve_dotted_address
+from warptap.pdl_history import (
+    PdlApplyStmt,
+    PdlReadStmt,
+    PdlRunLoopStmt,
+    PdlStatement,
+    PdlTargetStmt,
+    PdlWriteStmt,
+)
 from warptap.sib_layout import compose_bits, layout_bit_length
 from warptap.sib_retarget import open_path_to
 from warptap.tap_fsm import TapState
@@ -63,12 +77,16 @@ class PDLInterpreter:
         self._pending_reads: dict[str, int] = {}
         self._currently_open: frozenset[str] = frozenset()
         self.program: list[Union[ShiftDR, GotoState, Runtest]] = []
+        self.history: list[PdlStatement] = []
 
     def iTarget(self, dotted: str) -> None:
         """Resolve ``dotted`` against the module-instantiation tree, becoming the scope
         ``iWrite``/``iRead`` address. Lets ``ICLAddressError`` propagate unwrapped for a bad
-        path -- it already names the problem precisely."""
+        path -- it already names the problem precisely. Recorded to ``self.history`` only once
+        resolution succeeds, matching every other command's own error-tolerant semantics
+        (nothing else here mutates state on a failed call either)."""
         self._scope = resolve_dotted_address(self._root, dotted)
+        self.history.append(PdlTargetStmt(dotted))
 
     def _require_scope(self, command: str) -> ModuleInstance:
         if self._scope is None:
@@ -85,6 +103,7 @@ class PDLInterpreter:
         whole -- a real, documented scope gap, not a hidden one."""
         scope = self._require_scope("iWrite")
         self._pending_writes[scope.name] = value
+        self.history.append(PdlWriteStmt(scope.name, value))
 
     def iRead(self, expected: int) -> None:
         """Queue an expected value for the current scope's next ``iApply`` -- populates
@@ -92,6 +111,7 @@ class PDLInterpreter:
         evaluated here."""
         scope = self._require_scope("iRead")
         self._pending_reads[scope.name] = expected
+        self.history.append(PdlReadStmt(scope.name, expected))
 
     def iRunLoop(self, count: int) -> None:
         """Not deferred like ``iWrite``/``iRead``: a "wait N cycles" has no pending value
@@ -100,6 +120,7 @@ class PDLInterpreter:
         self.program.append(
             Runtest(count, run_state=TapState.RUN_TEST_IDLE, end_state=TapState.RUN_TEST_IDLE)
         )
+        self.history.append(PdlRunLoopStmt(count))
 
     def iApply(self) -> list[Union[ShiftDR, GotoState]]:
         """The sole action command. Resolves the current scope's gating SIB, emits phase 1
@@ -134,6 +155,7 @@ class PDLInterpreter:
         specially detected or rejected here.
         """
         scope = self._require_scope("iApply")
+        self.history.append(PdlApplyStmt())
         instrument_name = scope.name
         target_path = open_path_to(
             self._graph, instrument_name, network_configuration=self._currently_open
