@@ -455,11 +455,15 @@ which a real player enforces automatically), `to_stapl()` also emits an enforcem
 `IF <result> == 0 THEN EXIT (1);` after each `COMPARE` — proven at runtime against the real
 player, both the passing and the enforcement-firing path.
 
-**Stage 8 (v1.x, gated on §0 and on faultflow demand) — Pattern retargeting (problem 3c).**
-Consume faultflow's `--export-patterns` JSON (§5.1), remap through warptap's own ICL/TAP
-network model instead of a SoC chain-offset table, emit via the Stage 7 backends. This is
-where the faultflow-side optional-dependency wrapper (`ff.py jtag`/`ijtag` subcommands,
-already speced in `tapestry_handoff.md`) becomes real.
+**Stage 8 (superseded by Stages 13-14 below) — Pattern retargeting (problem 3c), original
+framing.** This slot's original text ("consume faultflow's `--export-patterns` JSON, remap
+through warptap's own ICL/TAP network model, emit via the Stage 7 backends") treated
+retargeting as a pure format-translation problem. Real research against a live local
+`faultflow` checkout, done when this stage was actually built, found that framing incomplete
+in a load-bearing way: faultflow's fault-detecting patterns need a real functional-clock
+capture edge between load and unload, which neither warptap's TAP architecture nor its SVF/
+STAPL output formats had any way to express. See Stage 13/14 below for what was actually
+built once that was understood, and why the output format changed to STIL.
 
 **Stage 9 (built) — real functional instruments + PDL functional verification.** Superseded
 both options originally sketched above once actually built, per an explicit user decision to
@@ -594,8 +598,96 @@ confirming that issue is shape-dependent, not universal, without fully diagnosin
 cause (still open, as Stage 10 already stated).
 
 **Explicitly not in this plan** (matches existing v1 scope, reconfirmed by this research):
-nested/hierarchical SIB trees, dynamic `existPr` reachability, STIL emission, hierarchical
-multi-instrument networks, any conformance claim against a specific IEEE standard edition.
+nested/hierarchical SIB trees, dynamic `existPr` reachability, hierarchical multi-instrument
+networks, any conformance claim against a specific IEEE standard edition. (STIL emission
+itself, listed here as out of scope when this was written, became real necessity for a
+different reason in Stage 13 below — not a reversal of this scoping call, a new one.)
+
+---
+
+**Stage 13 (built) — STIL emission.** Built as a direct prerequisite for Stage 14 below, once
+real research (a live local `faultflow` checkout) found that faultflow's fault-detecting
+patterns need a genuine functional-clock capture edge between load and unload, which SVF/STAPL
+(a JTAG-pins-only vocabulary — TCK/TMS/TDI/TDO, nothing else) cannot express at all. An earlier
+design — gate the functional clock from TCK itself during Run-Test-Idle — was considered and
+rejected: faultflow's own README confirms it supports transition faults (slow-to-rise/slow-
+to-fall), which need an at-speed capture edge TCK (externally, slowly, ATE-driven) cannot
+provide, and the exported pattern JSON carries no fault-type tag to even detect which patterns
+would be silently invalidated by that shortcut. STIL solves this properly instead of routing
+around it: its `WaveformTable` mechanism lets multiple signals carry genuinely independent
+timing within one pattern, confirmed via real primary sources fetched directly this session
+(the IEEE 1450 working group's own "D03" Reference Guide and a real worked 1450-1999 example,
+both hosted at `grouper.ieee.org/groups/1450` — the ratified standard text itself is paywalled
+and wasn't read).
+
+A new `tap_ir.PulsePin` op (port, count, hold_pins) carries this — pulse a named signal other
+than the JTAG pins, independent of TCK's own timing domain, optionally holding other named
+signals (a faultflow pattern's `capture_pi_values`) at fixed values throughout. SVF/STAPL
+reject it automatically: both emitters already had a catch-all `else: raise TapIr*Error(...)`
+for any unrecognized op, so `PulsePin` is correctly rejected with **zero code changes** to
+either file, confirmed by test. `tap_ir_play.py`'s `_navigation_tms`/`_shift_tms` were
+promoted to public (`navigation_tms`/`shift_tms`) — the new STIL walker is a second real
+consumer, crossing this project's own "rule of three" duplication threshold.
+
+**Live-validated against a real, independent, pip-installable parser**: `Semi-ATE-STIL`
+(`github.com/Semi-ATE/STIL`, Lark-based) — despite its own "not yet ready for production"
+disclaimer, it both syntax- and semantic-validated real STIL text this session, including the
+exact multi-`WaveformTable` mechanism this emitter depends on. That live validation iteratively
+found several real, undocumented-anywhere requirements no amount of reading the Reference Guide
+surfaced: a `WaveformTable`'s per-signal events must be wrapped in a `Waveforms{}` block (the
+real worked 1450-1999 example omits this — an older/simplified presentation); `SignalGroups`
+must precede `Timing`, and `PatternBurst`/`PatternExec` must both precede any `Pattern` block
+that references them (a forward-reference ordering requirement found only by feeding real files
+through the parser); every signal referenced in a vector under a given `WaveformTable` needs
+its own WFC defined in that exact table, even if just "hold" (`P`) or "don't-compare" (`X`);
+and `STILParser.parse_semantic()`'s return value is always `None` regardless of outcome — real
+success is `is_parsing_done is True` with `err_msg == ""`, found only by reading its own source
+directly. No real public precedent for encoding a JTAG SIR/SDR-style scan operation as STIL
+vectors was found anywhere — this emitter's own per-cycle convention is a reasoned construction
+from STIL's confirmed primitives, stated as such rather than presented as settled industry
+practice.
+
+**Stage 14 (built) — faultflow pattern retargeting, on top of Stage 13.** `faultflow_retarget.py`
+consumes faultflow's real `--export-patterns` JSON and drives a real `PDLInterpreter` to
+retarget it through warptap's own SIB/TAP network — never faultflow's own SoC chain-offset
+table, and never faultflow's own retargeting algorithm (this project's established "port
+understanding, not code" boundary with that project). A faultflow chain id is a bare int with
+no inherent name (confirmed directly against `faultflow/scan/protocol.py`/`atpg_view.py`) —
+`chain_to_instrument` is a required caller input, since no shared naming convention exists
+between the two tools.
+
+**Two real, previously-unknown correctness issues found and fixed before any test was
+written**, both from directly reading faultflow's own source rather than assuming:
+- **Bit order**: independently re-derived twice this session (once by hand with a
+  non-palindromic worked example, once by an independent review given the same primitives) —
+  both tools define physical "position 0" as nearest-SI identically, but faultflow's own
+  exported sequence is index-reversed relative to position
+  (`faultflow/retarget/transform.py`'s own `s[k] == V[L-1-k]`), while warptap's own
+  `payload_value` bit `k` IS position `k` directly. The exported bit list must be **reversed**
+  before packing into an int — not a new convention, `tap_ir.py`'s own module docstring already
+  states the identical rule for `sib_layout`'s own position-ordered bit lists.
+- **Padding**: `faultflow/scan/protocol.py`'s `serialize_vector` front-pads `load_seqs` and
+  back-pads `expected_unload` to a shared `max_chain_length` when a pattern's chains differ in
+  length — neither the padding amount nor `max_chain_length` itself appears in the exported
+  JSON, so it's stripped here using each chain's real width (from `chain_to_instrument` ->
+  `graph` -> `InstrumentNode.width`).
+- **One `PulsePin` per pattern, not per chain** — a real correctness requirement found during
+  design, not a simplification: a `ScanPattern` represents one fault-detection attempt where
+  every referenced chain loads, a single capture edge applies (with `capture_pi_values` held
+  throughout), and every chain then unloads against that same capture. Interleaving load/pulse/
+  unload per chain would compare a chain's response before other chains in the same pattern
+  were even loaded.
+
+**Validated at the gold-standard tier this project reserves for exactly this kind of
+correctness-critical translation**: a real Icarus cross-sim, extending a new fixture
+(`functional_clock.v`) that — unlike every prior fixture in this project, which ties
+`clk`=`tck` — genuinely separates a functional `sysclk` from the TAP's own `tck`. A
+faultflow-shaped pattern (load a WRITE instrument, pulse `sysclk` once, read back a READ
+instrument bound to the `sysclk`-clocked register) passed against real RTL on the first
+attempt once the pure-Python logic above was independently verified — proving the whole
+pipeline (bit-order, padding-strip, `PDLInterpreter` retargeting, `PulsePin` insertion) against
+real simulated hardware, not a self-written model. Secondary validation: the same pattern shape
+flows through Stage 13's own `to_stil()` and validates cleanly against `Semi-ATE-STIL` too.
 
 ---
 
