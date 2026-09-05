@@ -21,7 +21,7 @@ warptap = "warptap.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-warptap = ["rtl/*.v"]
+warptap = ["rtl/*.v", "py.typed"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
