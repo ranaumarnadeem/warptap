@@ -57,6 +57,28 @@ class Runtest(NamedTuple):
     end_state: TapState = TapState.RUN_TEST_IDLE
 
 
+class PulsePin(NamedTuple):
+    """Pulse a named signal OTHER than TCK/TMS/TDI/TDO (implementation_plan.md §7 Stage 13)
+    -- e.g. a DUT's functional/system clock -- ``count`` times, independent of TCK's own
+    timing domain. TAP pins (TCK/TMS/TDI) stay static throughout. ``hold_pins`` optionally
+    drives other named signals (e.g. a faultflow pattern's ``capture_pi_values``) to fixed
+    values for the same duration -- both only ever meaningful together, at the moment of
+    forcing a functional capture edge, hence one op rather than two.
+
+    Exists because gating this pulse from TCK itself (an earlier design considered and
+    rejected) is unsound for a real class of external ATPG patterns: a transition/delay fault
+    needs an at-speed capture edge, which TCK -- externally, slowly, ATE-driven -- cannot
+    provide. Deliberately NOT expressible via SVF/STAPL (a JTAG-pins-only vocabulary, no
+    concept of a second clock domain) -- both emitters raise their own existing
+    ``TapIrSvfError``/``TapIrStaplError`` for it; only :mod:`warptap.tap_ir_stil` can render
+    it, since STIL's own ``WaveformTable`` mechanism lets an independently-timed signal
+    coexist with the JTAG pins in one pattern."""
+
+    port: str
+    count: int
+    hold_pins: tuple[tuple[str, int], ...] = ()
+
+
 #: Canonical SVF/STAPL state names for each of the 16 IEEE 1149.1 TAP states -- verbatim from
 #: the SVF Specification Rev. E p.6 and JESD71 (STAPL) Annex A, which name all 16 states
 #: identically (only the *stable_state* argument of STATE/RUNTEST/ENDIR/ENDDR/IRSTOP/DRSTOP is
