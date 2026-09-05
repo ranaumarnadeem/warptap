@@ -5,7 +5,7 @@ Deliberately narrow: only implements the ONE navigation pattern
 Capture-x -> Shift-x -> Exit1-x -> Update-x -> Run-Test-Idle), not a general BFS pathfinder
 over the 16-state FSM -- a future Stage 7 backend (SVF/STAPL text emission) walks the identical
 ``ir_ops`` list with a different lowering. Both backends here share that one piece of
-navigation-step logic (:func:`_navigation_tms`) rather than duplicating it:
+navigation-step logic (:func:`navigation_tms`) rather than duplicating it:
 
 - :func:`play` drives a live :class:`~warptap.tap_model.TapModel` (+ whatever
   :class:`~warptap.tap_model.DataRegister` it has registered, e.g.
@@ -21,6 +21,12 @@ navigation-step logic (:func:`_navigation_tms`) rather than duplicating it:
 Both preconditions: the caller must already have the TAP resident in ``RUN_TEST_IDLE`` before
 the first op (a reset + settle lead-in, same discipline every prior stage's stimulus already
 follows) -- neither function drives a reset itself.
+
+``navigation_tms``/``shift_tms`` are public (Stage 13): :mod:`warptap.tap_ir_stil` became a
+second real consumer of this exact per-cycle navigation logic, needing its own walker since
+STIL vectors are self-contained send+expect (unlike this module's own deliberately send-only
+``to_cycles``) -- the same "rule of three" threshold this project applies elsewhere (e.g.
+:mod:`warptap.tap_ports`) rather than a second, hand-copied implementation.
 """
 
 from __future__ import annotations
@@ -43,7 +49,7 @@ class TapIrPlayError(RuntimeError):
     deliberately-narrow module implements (see module docstring)."""
 
 
-def _navigation_tms(from_state: TapState, to_state: TapState) -> Tuple[int, ...]:
+def navigation_tms(from_state: TapState, to_state: TapState) -> Tuple[int, ...]:
     """The tms sequence (tdi held at 0 throughout) needed to walk from ``from_state`` to
     ``to_state`` -- only the specific transitions ``PDLInterpreter.iApply`` actually emits."""
     if to_state is TapState.SHIFT_DR:
@@ -63,7 +69,7 @@ def _navigation_tms(from_state: TapState, to_state: TapState) -> Tuple[int, ...]
     raise TapIrPlayError(f"navigating to {to_state} is not supported")
 
 
-def _shift_tms(bits: int) -> Tuple[int, ...]:
+def shift_tms(bits: int) -> Tuple[int, ...]:
     """tms for each of ``bits`` shift cycles -- 0 throughout except the last, which rides
     the exit edge (every prior stage's own directed tests rely on this same convention:
     the last bit shifted and the state-exit transition share one TCK edge)."""
@@ -79,11 +85,11 @@ def play(model: TapModel, ir_ops: List[_IrOp]) -> List[int]:
     observed: List[int] = []
     for op in ir_ops:
         if isinstance(op, GotoState):
-            for tms in _navigation_tms(model.state, op.state):
+            for tms in navigation_tms(model.state, op.state):
                 model.tick(tms, 0)
         elif isinstance(op, (ShiftIR, ShiftDR)):
             fed_bits = bits_from_int(op.tdi, op.bits)
-            out = [model.tick(tms, bit) for tms, bit in zip(_shift_tms(op.bits), fed_bits)]
+            out = [model.tick(tms, bit) for tms, bit in zip(shift_tms(op.bits), fed_bits)]
             observed.append(bits_to_int(out))
         elif isinstance(op, Runtest):
             for _ in range(op.count):
@@ -111,11 +117,11 @@ def to_cycles(ir_ops: List[_IrOp]) -> List[Tuple[int, int]]:
 
     for op in ir_ops:
         if isinstance(op, GotoState):
-            for tms in _navigation_tms(state, op.state):
+            for tms in navigation_tms(state, op.state):
                 tick(tms, 0)
         elif isinstance(op, (ShiftIR, ShiftDR)):
             fed_bits = bits_from_int(op.tdi, op.bits)
-            for tms, bit in zip(_shift_tms(op.bits), fed_bits):
+            for tms, bit in zip(shift_tms(op.bits), fed_bits):
                 tick(tms, bit)
         elif isinstance(op, Runtest):
             for _ in range(op.count):
@@ -137,13 +143,13 @@ def shift_op_ranges(ir_ops: List[_IrOp]) -> List[Tuple[int, int]]:
     ranges: List[Tuple[int, int]] = []
     for op in ir_ops:
         if isinstance(op, GotoState):
-            tms_seq = _navigation_tms(state, op.state)
+            tms_seq = navigation_tms(state, op.state)
             for tms in tms_seq:
                 state = next_state(state, tms)
             index += len(tms_seq)
         elif isinstance(op, (ShiftIR, ShiftDR)):
             ranges.append((index, op.bits))
-            for tms in _shift_tms(op.bits):
+            for tms in shift_tms(op.bits):
                 state = next_state(state, tms)
             index += op.bits
         elif isinstance(op, Runtest):
