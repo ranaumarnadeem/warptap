@@ -164,3 +164,27 @@ def icl_parser_module(icl_parser_dir: Path):
             "z3-solver networkx` (sympy is a warptap dependency already)"
         )
     return Ijtag
+
+
+@pytest.fixture(scope="session")
+def semiate_stil_parser():
+    """``STILParser`` (``Semi-ATE-STIL``'s own public API class, pip-installable unlike
+    ``icl_parser`` -- implementation_plan.md §7 Stage 13) -- a real, independent, Lark-based
+    STIL syntax+semantic checker, despite its own README's "not yet ready for production"
+    disclaimer (confirmed usable this session against real STIL text, including the
+    multi-``WaveformTable`` mechanism :mod:`warptap.tap_ir_stil` depends on). Requires ``lark``
+    -- not declared as an install dependency by the package itself, so genuinely optional here
+    too. Dev/test only, never a runtime dependency of warptap itself. Skips (not fails) when
+    either package isn't importable, matching ``icl_parser_module``'s own discipline.
+
+    Real, empirically-confirmed usage note (not documented anywhere in the package itself):
+    ``parser.parse_semantic()`` always returns ``None`` regardless of outcome -- check
+    ``parser.is_parsing_done is True`` and ``parser.err_msg == ""`` for real success, after
+    calling ``parser.parse_syntax()`` then ``parser.parse_semantic()`` in that order."""
+    try:
+        from Semi_ATE.STIL.parsers.STILParser import STILParser
+    except ImportError as exc:
+        pytest.skip(
+            f"Semi-ATE-STIL/lark not importable: {exc} -- run `pip install Semi-ATE-STIL lark`"
+        )
+    return STILParser
