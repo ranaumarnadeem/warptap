@@ -38,6 +38,7 @@ from __future__ import annotations
 
 from typing import List
 
+from warptap.errors import WarptapError
 from warptap.icl_model import PhysicalGraph
 from warptap.pdl_history import (
     PdlApplyStmt,
@@ -49,7 +50,7 @@ from warptap.pdl_history import (
 )
 
 
-class PdlEmitError(RuntimeError):
+class PdlEmitError(WarptapError):
     """Raised when ``to_pdl`` is given a statement it can't render -- currently only an
     ``iWrite``/``iRead`` field naming an instrument absent from ``graph`` (a caller passing a
     ``history``/``graph`` pair that didn't come from the same ``PDLInterpreter``)."""

@@ -26,6 +26,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from warptap.errors import WarptapError
 from warptap.icl_model import InstrumentDirection, PhysicalGraph
 from warptap.netlist import Bit, Module, Netlist
 from warptap.tap_ports import TCK, TDI, TDO, TMS, TRST_N
@@ -44,7 +45,7 @@ _INSTRUMENT_WRITE = "instrument_write"
 DEFAULT_IR_WIDTH = 4
 
 
-class SibInsertError(RuntimeError):
+class SibInsertError(WarptapError):
     """Raised when a :class:`~warptap.icl_model.PhysicalGraph` asks for something this v1
     insertion pass doesn't support -- a SIB with no instrument, a nested SIB-gating-SIB
     network (implementation_plan.md §7 Stage 4 explicitly scopes v1 to flat/static

@@ -102,6 +102,7 @@ from __future__ import annotations
 
 from typing import List
 
+from warptap.errors import WarptapError
 from warptap.icl_model import InstrumentDirection, InstrumentNode, ModuleInstance, PhysicalGraph
 from warptap.tap_ports import TCK, TDI, TDO, TMS, TRST_N
 
@@ -123,7 +124,7 @@ every SIB instance is ``Of``, not a per-instance name). Exported so
 second literal that could silently drift out of sync with this one."""
 
 
-class IclEmitError(RuntimeError):
+class IclEmitError(WarptapError):
     """Raised when a :class:`~warptap.icl_model.PhysicalGraph` asks for something v1's ICL
     emitter can't represent -- a nested SIB network (implementation_plan.md §7 Stage 4 scopes
     v1 to flat/static networks; this re-validates the same invariant

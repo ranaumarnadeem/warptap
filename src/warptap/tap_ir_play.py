@@ -33,6 +33,7 @@ from __future__ import annotations
 
 from typing import List, Tuple, Union
 
+from warptap.errors import WarptapError
 from warptap.tap_fsm import TapState, next_state
 from warptap.tap_ir import GotoState, Runtest, ShiftDR, ShiftIR, bits_from_int, bits_to_int
 from warptap.tap_model import TapModel
@@ -44,7 +45,7 @@ _GOTO_SHIFT_IR_TMS = (1, 1, 0, 0)  # RUN_TEST_IDLE -> ... -> SELECT_IR_SCAN -> C
 _EXIT_TO_IDLE_TMS = (1, 0)  # EXIT1_x -> UPDATE_x -> RUN_TEST_IDLE
 
 
-class TapIrPlayError(RuntimeError):
+class TapIrPlayError(WarptapError):
     """Raised when a navigation target/source pair isn't one of the transitions this
     deliberately-narrow module implements (see module docstring)."""
 

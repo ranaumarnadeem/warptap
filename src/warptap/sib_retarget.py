@@ -10,10 +10,11 @@ sufficient."""
 
 from __future__ import annotations
 
+from warptap.errors import WarptapError
 from warptap.icl_model import PhysicalGraph, SibNode
 
 
-class SibRetargetError(RuntimeError):
+class SibRetargetError(WarptapError):
     """Raised when no path to the named instrument exists in this network."""
 
 

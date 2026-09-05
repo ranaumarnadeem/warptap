@@ -22,6 +22,7 @@ from __future__ import annotations
 
 from typing import Optional, Union
 
+from warptap.errors import WarptapError
 from warptap.icl_model import ModuleInstance, PhysicalGraph, resolve_dotted_address
 from warptap.pdl_history import (
     PdlApplyStmt,
@@ -37,7 +38,7 @@ from warptap.tap_fsm import TapState
 from warptap.tap_ir import GotoState, Runtest, ShiftDR, bits_to_int
 
 
-class PDLError(RuntimeError):
+class PDLError(WarptapError):
     """PDL-command-layer misuse not already covered by a lower-layer exception
     (``ICLAddressError`` for a bad ``iTarget`` path, ``SibRetargetError`` for an unreachable
     instrument) -- e.g. ``iWrite``/``iRead``/``iApply`` called before any ``iTarget``."""

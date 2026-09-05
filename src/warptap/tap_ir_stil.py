@@ -56,6 +56,7 @@ from __future__ import annotations
 
 from typing import Dict, List, NamedTuple, Optional, Tuple, Union
 
+from warptap.errors import WarptapError
 from warptap.tap_fsm import TapState, next_state
 from warptap.tap_ir import GotoState, PulsePin, Runtest, ShiftDR, ShiftIR, bits_from_int
 from warptap.tap_ir_play import navigation_tms, shift_tms
@@ -79,7 +80,7 @@ _EDGE_OFFSET = "1ns"
 _COMPARE_OFFSET = "2ns"
 
 
-class TapIrStilError(RuntimeError):
+class TapIrStilError(WarptapError):
     """Raised when ``to_stil`` is given an op it can't render, or a ``pulse_periods`` mapping
     missing an entry for some :class:`~warptap.tap_ir.PulsePin` target this ``ir_ops`` list
     actually uses."""

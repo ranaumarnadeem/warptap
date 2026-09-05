@@ -53,6 +53,7 @@ import sys
 from pathlib import Path
 from typing import List, Tuple
 
+from warptap.errors import WarptapError
 from warptap.icl_emit import INSTRUMENT_MODULE_PREFIX, SIB_INSTANCE_PREFIX, SIB_MODULE_TYPE
 from warptap.icl_model import (
     InstrumentDirection,
@@ -64,7 +65,7 @@ from warptap.icl_model import (
 from warptap.tap_ports import TDI, TDO
 
 
-class IclImportError(RuntimeError):
+class IclImportError(WarptapError):
     """Raised when the given ``.icl`` file(s) don't describe a network :func:`import_icl` can
     recognize -- not a warptap-shaped SIB network at all, a nested SIB (Stage 4's own flat-only
     scope, re-validated here on the way in), or a real, already-documented gap in the vendored

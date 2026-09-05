@@ -40,12 +40,13 @@ from __future__ import annotations
 
 from typing import List, Union
 
+from warptap.errors import WarptapError
 from warptap.tap_ir import TAP_STATE_NAMES, GotoState, Runtest, ShiftDR, ShiftIR
 
 _IrOp = Union[ShiftIR, ShiftDR, GotoState, Runtest]
 
 
-class TapIrSvfError(RuntimeError):
+class TapIrSvfError(WarptapError):
     """Raised when ``to_svf`` is given an op it can't render."""
 
 

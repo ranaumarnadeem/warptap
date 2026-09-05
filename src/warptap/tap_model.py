@@ -15,6 +15,7 @@ from __future__ import annotations
 import enum
 from typing import Protocol
 
+from warptap.errors import WarptapError
 from warptap.tap_fsm import TapState, next_state
 
 DEFAULT_IR_WIDTH = 4
@@ -66,7 +67,7 @@ def decode_instruction(
     return Instruction.BYPASS
 
 
-class TapModelError(RuntimeError):
+class TapModelError(WarptapError):
     """Raised when TapModel is asked to do something its currently-registered data
     registers don't support — e.g. shifting through SAMPLE_PRELOAD/EXTEST before Stage 3's
     boundary-scan register exists (implementation_plan.md §7)."""

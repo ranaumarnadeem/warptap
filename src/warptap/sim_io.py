@@ -16,11 +16,13 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+from warptap.errors import WarptapError
+
 DEFAULT_IVERILOG_COMMAND = os.environ.get("WARPTAP_IVERILOG_CMD", "iverilog")
 DEFAULT_VVP_COMMAND = os.environ.get("WARPTAP_VVP_CMD", "vvp")
 
 
-class SimError(RuntimeError):
+class SimError(WarptapError):
     """Raised when an ``iverilog`` compile or ``vvp`` run exits nonzero."""
 
     def __init__(self, command: list[str], returncode: int, stdout: str, stderr: str):

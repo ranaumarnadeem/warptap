@@ -20,13 +20,14 @@ from __future__ import annotations
 
 from typing import List, NamedTuple, Union
 
+from warptap.errors import WarptapError
 from warptap.tap_ir import GotoState, Runtest, ShiftDR, ShiftIR, bits_to_int
 from warptap.tap_ir_play import shift_op_ranges
 
 _IrOp = Union[ShiftIR, ShiftDR, GotoState, Runtest]
 
 
-class PDLVerifyError(RuntimeError):
+class PDLVerifyError(WarptapError):
     """Raised when ``observed_by_shift_op`` doesn't have enough entries to cover every
     shift op ``ir_ops`` actually contains -- a mismatched trace/ops pair, not a failed
     comparison (a failed comparison is a normal, non-exceptional ``ReadCheckResult``)."""

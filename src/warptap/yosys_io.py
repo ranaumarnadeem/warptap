@@ -16,10 +16,12 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+from warptap.errors import WarptapError
+
 DEFAULT_YOSYS_COMMAND = os.environ.get("WARPTAP_YOSYS_CMD", "yosys")
 
 
-class YosysError(RuntimeError):
+class YosysError(WarptapError):
     """Raised when a Yosys subprocess invocation exits nonzero."""
 
     def __init__(self, script: str, returncode: int, stdout: str, stderr: str):

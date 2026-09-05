@@ -51,6 +51,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Union
 
+from warptap.errors import WarptapError
 from warptap.icl_model import ModuleInstance, PhysicalGraph
 from warptap.pdl_interpreter import PDLInterpreter
 from warptap.tap_ir import GotoState, PulsePin, Runtest, ShiftDR, ShiftIR
@@ -58,7 +59,7 @@ from warptap.tap_ir import GotoState, PulsePin, Runtest, ShiftDR, ShiftIR
 _IrOp = Union[ShiftIR, ShiftDR, GotoState, Runtest, PulsePin]
 
 
-class FaultflowRetargetError(RuntimeError):
+class FaultflowRetargetError(WarptapError):
     """Raised when a pattern references a faultflow chain id absent from
     ``chain_to_instrument``, or that mapping names an instrument not present in ``graph``."""
 

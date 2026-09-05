@@ -71,6 +71,7 @@ from __future__ import annotations
 
 from typing import List, Union
 
+from warptap.errors import WarptapError
 from warptap.stapl_crc16 import stapl_file_crc
 from warptap.tap_ir import TAP_STATE_NAMES, GotoState, Runtest, ShiftDR, ShiftIR
 
@@ -88,7 +89,7 @@ _MANDATORY_NOTE_FIELDS = (
 )
 
 
-class TapIrStaplError(RuntimeError):
+class TapIrStaplError(WarptapError):
     """Raised when ``to_stapl`` is given an op it can't render -- an unsupported op type, or
     a ``ShiftIR``/``ShiftDR`` with exactly one of ``tdo``/``mask`` set (STAPL's ``COMPARE``
     clause needs both together, see module docstring)."""

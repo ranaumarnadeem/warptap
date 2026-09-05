@@ -18,6 +18,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from warptap.bsr_plan import BsrFunction, BsrPlan
+from warptap.errors import WarptapError
 from warptap.netlist import Bit, Module, Netlist
 from warptap.tap_ports import TCK, TDI, TDO, TMS, TRST_N
 from warptap.yosys_io import ingest
@@ -30,7 +31,7 @@ _BC1_FULL = "bc1_full"
 _BC7_BIDIR = "bc7_bidir"
 
 
-class BsrInsertError(RuntimeError):
+class BsrInsertError(WarptapError):
     """Raised when the target design's structure doesn't match what a Stage 3
     insertion step needs — e.g. no existing tri-state driver found for a bidir
     port — rather than guessing and silently emitting something wrong."""

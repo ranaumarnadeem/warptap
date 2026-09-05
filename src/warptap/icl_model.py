@@ -23,6 +23,8 @@ from __future__ import annotations
 import enum
 from typing import NamedTuple, Optional
 
+from warptap.errors import WarptapError
+
 
 class InstrumentDirection(enum.Enum):
     """Which way an instrument's bits move real design data (implementation_plan.md §7
@@ -77,7 +79,7 @@ class ModuleInstance(NamedTuple):
     children: tuple["ModuleInstance", ...] = ()
 
 
-class ICLAddressError(RuntimeError):
+class ICLAddressError(WarptapError):
     """Raised by :func:`resolve_dotted_address` when a path segment doesn't resolve --
     matches BsrInsertError's convention of naming the exact bad input rather than
     returning ``None``."""
