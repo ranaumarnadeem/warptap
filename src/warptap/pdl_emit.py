@@ -18,20 +18,26 @@ independent oracle to validate against** -- see ``tests/test_pdl_emit_integratio
 self-consistency-only cross-check, loudly documented there as NOT equivalent-strength to
 Stage 7's OpenOCD/Jam-player validation or Stage 10's ``icl_parser`` validation.
 
-**Field addressing**: real PDL addresses a named sub-field (``TDR_bit``/``UCreg``/ICL
-``Alias``) inside ``iWrite``/``iRead``, but ``PDLInterpreter.iWrite``/``iRead`` take no such
-argument -- a real, already-documented gap (see ``pdl_interpreter.py``'s own ``iWrite``
-docstring). ``pdl_history.PdlWriteStmt``/``PdlReadStmt.field`` is therefore always the whole
-target instrument's own name; this emitter renders exactly that, not a fabricated sub-field.
+**Field addressing (Stage 15)**: real PDL addresses a named sub-field (``TDR_bit``/``UCreg``/
+ICL ``Alias``) inside ``iWrite``/``iRead``. ``pdl_history.PdlWriteStmt``/``PdlReadStmt.field``
+is either a declared :class:`~warptap.icl_model.Alias` name (when ``PDLInterpreter.iWrite``/
+``iRead`` was called with one) or the whole target instrument's own name (Stage 5's original,
+still-supported case) -- this emitter renders exactly that string either way, not a fabricated
+sub-field; ``_instrument_width`` resolves the correct hex-padding width by searching the
+target instrument's own ``aliases`` first, falling back to its whole width.
 
 **Value formatting**: ``iWrite``/``iRead`` values render as a zero-padded ``0x``-hex literal
-sized to the target instrument's own width (``ceil(width / 4)`` hex digits) -- matching real
-PDL usage this session's research found, and this project's own "always emit every field
-explicitly" house style (``tap_ir_svf.py``, ``tap_ir_stapl.py``).
+sized to the addressed field's own width (``ceil(width / 4)`` hex digits -- the *alias*'s
+width when one was addressed, else the whole instrument's) -- matching real PDL usage this
+session's research found, and this project's own "always emit every field explicitly" house
+style (``tap_ir_svf.py``, ``tap_ir_stapl.py``).
 
-**``iRunLoop`` always renders ``-tck``** -- ``PDLInterpreter.iRunLoop`` has no ``-sck`` concept
-(it always drives ``TapState.RUN_TEST_IDLE``), so rendering anything else would misrepresent a
-capability v1 doesn't have; a real ``-sck`` path is future scope, not a silent rendering gap.
+**``iRunLoop`` renders ``-sck`` or ``-tck`` (Stage 15)** depending on whether
+``PdlRunLoopStmt.sck_port`` is set -- matching whichever selector
+``PDLInterpreter.iRunLoop(..., sck_port=...)`` was actually called with (Stage 5's original
+``-tck``-only rendering was the ``sck_port is None`` case all along). The port name itself is
+never rendered -- real PDL's ``-sck``/``-tck`` are bare flags in the text, carrying no port
+name.
 """
 
 from __future__ import annotations
@@ -57,10 +63,18 @@ class PdlEmitError(WarptapError):
 
 
 def _instrument_width(graph: PhysicalGraph, field: str) -> int:
+    """Hex-padding width for ``field``: the addressed :class:`~warptap.icl_model.Alias`'s own
+    width (Stage 15) when ``field`` names one, else the whole instrument's width when
+    ``field`` names the instrument directly (Stage 5's original, still-supported case)."""
     for node in graph.chain:
-        if node.instrument is not None and node.instrument.name == field:
+        if node.instrument is None:
+            continue
+        if node.instrument.name == field:
             return node.instrument.width
-    raise PdlEmitError(f"no instrument named {field!r} in this network's graph")
+        for alias in node.instrument.aliases:
+            if alias.name == field:
+                return alias.high_bit - alias.low_bit + 1
+    raise PdlEmitError(f"no instrument or alias named {field!r} in this network's graph")
 
 
 def _hex(value: int, width_bits: int) -> str:
@@ -87,7 +101,8 @@ def to_pdl(history: List[PdlStatement], graph: PhysicalGraph) -> str:
             width = _instrument_width(graph, stmt.field)
             lines.append(f"iRead {stmt.field} {_hex(stmt.expected, width)};")
         elif isinstance(stmt, PdlRunLoopStmt):
-            lines.append(f"iRunLoop {stmt.count} -tck;")
+            flag = "-sck" if stmt.sck_port is not None else "-tck"
+            lines.append(f"iRunLoop {stmt.count} {flag};")
         elif isinstance(stmt, PdlApplyStmt):
             lines.append("iApply;")
         else:
