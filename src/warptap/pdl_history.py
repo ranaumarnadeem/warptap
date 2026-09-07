@@ -10,7 +10,7 @@ own deferred/batched low-level lowering.
 
 from __future__ import annotations
 
-from typing import NamedTuple, Union
+from typing import NamedTuple, Optional, Union
 
 
 class PdlTargetStmt(NamedTuple):
@@ -20,10 +20,10 @@ class PdlTargetStmt(NamedTuple):
 
 
 class PdlWriteStmt(NamedTuple):
-    """``iWrite <field> <value>;``. ``field`` is the current scope's own instrument name --
-    real PDL addresses a named sub-field (``TDR_bit``/``UCreg``/ICL ``Alias``), but
-    ``PDLInterpreter.iWrite`` has no such argument (documented gap, see its own docstring), so
-    there is nothing narrower than the whole instrument to name here either."""
+    """``iWrite <field> <value>;``. ``field`` is either a declared ICL ``Alias`` name (real
+    PDL's named sub-field addressing, ``TDR_bit``/``UCreg``/ICL ``Alias`` -- Stage 15) when
+    ``PDLInterpreter.iWrite`` was called with one, or the current scope's own instrument name
+    when it wasn't (Stage 5's original whole-instrument case, still fully supported)."""
 
     field: str
     value: int
@@ -37,10 +37,14 @@ class PdlReadStmt(NamedTuple):
 
 
 class PdlRunLoopStmt(NamedTuple):
-    """``iRunLoop <count> -tck;``. No clock-selector field: ``PDLInterpreter.iRunLoop`` always
-    drives ``TapState.RUN_TEST_IDLE``, so there is no ``-sck`` case to distinguish yet."""
+    """``iRunLoop <count> -tck;`` (``sck_port is None``, Stage 5's original, still-default
+    case) or ``iRunLoop <count> -sck;`` (``sck_port`` names a real functional-clock port --
+    Stage 15's addition to ``PDLInterpreter.iRunLoop``). ``sck_port`` itself is never rendered
+    in PDL text -- real PDL's ``-sck``/``-tck`` are bare flags, carrying no port name -- it
+    only exists here to tell ``pdl_emit.to_pdl`` which flag to render."""
 
     count: int
+    sck_port: Optional[str] = None
 
 
 class PdlApplyStmt(NamedTuple):

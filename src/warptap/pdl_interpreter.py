@@ -35,7 +35,7 @@ from warptap.pdl_history import (
 from warptap.sib_layout import compose_bits, layout_bit_length
 from warptap.sib_retarget import open_path_to
 from warptap.tap_fsm import TapState
-from warptap.tap_ir import GotoState, Runtest, ShiftDR, bits_to_int
+from warptap.tap_ir import GotoState, PulsePin, Runtest, ShiftDR, bits_to_int
 
 
 class PDLError(WarptapError):
@@ -56,14 +56,56 @@ def _target_layout(graph: PhysicalGraph, opened: frozenset[str], target_sib: str
     raise AssertionError(f"{target_sib!r} not found in graph.chain")
 
 
-def _read_mask_bits(total_bits: int, offset: int, width: int) -> list[int]:
-    """Position-ordered mask: 1 at exactly ``target_sib``'s own instrument-content
-    positions, 0 everywhere else -- an iRead's whole-instrument expectation is never about
-    any other slot's structural select bits, only the target's own content."""
+def _read_mask_bits(total_bits: int, offset: int, low: int, high: int) -> list[int]:
+    """Position-ordered mask: 1 at exactly ``[offset + low, offset + high]``, 0 everywhere
+    else -- generalizes the original whole-instrument mask (Stage 5) to support a named
+    sub-field ``iRead`` (Stage 15) addressing less than the full instrument: ``(low, high) =
+    (0, width - 1)`` reproduces the original mask exactly, an iRead's whole-instrument
+    expectation never being about any other slot's structural select bits, only the target's
+    own content."""
     bits = [0] * total_bits
-    for k in range(width):
+    for k in range(low, high + 1):
         bits[offset + k] = 1
     return bits
+
+
+def _instrument_for(graph: PhysicalGraph, instrument_name: str):
+    """The :class:`~warptap.icl_model.InstrumentNode` named ``instrument_name`` in ``graph``,
+    or ``None`` if absent -- ``iApply`` already discovers this indirectly via
+    ``sib_retarget.open_path_to``; this direct lookup exists for ``iWrite``/``iRead``'s own
+    named-sub-field resolution (Stage 15), which needs the instrument's declared ``aliases``
+    before ``iApply`` ever runs."""
+    for node in graph.chain:
+        if node.instrument is not None and node.instrument.name == instrument_name:
+            return node.instrument
+    return None
+
+
+def _resolve_field(graph: PhysicalGraph, instrument_name: str, field: str) -> tuple[int, int]:
+    """``(low_bit, high_bit)`` for ``field`` -- a declared :class:`~warptap.icl_model.Alias`
+    name -- on ``instrument_name``'s own instrument. Raises :class:`PDLError` naming the bad
+    instrument/field rather than a bare ``KeyError``, matching this project's own "name the
+    exact bad input" convention (``ICLAddressError``, ``SibRetargetError``)."""
+    instrument = _instrument_for(graph, instrument_name)
+    if instrument is None:
+        raise PDLError(f"no instrument named {instrument_name!r} in this network")
+    for alias in instrument.aliases:
+        if alias.name == field:
+            return alias.low_bit, alias.high_bit
+    raise PDLError(
+        f"{field!r} is not a declared Alias on instrument {instrument_name!r} "
+        f"(known aliases: {[a.name for a in instrument.aliases]})"
+    )
+
+
+def _set_bit_range(current: int, low: int, high: int, value: int) -> int:
+    """Merge ``value`` into ``current`` at bit positions ``[low, high]`` (inclusive),
+    preserving every other bit of ``current`` untouched -- so a named-sub-field ``iWrite``
+    (Stage 15) doesn't clobber a previously-queued write to a *different* field of the same
+    instrument."""
+    width = high - low + 1
+    mask = ((1 << width) - 1) << low
+    return (current & ~mask) | ((value << low) & mask)
 
 
 class PDLInterpreter:
@@ -75,9 +117,11 @@ class PDLInterpreter:
         self._root = root
         self._scope: Optional[ModuleInstance] = None
         self._pending_writes: dict[str, int] = {}
-        self._pending_reads: dict[str, int] = {}
+        # (expected, low_bit, high_bit) -- (low_bit, high_bit) = (None, None) means "whole
+        # instrument," resolved against the target's real width in iApply itself.
+        self._pending_reads: dict[str, tuple[int, Optional[int], Optional[int]]] = {}
         self._currently_open: frozenset[str] = frozenset()
-        self.program: list[Union[ShiftDR, GotoState, Runtest]] = []
+        self.program: list[Union[ShiftDR, GotoState, Runtest, PulsePin]] = []
         self.history: list[PdlStatement] = []
 
     def iTarget(self, dotted: str) -> None:
@@ -94,34 +138,65 @@ class PDLInterpreter:
             raise PDLError(f"{command} called with no iTarget scope set")
         return self._scope
 
-    def iWrite(self, value: int) -> None:
-        """Queue ``value`` to be written to the current scope on the next ``iApply``. No
-        field-name argument: real PDL addresses named sub-fields (``TDR_bit``/``UCreg``/ICL
-        ``Alias``), confirmed real by independent research sources, but
-        ``icl_model.InstrumentNode`` has no such decomposition -- one flat integer per
-        instrument. Rather than accept-and-ignore a name parameter (misrepresenting a
-        capability v1 doesn't have), this addresses whatever is currently scoped, as a
-        whole -- a real, documented scope gap, not a hidden one."""
+    def iWrite(self, value: int, field: Optional[str] = None) -> None:
+        """Queue ``value`` to be written to the current scope on the next ``iApply``. With no
+        ``field`` (the default -- byte-identical to pre-Stage-15 behavior), addresses the
+        whole instrument, as before. With ``field`` naming a declared
+        :class:`~warptap.icl_model.Alias` on the current scope's instrument, merges ``value``
+        into just that sub-range of the pending value via :func:`_set_bit_range`, preserving
+        whatever else is already queued for this instrument -- real PDL's named sub-field
+        addressing (``TDR_bit``/``UCreg``/ICL ``Alias``, confirmed real by independent
+        research sources), closing what was previously a documented, stated gap rather than a
+        silent one. Raises :class:`PDLError` for an unknown ``field``."""
         scope = self._require_scope("iWrite")
-        self._pending_writes[scope.name] = value
-        self.history.append(PdlWriteStmt(scope.name, value))
+        if field is None:
+            self._pending_writes[scope.name] = value
+        else:
+            low, high = _resolve_field(self._graph, scope.name, field)
+            current = self._pending_writes.get(scope.name, 0)
+            self._pending_writes[scope.name] = _set_bit_range(current, low, high, value)
+        self.history.append(PdlWriteStmt(field if field is not None else scope.name, value))
 
-    def iRead(self, expected: int) -> None:
+    def iRead(self, expected: int, field: Optional[str] = None) -> None:
         """Queue an expected value for the current scope's next ``iApply`` -- populates
         the emitted ``ShiftDR``'s ``tdo``/``mask`` fields (§ note in ``iApply``), not
-        evaluated here."""
+        evaluated here. With no ``field`` (the default), the whole instrument's content is
+        compared, exactly as before -- resolution of *which* bits that means is deferred to
+        ``iApply`` (which already looks up the target's width via ``_target_layout`` anyway),
+        not resolved eagerly here, so this path adds no new lookup/failure mode for existing
+        callers. With ``field`` naming a declared :class:`~warptap.icl_model.Alias`, only that
+        sub-range is masked in; the rest of the instrument's content is don't-care for this
+        read -- real PDL's named sub-field addressing, resolved eagerly here since it needs
+        the instrument's declared aliases, unlike the whole-instrument case."""
         scope = self._require_scope("iRead")
-        self._pending_reads[scope.name] = expected
-        self.history.append(PdlReadStmt(scope.name, expected))
+        if field is None:
+            self._pending_reads[scope.name] = (expected, None, None)
+        else:
+            low, high = _resolve_field(self._graph, scope.name, field)
+            self._pending_reads[scope.name] = (expected, low, high)
+        self.history.append(PdlReadStmt(field if field is not None else scope.name, expected))
 
-    def iRunLoop(self, count: int) -> None:
+    def iRunLoop(self, count: int, *, sck_port: Optional[str] = None) -> None:
         """Not deferred like ``iWrite``/``iRead``: a "wait N cycles" has no pending value
         to overwrite before some later flush, so this appends directly to ``self.program``
-        at the position encountered."""
-        self.program.append(
-            Runtest(count, run_state=TapState.RUN_TEST_IDLE, end_state=TapState.RUN_TEST_IDLE)
-        )
-        self.history.append(PdlRunLoopStmt(count))
+        at the position encountered. With no ``sck_port`` (the default -- byte-identical to
+        pre-Stage-15 behavior), cycles TCK in Run-Test-Idle exactly as before -- real PDL's
+        ``-tck`` selector. With ``sck_port`` naming a real functional-clock port, appends a
+        :class:`~warptap.tap_ir.PulsePin` instead of a :class:`~warptap.tap_ir.Runtest`  --
+        real PDL's ``-sck`` (system clock) selector, reusing the exact primitive Stage 13/14
+        already built and real-cross-sim-validated for "pulse a named signal independent of
+        TCK's own timing domain," rather than inventing a second, parallel concept. Neither
+        PDL text nor ICL gives ``-sck``'s target port a confirmed real place to live, so
+        ``sck_port`` is a Python-side-only parameter -- the same "caller must separately
+        supply the real clock's name" pattern ``faultflow_retarget.retarget_faultflow_patterns``'s
+        own ``clock_port`` parameter already established."""
+        if sck_port is None:
+            self.program.append(
+                Runtest(count, run_state=TapState.RUN_TEST_IDLE, end_state=TapState.RUN_TEST_IDLE)
+            )
+        else:
+            self.program.append(PulsePin(sck_port, count))
+        self.history.append(PdlRunLoopStmt(count, sck_port))
 
     def iApply(self) -> list[Union[ShiftDR, GotoState]]:
         """The sole action command. Resolves the current scope's gating SIB, emits phase 1
@@ -180,18 +255,21 @@ class PDLInterpreter:
         # Phase 2: shift the real payload, re-asserting the same (now-physical) select
         # state, with the target's own instrument segment now spliced into the chain.
         payload = self._pending_writes.pop(instrument_name, 0)
-        expected = self._pending_reads.pop(instrument_name, None)
+        pending_read = self._pending_reads.pop(instrument_name, None)
         len2 = layout_bit_length(self._graph, opened)
         bits2 = compose_bits(
             self._graph, opened, opened, target_sib=target_sib, payload_value=payload
         )
         tdo = mask = None
-        if expected is not None:
+        if pending_read is not None:
+            expected, low, high = pending_read
             offset, width = _target_layout(self._graph, opened, target_sib)
+            if low is None:  # whole-instrument iRead (no field given) -- Stage 5's original case
+                low, high = 0, width - 1
             expected_bits = compose_bits(
-                self._graph, opened, opened, target_sib=target_sib, payload_value=expected
+                self._graph, opened, opened, target_sib=target_sib, payload_value=expected << low
             )
-            mask_bits = _read_mask_bits(len(expected_bits), offset, width)
+            mask_bits = _read_mask_bits(len(expected_bits), offset, low, high)
             tdo = bits_to_int(list(reversed(expected_bits)))
             mask = bits_to_int(list(reversed(mask_bits)))
         ops.append(GotoState(TapState.SHIFT_DR))
