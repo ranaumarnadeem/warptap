@@ -516,10 +516,13 @@ corrected against the real grammar file); a leaf instrument module needs no `Sca
 wrapper; scan ports must be width-matched to their register, not left at an implicit 1 bit.
 With those fixed, every module this emitter produces passes the real tool's own structural
 check cleanly. The tool's *deeper* retargeting-vector computation (`IclRegisterModel`) hits a
-real, unresolved internal issue for most network shapes (confirmed to fully succeed, with
-zero exceptions, only for a single-SIB single-WRITE-instrument network) — reported as open
-work, exactly the risk this stage's own plan anticipated ("icl_parser's own retargeting-vector
-API surface needs direct inspection once vendored"), not silently hidden.
+real, unresolved internal issue — reported as open work, exactly the risk this stage's own
+plan anticipated ("icl_parser's own retargeting-vector API surface needs direct inspection
+once vendored"), not silently hidden. **Precisely isolated later (Stage 12's own real-design
+validation), correcting an initially over-broad "most network shapes" characterization**: the
+issue is triggered by any width>1 instrument specifically, regardless of instrument count or
+READ/WRITE direction — a single width>1 instrument alone reproduces it, while a network built
+entirely from width=1 instruments, of any size, round-trips with zero exceptions.
 
 **Stage 11 (built) — PDL emission.** `pdl_emit.py`'s `to_pdl()` renders real PDL statement
 text from a `PDLInterpreter`'s own recorded intent — but that intent didn't previously exist
@@ -580,13 +583,19 @@ have real `signal_bits` before confirming they don't survive the round trip — 
 check).
 
 **Validated two ways.** Primary: round-trip through Stage A/Stage 10 (`build_sib_plan` → `to_icl()`
-→ `import_icl()` → compare). Only a single-SIB single-WRITE-instrument network round-trips
-completely clean — the same `IclRegisterModel` retargeting-graph `AssertionError` Stage 10
-already documented blocks anything else, now surfaced as a named `IclImportError` instead of a
-bare third-party traceback (import genuinely needs `Ijtag()`'s returned object, unlike Stage
-10's structural-only checks, which only needed the file to parse). A separate test pins this
-exact, expected outcome for a realistic multi-instrument network, and a third pins the
-already-known "Not supported" `AccessLink` gap the same way. Secondary: the vendored tool's
+→ `import_icl()` → compare). A network containing a width>1 instrument does not round-trip
+clean — the same `IclRegisterModel` retargeting-graph `AssertionError` Stage 10 already
+documented blocks it, now surfaced as a named `IclImportError` instead of a bare third-party
+traceback (import genuinely needs `Ijtag()`'s returned object, unlike Stage 10's
+structural-only checks, which only needed the file to parse). A separate test pins this exact,
+expected outcome for a width>1 instrument, and a third pins the already-known "Not supported"
+`AccessLink` gap the same way. **Later corrected against a real external design** (the same
+`mem_subsystem_mbist` real openMBIST target Stage 9 cross-simulates): its real 8-instrument,
+mixed READ/WRITE network — every instrument exactly 1 bit wide — round-trips through the FULL
+retargeting-graph build with zero exceptions, disproving an earlier, over-broad "only a
+single-SIB single-WRITE-instrument network round-trips" claim. Direct probing pinned the real
+variable down precisely: width>1 alone triggers the issue, regardless of instrument count or
+direction; any all-width=1 network, of any size, is clean. Secondary: the vendored tool's
 own real fixture corpus (`third_party/icl_parser/tests/test_icls/*.icl`) — a parametrized
 generic-instrument library, bare `ScanMux` edge cases, an IR-decoded DR-mux TAP with no SIB
 pattern at all. Every fixture is correctly rejected, each with its own pinned reason (not a
@@ -594,8 +603,24 @@ loose pass/fail) — mostly "no SIB-typed instances found," one a genuine pre-ex
 the vendored fixture itself (a case-sensitive parameter reference), one hitting the same
 retargeting-graph issue. A useful negative data point fell out of this: the DR-mux TAP shape
 and one `ScanMux`-heavy fixture do *not* trip the retargeting-graph bug, while others do —
-confirming that issue is shape-dependent, not universal, without fully diagnosing its root
-cause (still open, as Stage 10 already stated).
+consistent with the width>1 trigger condition pinned down above (neither of those fixtures
+happens to declare a width>1 register the way the tripped ones do), though the deep internal
+*why* inside `icl_items.py`'s own algorithm remains unexplored — the trigger condition is now
+known; the vendored library's own internal reasoning for it is not.
+
+**Real-design validation pass (post-Stage 14)**: STIL emission, faultflow pattern retargeting,
+ICL emission, PDL emission, and ICL import were all additionally validated against the same
+real external target Stage 9 already cross-simulates (`openMBIST`'s `mem_subsystem_mbist`,
+8 real instruments matching its own literal MBIST/self-repair port enumeration) rather than
+only small hand-built specs — `tests/test_mem_subsystem_mbist_stil.py`,
+`test_mem_subsystem_mbist_faultflow_cross_sim.py` (plus a new testbench,
+`tb_mem_subsystem_mbist_faultflow.v`, exposing `clk`/`tck` as genuinely independent signals,
+mirroring `tb_functional_clock.v`'s own proof), `test_mem_subsystem_mbist_icl.py`,
+`test_mem_subsystem_mbist_pdl_emit.py` (the PDL self-consistency check reconfirmed across a
+real 8-deep chain, not just the 2-instrument case), and `test_mem_subsystem_mbist_icl_import.py`
+(the one that actually surfaced the width>1 correction above — this real network was expected
+to hit the documented retargeting-graph gap and instead round-tripped completely clean, since
+every one of its instruments is exactly 1 bit wide).
 
 **Explicitly not in this plan** (matches existing v1 scope, reconfirmed by this research):
 nested/hierarchical SIB trees, dynamic `existPr` reachability, hierarchical multi-instrument
