@@ -90,12 +90,12 @@ emitter produces parses and passes the tool's own structural/semantic checks cle
 proving grammar and structural correctness independently of this project's own code, the same
 role OpenOCD/the Jam STAPL Player already play for SVF/STAPL (implementation_plan.md §7 Stage
 7). The tool's own deeper retargeting-vector computation (``IclRegisterModel``, used for
-``iWrite``/``iRead``/``iApply``-vector generation) hits a real, unresolved internal issue
-against this emitter's ``DataRegister``+``ScanRegister`` WRITE-instrument pairing -- reported
-honestly as an open item (implementation_plan.md's own Stage 10 plan explicitly anticipated
-this exact risk: "icl_parser's own retargeting-vector API surface needs direct inspection once
-vendored"), not silently worked around or hidden. Stage 10 therefore ships with grammar/
-structural live validation proven; the stronger retargeting cross-check is future work.
+``iWrite``/``iRead``/``iApply``-vector generation) used to hit a real internal
+``AssertionError`` against any width>1 instrument's ``DataRegister``+``ScanRegister`` pairing --
+three separate bit-serial-scan-port assumptions in the vendored tool itself, root-caused and
+fixed directly in ``third_party/icl_parser`` (see :mod:`warptap.icl_import`'s module docstring
+for the full diagnosis). Stage 10 ships with both grammar/structural AND retargeting-graph live
+validation now passing for every network shape this emitter produces, width>1 included.
 """
 
 from __future__ import annotations
