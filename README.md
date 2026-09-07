@@ -2,7 +2,7 @@
 
 [WIP] A python package to add JTAG, IJTAG and TAP in DFT-inserted circuitry and do ICL and
 PDL — package/CLI name is `warptap`. See
-[implementation_plan.md](https://github.com/ranaumarnadeem/tapestry/blob/main/implementation_plan.md)
+[implementation_plan.md](https://github.com/ranaumarnadeem/warptap/blob/main/implementation_plan.md)
 for the design and roadmap.
 
 ## Usage
@@ -53,7 +53,7 @@ print(to_svf(pdl.program))
 describes the inserted network's own topology as real ICL text; `retarget_faultflow_patterns`
 remaps a faultflow `--export-patterns` JSON export through the same network. Every exception
 this library raises subclasses `WarptapError`. See
-[implementation_plan.md](https://github.com/ranaumarnadeem/tapestry/blob/main/implementation_plan.md)
+[implementation_plan.md](https://github.com/ranaumarnadeem/warptap/blob/main/implementation_plan.md)
 for the full design, standards grounding, and per-stage validation story.
 
 ## Development

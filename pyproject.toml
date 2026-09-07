@@ -32,9 +32,9 @@ dependencies = []
 dev = ["pytest>=8", "yowasp-yosys"]
 
 [project.urls]
-Homepage = "https://github.com/ranaumarnadeem/tapestry"
-Repository = "https://github.com/ranaumarnadeem/tapestry"
-Changelog = "https://github.com/ranaumarnadeem/tapestry/blob/main/CHANGELOG.md"
+Homepage = "https://github.com/ranaumarnadeem/warptap"
+Repository = "https://github.com/ranaumarnadeem/warptap"
+Changelog = "https://github.com/ranaumarnadeem/warptap/blob/main/CHANGELOG.md"
 
 [project.scripts]
 warptap = "warptap.cli:main"
