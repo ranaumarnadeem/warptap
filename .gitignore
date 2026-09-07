@@ -9,4 +9,5 @@ dist/
 # Working notes, not meant for the public repo.
 tapestry_handoff.md
 jtag_ijtag_ecosystem_v2.md
+implementation_plan.md
 docs/internal/

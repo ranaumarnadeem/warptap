@@ -2,8 +2,7 @@
 
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/). No version has been
 cut yet (`__version__` is still `0.0.1`) — everything below lives under `[Unreleased]`, one
-entry per implementation stage (see [implementation_plan.md](implementation_plan.md) §7 for the
-full design/validation story behind each).
+entry per implementation stage.
 
 ## [Unreleased]
 
@@ -56,4 +55,4 @@ full design/validation story behind each).
 
 Nested/hierarchical SIB trees, dynamic `existPr`-conditional PDL reachability, PDL import (no
 real parser exists anywhere to import via), any conformance claim against a specific IEEE
-standard edition. See implementation_plan.md for the reasoning behind each.
+standard edition.

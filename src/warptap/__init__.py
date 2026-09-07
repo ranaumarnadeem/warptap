@@ -1,5 +1,5 @@
 """warptap — inserts IEEE 1149.1 (JTAG/TAP) and IEEE 1687 (IJTAG/ICL+PDL) test-access
-infrastructure into a design. See implementation_plan.md for the design and roadmap.
+infrastructure into a design.
 
 This module re-exports the real entry points a caller actually needs -- everything else stays
 reachable via its own module (``warptap.<module>``), this is a curated surface, not a
