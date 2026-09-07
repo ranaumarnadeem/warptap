@@ -60,3 +60,20 @@ def test_realistic_sequence_holds_pi_during_pulse_and_p_during_jtag():
     assert pulse_vectors and all("pi_a=1;" in l for l in pulse_vectors)
     jtag_vectors = [l for l in lines if l.strip().startswith("V {") and "sysclk=1;" not in l]
     assert any("pi_a=P;" in l for l in jtag_vectors)
+
+
+def test_irunloop_sck_port_produces_the_same_pulsewaveformtable_shape():
+    """Stage 15: PDLInterpreter.iRunLoop(..., sck_port=...) -- not a manually-appended
+    PulsePin the way _load_pulse_unload_ops() above builds its sequence -- renders through
+    the identical WaveformTable mechanism, closing the loop between the new iRunLoop
+    parameter and Stage 13's already-proven emitter behavior."""
+    graph, root = build_sib_plan(_SPECS, top_name="chip")
+    pdl = PDLInterpreter(graph, root)
+    pdl.iTarget("ctrl_write")
+    pdl.iWrite(1)
+    pdl.iApply()
+    pdl.iRunLoop(3, sck_port="sysclk")
+
+    text = to_stil(pdl.program, jtag_period="100ns", pulse_periods={"sysclk": "20ns"})
+    w_lines = [l.strip() for l in text.splitlines() if l.strip().startswith("W ")]
+    assert w_lines == ["W jtag_wft;", "W pulse_sysclk_wft;"]

@@ -89,6 +89,20 @@ def test_unsupported_op_raises_named_error():
         to_svf(["not an op"])
 
 
+def test_irunloop_sck_produced_pulsepin_is_rejected():
+    """Stage 15: iRunLoop(..., sck_port=...) appends a real PulsePin -- SVF's own catch-all
+    unsupported-op error already covers it (no dedicated PulsePin handling exists, or needs
+    to), same as any other PulsePin usage since Stage 13."""
+    from warptap.pdl_interpreter import PDLInterpreter
+    from warptap.sib_plan import InstrumentSpec, build_sib_plan
+
+    graph, root = build_sib_plan([InstrumentSpec("sensor_a", width=1, capture_value=0)])
+    pdl = PDLInterpreter(graph, root)
+    pdl.iRunLoop(3, sck_port="sysclk")
+    with pytest.raises(TapIrSvfError, match="does not support"):
+        to_svf(pdl.program)
+
+
 def test_svf_state_names_match_spec_table_for_every_state():
     """Regression-locks the SVF Specification Rev. E p.6 state-name table (verbatim,
     quoted under the spec's own no-cost-copying grant) for every one of the 16 states --

@@ -121,6 +121,20 @@ def test_unsupported_op_raises_named_error():
         to_stapl(["not an op"], **_KWARGS)
 
 
+def test_irunloop_sck_produced_pulsepin_is_rejected():
+    """Stage 15: iRunLoop(..., sck_port=...) appends a real PulsePin -- STAPL's own catch-all
+    unsupported-op error already covers it (no dedicated PulsePin handling exists, or needs
+    to), same as any other PulsePin usage since Stage 13."""
+    from warptap.pdl_interpreter import PDLInterpreter
+    from warptap.sib_plan import InstrumentSpec, build_sib_plan
+
+    graph, root = build_sib_plan([InstrumentSpec("sensor_a", width=1, capture_value=0)])
+    pdl = PDLInterpreter(graph, root)
+    pdl.iRunLoop(3, sck_port="sysclk")
+    with pytest.raises(TapIrStaplError, match="does not support"):
+        to_stapl(pdl.program, **_KWARGS)
+
+
 def test_crc_statement_is_the_last_line_and_is_hex():
     stapl = to_stapl([ShiftIR(bits=4, tdi=0)], **_KWARGS)
     lines = [line for line in stapl.splitlines() if line.strip()]
