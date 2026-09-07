@@ -41,7 +41,7 @@ import tempfile
 from pathlib import Path
 
 from warptap.icl_emit import to_icl
-from warptap.icl_model import InstrumentDirection, SignalBinding
+from warptap.icl_model import Alias, InstrumentDirection, SignalBinding
 from warptap.sib_plan import InstrumentSpec, build_sib_plan
 
 _SPECS = [
@@ -130,4 +130,25 @@ def test_fixed_stub_read_instrument_with_no_capture_source_is_structurally_valid
     specs = [InstrumentSpec("sensor_a", width=3, capture_value=0b101)]
     graph, root = build_sib_plan(specs, top_name="chip")
     icl_text = to_icl(graph, root, include_access_link=False)
+    _assert_structurally_valid(icl_text, "chip", icl_parser_module)
+
+
+def test_alias_bearing_instrument_is_structurally_valid(icl_parser_module):
+    """Stage 15: a real Alias declaration inside a READ instrument, live-validated against
+    icl_parser the same way every other Stage 10 construct already is. Width>1 (needed for a
+    meaningful multi-bit alias) means this hits the same tolerated retargeting-graph
+    AssertionError every other width>1 case here does -- structural validity is the real
+    claim, same as this file's own established discipline."""
+    specs = [
+        InstrumentSpec(
+            "status_reg",
+            width=8,
+            capture_value=0,
+            aliases=(Alias("mode", 4, 7), Alias("flag", 0, 0)),
+        )
+    ]
+    graph, root = build_sib_plan(specs, top_name="chip")
+    icl_text = to_icl(graph, root, include_access_link=False)
+    assert "Alias mode[3:0] = DR[7:4];" in icl_text
+    assert "Alias flag = DR[0];" in icl_text
     _assert_structurally_valid(icl_text, "chip", icl_parser_module)

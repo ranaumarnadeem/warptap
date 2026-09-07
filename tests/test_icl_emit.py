@@ -15,6 +15,7 @@ from warptap.icl_emit import (
     to_icl,
 )
 from warptap.icl_model import (
+    Alias,
     InstrumentDirection,
     InstrumentNode,
     ModuleInstance,
@@ -24,13 +25,14 @@ from warptap.icl_model import (
 )
 
 
-def _read_instrument(name="sensor_a", width=3, capture_value=0b101, signal_bits=()):
+def _read_instrument(name="sensor_a", width=3, capture_value=0b101, signal_bits=(), aliases=()):
     return InstrumentNode(
-        name=name, width=width, capture_value=capture_value, signal_bits=signal_bits
+        name=name, width=width, capture_value=capture_value, signal_bits=signal_bits,
+        aliases=aliases,
     )
 
 
-def _write_instrument(name="ctrl", width=1, capture_value=0, signal_bits=None):
+def _write_instrument(name="ctrl", width=1, capture_value=0, signal_bits=None, aliases=()):
     if signal_bits is None:
         signal_bits = (SignalBinding("bist_start"),)
     return InstrumentNode(
@@ -39,6 +41,7 @@ def _write_instrument(name="ctrl", width=1, capture_value=0, signal_bits=None):
         capture_value=capture_value,
         direction=InstrumentDirection.WRITE,
         signal_bits=signal_bits,
+        aliases=aliases,
     )
 
 
@@ -181,3 +184,41 @@ def test_to_icl_each_distinct_instrument_type_rendered_once():
     text = to_icl(graph, root)
     assert text.count("Module warptap_instr_a ") == 1
     assert text.count("Module warptap_instr_b ") == 1
+
+
+# --- Stage 15: named sub-field addressing (real ICL Alias) ---------------------------------
+
+
+def test_read_instrument_alias_references_dr_with_rebased_lhs_range():
+    instrument = _read_instrument(
+        name="status_reg", width=8, capture_value=0, aliases=(Alias("mode", 4, 7),)
+    )
+    text = render_instrument_module(instrument)
+    # LHS rebased to [3:0] (a 4-bit alias, 0-indexed) even though the RHS references the
+    # register's own absolute bit positions [7:4] -- confirmed real ICL convention.
+    assert "Alias mode[3:0] = DR[7:4];" in text
+
+
+def test_write_instrument_alias_references_sr_not_dr():
+    instrument = _write_instrument(
+        name="ctrl", width=4, capture_value=0, aliases=(Alias("lo", 0, 1),)
+    )
+    text = render_instrument_module(instrument)
+    assert "Alias lo[1:0] = SR[1:0];" in text
+    assert "Alias lo[1:0] = DR[1:0];" not in text
+
+
+def test_single_bit_alias_renders_bare_name_and_index_no_range():
+    """Matches a real fixture's own convention (Alias okay = DO[0];) -- a bare name/index,
+    no [0:0] range, for a 1-bit alias."""
+    instrument = _read_instrument(
+        name="status_reg", width=4, capture_value=0, aliases=(Alias("flag", 2, 2),)
+    )
+    text = render_instrument_module(instrument)
+    assert "Alias flag = DR[2];" in text
+
+
+def test_instrument_with_no_aliases_renders_no_alias_declaration_at_all():
+    instrument = _read_instrument(name="sensor_a", width=3)
+    text = render_instrument_module(instrument)
+    assert "Alias" not in text
