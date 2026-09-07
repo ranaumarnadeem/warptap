@@ -4,18 +4,15 @@ and confirm the recovered ``PhysicalGraph``/``ModuleInstance`` match the origina
 Stage 10's emitter and Stage 12's importer end to end, against each other, with no new fixture
 needed.
 
-**Only the single-SIB single-WRITE-instrument network round-trips cleanly, and this is
-Stage 10's own already-documented limitation, not a new one Stage 12 introduces.** ``Ijtag()``
-does the real structural parse AND the real retargeting-graph build (``IclRegisterModel``) in
-one inseparable constructor call; the retargeting-graph build itself hits a real, unresolved
-internal ``AssertionError`` for most network shapes (confirmed in Stage 10's own validation).
-Stage 10's structural-only tests could tolerate that (they only needed the file to *parse*, not
-the returned object), but ``import_icl()`` genuinely needs ``Ijtag()``'s returned
-``.icl_instance`` to do anything at all -- so for those same network shapes,
-``import_icl()`` cannot avoid surfacing the underlying failure, now as a named
-``IclImportError`` rather than a bare third-party traceback. Both outcomes are tested below:
-the one shape that fully round-trips, and the documented failure for a realistic multi-
-instrument network.
+**Every network shape round-trips cleanly, including width>1 instruments.** ``Ijtag()`` does
+the real structural parse AND the real retargeting-graph build (``IclRegisterModel``) in one
+inseparable constructor call; the retargeting-graph build used to hit a real internal
+``AssertionError`` for any width>1 instrument, traced to three separate bugs in the vendored
+tool's own bit-serial scan-port handling (see ``icl_import.py``'s module docstring for the
+full diagnosis) and fixed directly in the vendored submodule. ``import_icl()`` genuinely needs
+``Ijtag()``'s returned ``.icl_instance`` to do anything at all, so before this fix, any network
+containing a width>1 instrument was unusable through this importer -- not just structurally
+valid-but-untestable the way Stage 10's structural-only validation tests could tolerate.
 """
 
 from __future__ import annotations
@@ -75,19 +72,12 @@ def test_single_sib_write_only_network_round_trips_cleanly(icl_parser_module):
     assert orig_node.instrument.signal_bits == (SignalBinding("bist_start"),)
 
 
-def test_width_gt_1_instrument_network_round_trip_hits_documented_retargeting_gap(icl_parser_module):
-    """NOT a bug -- the exact same vendored-tool retargeting-graph AssertionError Stage 10's
-    own validation tests already tolerate (test_icl_emit_iclparser_validation.py), surfaced
-    here as a named IclImportError instead, because import_icl() has no way to get a usable
-    result out of a failed Ijtag() construction the way a structural-only check could.
-
-    Precisely attributed, not just "multi-instrument" (this test's own prior name/framing,
-    corrected once real probing pinned the cause down): a width>1 instrument -- sensor_a below
-    -- is what actually trips this, confirmed directly by a real 8-instrument, ALL-width-1
-    network (test_mem_subsystem_mbist_icl_import.py, mirroring a real external design) round-
-    tripping with zero exceptions regardless of instrument count or READ/WRITE direction mix.
-    A single width=3 instrument alone, with no other instrument present at all, reproduces
-    this same AssertionError -- instrument count was never the actual variable."""
+def test_width_gt_1_instrument_network_round_trips_cleanly(icl_parser_module):
+    """Regression guard for the fixed vendored-tool bug (see icl_import.py's module docstring):
+    this exact network -- a width=3 instrument alongside a width=1 one -- used to hit a real
+    internal AssertionError in Ijtag()'s retargeting-graph construction. Confirms it now
+    round-trips end to end, mirroring test_single_sib_write_only_network_round_trips_cleanly
+    but for a width>1, multi-instrument shape."""
     specs = [
         InstrumentSpec("sensor_a", width=3, capture_value=0b101),
         InstrumentSpec(
@@ -103,8 +93,15 @@ def test_width_gt_1_instrument_network_round_trip_hits_documented_retargeting_ga
 
     with tempfile.TemporaryDirectory(prefix="warptap-icl-import-") as tmpdir:
         path = _write_icl(icl_text, Path(tmpdir))
-        with pytest.raises(IclImportError, match="retargeting-graph"):
-            import_icl([path], "chip", icl_parser_module=icl_parser_module)
+        imported_graph, imported_root = import_icl([path], "chip", icl_parser_module=icl_parser_module)
+
+    assert [c.name for c in imported_root.children] == [c.name for c in root.children]
+    assert len(imported_graph.chain) == len(graph.chain) == 2
+    for orig_node, imp_node in zip(graph.chain, imported_graph.chain):
+        assert imp_node.sib_name == orig_node.sib_name
+        assert imp_node.instrument.name == orig_node.instrument.name
+        assert imp_node.instrument.width == orig_node.instrument.width
+        assert imp_node.instrument.direction == orig_node.instrument.direction
 
 
 def test_access_link_network_raises_named_error(icl_parser_module):
