@@ -37,18 +37,31 @@ imported :class:`~warptap.icl_model.InstrumentNode` therefore always has ``signa
 permanently rather than silently returning plausible-looking but fabricated values. Chain
 order, instrument names, widths, and READ/WRITE direction all round-trip exactly.
 
-**The vendored tool's own confirmed real gaps are translated into named, honest
-:class:`IclImportError`\\ s, not silently swallowed**: ``Ijtag(...)`` raises a bare
-``AssertionError`` from its own retargeting-graph construction (``IclRegisterModel``) for any
-network containing a width>1 instrument -- precisely pinned down by direct probing (not just
-"most network shapes," an earlier, broader claim corrected once this was actually isolated): a
-single width>1 instrument alone reproduces it regardless of direction, while a network of any
-size built entirely from width=1 instruments -- confirmed against a real 8-instrument external
-design, see ``tests/test_mem_subsystem_mbist_icl_import.py`` -- round-trips with zero
-exceptions regardless of instrument count or READ/WRITE mix. It also raises ``ValueError``
-unconditionally for any ``AccessLink`` block, regardless of content (also already confirmed in
-Stage 10). Both are caught here and re-raised as :class:`IclImportError` naming the real cause,
-rather than letting a bare third-party traceback surface as this project's own failure.
+**A real bug in the vendored tool's own retargeting-graph construction, found, precisely
+diagnosed, and fixed directly in the vendored submodule** (``third_party/icl_parser``, not a
+warptap-side workaround): ``Ijtag(...)`` used to raise a bare ``AssertionError`` from
+``IclRegisterModel`` for any network containing a width>1 instrument, regardless of instrument
+count or READ/WRITE direction. Root cause was three separate assumptions in
+``icl_register_model.py``/``icl_items.py`` that a bit-serial scan port (a SIB's 1-bit
+``SI``/``SO``/``fromSO``/``toSI``) connects only to a same-width signal, when real SIB
+connectivity requires it to bind to a register of *any* other width in both directions
+(narrower driving wider: replicate; wider driving narrower: pick one representative bit) --
+including a whole-port ``ScanInSource`` binding (e.g. ``ScanInSource SI[4:0];`` on a 5-bit
+register), which the tool's own hand-written test fixtures never exercise (they only ever bind
+a single explicit bit, e.g. ``ScanInSource TDI[0];``). Fixed in
+``get_element_driver``/``get_scanin_named_index`` to resolve a scan port's driver at its own
+natural width and treat a whole-port ``ScanInSource`` reference's bit 0 as the register's MSB
+entry point. A separate, independent performance bug in the same construction path --
+``icl_process.py`` computing ``inspect.stack()[0][3]`` (a full stack capture with per-frame
+source-file resolution) purely to log each parse handler's own already-known name -- made any
+network large enough to be interesting impractically slow; replaced with the equivalent but
+allocation-free ``sys._getframe().f_code.co_name`` (roughly 15x faster on the affected paths,
+confirmed by profiling). ``Ijtag(...)`` also raises ``ValueError`` unconditionally for any
+``AccessLink`` block, regardless of content (a real, still-open gap in the vendored tool, not
+warptap's). Both are caught here and re-raised as :class:`IclImportError` naming the real
+cause, rather than letting a bare third-party traceback surface as this project's own failure;
+the ``AssertionError`` branch remains as a safety net for any *other*, not-yet-diagnosed
+internal assertion the vendored tool might still raise for a shape this project hasn't hit.
 """
 
 from __future__ import annotations
@@ -72,9 +85,11 @@ from warptap.tap_ports import TDI, TDO
 class IclImportError(WarptapError):
     """Raised when the given ``.icl`` file(s) don't describe a network :func:`import_icl` can
     recognize -- not a warptap-shaped SIB network at all, a nested SIB (Stage 4's own flat-only
-    scope, re-validated here on the way in), or a real, already-documented gap in the vendored
-    ``icl_parser`` itself (its own retargeting-graph ``AssertionError``, or its "Not supported"
-    ``AccessLink`` gap) -- rather than a bare, undiagnosed exception from third-party code."""
+    scope, re-validated here on the way in), or a real gap in the vendored ``icl_parser`` itself
+    (its "Not supported" ``AccessLink`` gap, or some other not-yet-diagnosed internal
+    ``AssertionError`` in its retargeting-graph construction -- see module docstring for the
+    width>1 instrument case that used to live here and is now fixed) -- rather than a bare,
+    undiagnosed exception from third-party code."""
 
 
 def _icl_item_classes(icl_parser_module):
