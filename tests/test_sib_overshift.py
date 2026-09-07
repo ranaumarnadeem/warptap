@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import pytest
 
-from warptap.icl_model import InstrumentNode, PhysicalGraph, SibNode
+from warptap.icl_model import Alias, InstrumentNode, PhysicalGraph, SibNode
 from warptap.sib_layout import layout_bit_length
 from warptap.sib_model import SibNetworkRegister
 from warptap.sib_overshift import (
@@ -266,3 +266,37 @@ def test_constant_output_diagnosed_as_stuck_at_signature():
     )
     assert not result.passed
     assert "stuck-at" in result.diagnosis
+
+
+def test_alias_bearing_instrument_is_unaffected():
+    """Stage 15's Alias declarations are pure metadata on InstrumentNode -- build_overshift_ops/
+    expected_probe_tdo/diagnose_overshift all work purely off compose_bits/layout_bit_length,
+    which never look at `instrument.aliases` at all. Confirms that empirically rather than
+    just by reading the code: an Alias-bearing network's overshift probe/oracle/diagnosis
+    behave identically to the same network with no aliases declared."""
+    graph_with_alias = PhysicalGraph(chain=(
+        SibNode("sib_a", InstrumentNode(
+            "a", width=4, capture_value=0, aliases=(Alias("lo", 0, 1), Alias("hi", 2, 3)),
+        )),
+        SibNode("sib_b", _instrument("b", width=1, capture_value=0)),
+    ))
+    graph_without_alias = PhysicalGraph(chain=(
+        SibNode("sib_a", InstrumentNode("a", width=4, capture_value=0)),
+        SibNode("sib_b", _instrument("b", width=1, capture_value=0)),
+    ))
+    target_open = frozenset({"sib_a"})
+
+    ops_with = _probe_ops(graph_with_alias, target_open, margin=4)
+    ops_without = _probe_ops(graph_without_alias, target_open, margin=4)
+    assert ops_with == ops_without  # aliases contribute zero bits to the probe itself
+
+    model, reg = _fresh_model_and_register(graph_with_alias)
+    observed = play(model, ops_with)[-1]
+    expected = expected_probe_tdo(graph_with_alias, ops_with)
+    assert observed == expected
+
+    result = diagnose_overshift(
+        graph_with_alias, target_open, ops_with[-2].bits,
+        layout_bit_length(graph_with_alias, target_open), expected, observed,
+    )
+    assert result.passed
