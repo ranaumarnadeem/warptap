@@ -176,6 +176,26 @@ def render_sib_module_type() -> str:
     )
 
 
+def _render_aliases(aliases, register_name: str) -> list:
+    """One ``Alias <name>[hi:0] = <register_name>[abs_hi:abs_lo];`` per declared alias --
+    real ICL rebases the alias's OWN declared range to start at 0 regardless of the source's
+    absolute bit positions (confirmed real: a real fixture's own ``Alias mode[3:0] =
+    DI[6:5],DI[3:2];`` declares a 0-based ``[3:0]`` LHS over non-0-based RHS source bits), and
+    uses a bare name/index with no range at all for a 1-bit alias (that same real fixture's
+    own ``Alias okay = DO[0];``)."""
+    lines = []
+    for alias in aliases:
+        width = alias.high_bit - alias.low_bit + 1
+        if width == 1:
+            lines.append(f"    Alias {alias.name} = {register_name}[{alias.low_bit}];")
+        else:
+            lines.append(
+                f"    Alias {alias.name}[{width - 1}:0] = "
+                f"{register_name}[{alias.high_bit}:{alias.low_bit}];"
+            )
+    return lines
+
+
 def render_instrument_module(instrument: InstrumentNode) -> str:
     """One ``Module`` block per distinct instrument, instantiated once (v1: exactly one
     instance per instrument, matching :mod:`warptap.sib_plan`'s own one-SIB-per-instrument
@@ -197,7 +217,13 @@ def render_instrument_module(instrument: InstrumentNode) -> str:
     form validated cleanly against the real tool) and drives ``DataOutPort DO``.
 
     Raises :class:`IclEmitError` for a WRITE instrument with no ``signal_bits`` -- nothing
-    real for it to drive, the same precondition :mod:`warptap.sib_insert` itself enforces."""
+    real for it to drive, the same precondition :mod:`warptap.sib_insert` itself enforces.
+
+    Any declared ``instrument.aliases`` (Stage 15) render as real ``Alias`` declarations
+    (:func:`_render_aliases`), referencing ``SR`` for a WRITE instrument -- the scan-composed
+    register ``PDLInterpreter.iWrite``'s pending value actually lands in, per
+    ``pdl_interpreter.py``'s own field-addressing design -- or ``DR`` for a READ instrument,
+    matching each direction's existing register-naming exactly."""
     name = instrument.name
     module_name = f"{INSTRUMENT_MODULE_PREFIX}{name}"
     width = instrument.width
@@ -215,6 +241,8 @@ def render_instrument_module(instrument: InstrumentNode) -> str:
             + ", ".join(f"{b.port_name}[{b.bit}]" for b in instrument.signal_bits)
             + "\n"
         )
+        alias_lines = _render_aliases(instrument.aliases, "SR")
+        alias_block = ("\n" + "\n".join(alias_lines) + "\n") if alias_lines else ""
         return (
             f"Module {module_name} {{\n"
             f"{drive_comment}"
@@ -236,6 +264,7 @@ def render_instrument_module(instrument: InstrumentNode) -> str:
             "                              // own module docstring for the real select gate.\n"
             f"        ResetValue {reset_value};\n"
             "    }\n"
+            f"{alias_block}"
             "}"
         )
 
@@ -268,6 +297,7 @@ def render_instrument_module(instrument: InstrumentNode) -> str:
         lines.append(f"        CaptureSource {capture_source};")
     lines.append(f"        ResetValue {width}'b0;")
     lines.append("    }")
+    lines.extend(_render_aliases(instrument.aliases, "DR"))
     lines.append("}")
     return "\n".join(lines)
 
