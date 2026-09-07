@@ -6,8 +6,7 @@ __pycache__/
 build/
 dist/
 
-# Working notes (per tapestry_handoff.md's own convention) — keep tracked for now
-# since they're not yet actually relocated into docs/plans/; revisit if they move.
-
-# Internal-only reference material (not meant for the public/shared repo).
+# Working notes, not meant for the public repo.
+tapestry_handoff.md
+jtag_ijtag_ecosystem_v2.md
 docs/internal/
