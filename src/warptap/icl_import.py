@@ -39,9 +39,13 @@ order, instrument names, widths, and READ/WRITE direction all round-trip exactly
 
 **The vendored tool's own confirmed real gaps are translated into named, honest
 :class:`IclImportError`\\ s, not silently swallowed**: ``Ijtag(...)`` raises a bare
-``AssertionError`` from its own retargeting-graph construction (``IclRegisterModel``) for most
-network shapes -- the same open issue Stage 10 already documented, confirmed there to fully
-succeed only for a single-SIB single-WRITE-instrument network. It also raises ``ValueError``
+``AssertionError`` from its own retargeting-graph construction (``IclRegisterModel``) for any
+network containing a width>1 instrument -- precisely pinned down by direct probing (not just
+"most network shapes," an earlier, broader claim corrected once this was actually isolated): a
+single width>1 instrument alone reproduces it regardless of direction, while a network of any
+size built entirely from width=1 instruments -- confirmed against a real 8-instrument external
+design, see ``tests/test_mem_subsystem_mbist_icl_import.py`` -- round-trips with zero
+exceptions regardless of instrument count or READ/WRITE mix. It also raises ``ValueError``
 unconditionally for any ``AccessLink`` block, regardless of content (also already confirmed in
 Stage 10). Both are caught here and re-raised as :class:`IclImportError` naming the real cause,
 rather than letting a bare third-party traceback surface as this project's own failure.
@@ -203,9 +207,10 @@ def import_icl(
     except AssertionError as exc:
         raise IclImportError(
             "icl_parser's own retargeting-graph construction (IclRegisterModel) failed for "
-            f"module {top_module!r} -- a real, unresolved issue in the vendored tool itself "
-            "for most network shapes (implementation_plan.md Stage 10); only a single-SIB "
-            "single-WRITE-instrument network is confirmed to build cleanly"
+            f"module {top_module!r} -- a real, unresolved issue in the vendored tool itself, "
+            "confirmed to be triggered by any width>1 instrument regardless of instrument "
+            "count or READ/WRITE direction (implementation_plan.md Stage 10/12); a network "
+            "built entirely from width=1 instruments is confirmed to build cleanly"
         ) from exc
     except ValueError as exc:
         if "AccessLink" in str(exc):

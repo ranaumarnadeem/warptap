@@ -75,11 +75,19 @@ def test_single_sib_write_only_network_round_trips_cleanly(icl_parser_module):
     assert orig_node.instrument.signal_bits == (SignalBinding("bist_start"),)
 
 
-def test_multi_instrument_network_round_trip_hits_documented_retargeting_gap(icl_parser_module):
+def test_width_gt_1_instrument_network_round_trip_hits_documented_retargeting_gap(icl_parser_module):
     """NOT a bug -- the exact same vendored-tool retargeting-graph AssertionError Stage 10's
     own validation tests already tolerate (test_icl_emit_iclparser_validation.py), surfaced
     here as a named IclImportError instead, because import_icl() has no way to get a usable
-    result out of a failed Ijtag() construction the way a structural-only check could."""
+    result out of a failed Ijtag() construction the way a structural-only check could.
+
+    Precisely attributed, not just "multi-instrument" (this test's own prior name/framing,
+    corrected once real probing pinned the cause down): a width>1 instrument -- sensor_a below
+    -- is what actually trips this, confirmed directly by a real 8-instrument, ALL-width-1
+    network (test_mem_subsystem_mbist_icl_import.py, mirroring a real external design) round-
+    tripping with zero exceptions regardless of instrument count or READ/WRITE direction mix.
+    A single width=3 instrument alone, with no other instrument present at all, reproduces
+    this same AssertionError -- instrument count was never the actual variable."""
     specs = [
         InstrumentSpec("sensor_a", width=3, capture_value=0b101),
         InstrumentSpec(

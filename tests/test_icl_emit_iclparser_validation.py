@@ -21,8 +21,12 @@ retargeting-graph build (``IclRegisterModel``, used for real ``iWrite``/``iRead`
 vector generation) with no way to invoke just the first through the tool's own public API.
 Confirmed empirically this session: the retargeting-graph build raises a real, unresolved
 internal ``AssertionError`` (in the vendored library's own ``icl_items.py``, not this
-project's code) for most network shapes -- except a single-SIB, single-WRITE-instrument
-network, which passes both phases completely. This project's own Stage 10 plan explicitly
+project's code) whenever the network contains a width>1 instrument, regardless of instrument
+count or READ/WRITE direction -- precisely isolated by direct probing (`icl_import.py`'s own
+module docstring, `tests/test_mem_subsystem_mbist_icl_import.py`), correcting this test's
+own earlier, broader "most network shapes" framing. A network built entirely from width=1
+instruments -- any count, either direction -- passes both phases completely, not just the
+single-instrument case originally found. This project's own Stage 10 plan explicitly
 anticipated this exact risk ("icl_parser's own retargeting-vector API surface needs direct
 inspection once vendored"). Rather than hide it, ``_parse()`` below distinguishes the two
 phases directly: any exception OTHER than that specific ``AssertionError`` is a genuine
