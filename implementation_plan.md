@@ -622,6 +622,36 @@ real 8-deep chain, not just the 2-instrument case), and `test_mem_subsystem_mbis
 to hit the documented retargeting-graph gap and instead round-tripped completely clean, since
 every one of its instruments is exactly 1 bit wide).
 
+**Stage 15 (built) — named sub-field addressing (real ICL `Alias`) and `iRunLoop`'s `-sck`
+selector.** Closes the two remaining honest, explicitly-documented PDL simplifications from
+Stage 5/11, now that the rest of the pipeline is mature and real-design-validated.
+
+`icl_model.py` gains `Alias(name, low_bit, high_bit)` — a named, contiguous sub-range within
+an instrument's own width — and `InstrumentNode.aliases: tuple[Alias, ...] = ()` (additive,
+threaded through `sib_plan.InstrumentSpec` too so a real caller can actually declare one).
+`PDLInterpreter.iWrite`/`iRead` gain an optional `field: str | None = None` parameter: with no
+`field` (every existing call site), behavior is byte-identical to before — reconfirmed by
+every pre-existing `test_pdl_interpreter.py` test passing unmodified. With `field` naming a
+declared `Alias`, `iWrite` merges the value into just that bit-range via a new
+`_set_bit_range()` helper (preserving whatever else is queued for the same instrument, so
+writing one field doesn't clobber a different one), and `iRead`'s mask narrows to just that
+range (`_read_mask_bits()` generalized from a `(width)` to a `(low, high)` form — the original
+`(0, width-1)` case reduces to the exact same mask). `icl_emit.py` renders real `Alias`
+declarations per instrument, referencing `SR` (WRITE) or `DR` (READ) with the LHS rebased to
+`[width-1:0]` regardless of the RHS's absolute source position — confirmed real ICL convention
+— and a bare name/index for a 1-bit alias, live-validated against the vendored `icl_parser`
+the same way every other Stage 10 construct already is. `icl_import.py` does not reconstruct
+`Alias` declarations on import, consistent with `signal_bits`/`capture_value` already not
+surviving re-import either — stated, not a silent surprise.
+
+`iRunLoop` gains `sck_port: str | None = None`: with none (the default), behavior is
+byte-identical to before (`Runtest`, `-tck`). With `sck_port` naming a real functional-clock
+port, it appends a `tap_ir.PulsePin` instead — real PDL's `-sck` selector, reusing the exact
+primitive Stage 13/14 already built and real-cross-sim-validated, rather than inventing a
+second, parallel concept. SVF/STAPL need zero code changes — their existing catch-all
+unsupported-op error already covered `PulsePin`, now confirmed by a dedicated test tying it
+specifically to `iRunLoop`'s new path, not just Stage 14's own manually-appended usage.
+
 **Explicitly not in this plan** (matches existing v1 scope, reconfirmed by this research):
 nested/hierarchical SIB trees, dynamic `existPr` reachability, hierarchical multi-instrument
 networks, any conformance claim against a specific IEEE standard edition. (STIL emission
