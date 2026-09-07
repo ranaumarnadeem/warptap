@@ -18,21 +18,17 @@ out or its own dependencies (``antlr4-python3-runtime==4.7.2``, ``z3-solver``, `
 runs BOTH the structural check (``icl_instance.check()`` -- port/source width agreement,
 ``ScanInterface`` classifiability, valid register attributes, etc.) AND the deeper
 retargeting-graph build (``IclRegisterModel``, used for real ``iWrite``/``iRead``/``iApply``
-vector generation) with no way to invoke just the first through the tool's own public API.
-Confirmed empirically this session: the retargeting-graph build raises a real, unresolved
-internal ``AssertionError`` (in the vendored library's own ``icl_items.py``, not this
-project's code) whenever the network contains a width>1 instrument, regardless of instrument
-count or READ/WRITE direction -- precisely isolated by direct probing (`icl_import.py`'s own
-module docstring, `tests/test_mem_subsystem_mbist_icl_import.py`), correcting this test's
-own earlier, broader "most network shapes" framing. A network built entirely from width=1
-instruments -- any count, either direction -- passes both phases completely, not just the
-single-instrument case originally found. This project's own Stage 10 plan explicitly
-anticipated this exact risk ("icl_parser's own retargeting-vector API surface needs direct
-inspection once vendored"). Rather than hide it, ``_parse()`` below distinguishes the two
-phases directly: any exception OTHER than that specific ``AssertionError`` is a genuine
-structural/grammar failure (test fails); a bare ``AssertionError`` from
-``IclRegisterModel``'s own scan-graph construction means the structural check already
-completed and only the (separately tracked, open) retargeting-graph issue was hit.
+vector generation) with no way to invoke just the first through the tool's own public API. The
+retargeting-graph build used to raise a real internal ``AssertionError`` (in the vendored
+library's own code, not this project's) for any network containing a width>1 instrument,
+regardless of instrument count or READ/WRITE direction -- three separate bit-serial-scan-port
+assumptions, root-caused and fixed directly in ``third_party/icl_parser`` (see
+``warptap.icl_import``'s module docstring for the full diagnosis). Every network shape below
+now passes both phases completely, not just the width=1 cases that always worked.
+``_assert_structurally_valid()`` still tolerates a bare ``AssertionError`` as a safety net for
+any *other*, not-yet-diagnosed internal assertion the vendored tool might raise for a shape
+this project hasn't hit -- any exception OTHER than that is still a genuine structural/grammar
+failure (test fails).
 """
 
 from __future__ import annotations
@@ -70,18 +66,20 @@ def _write_icl(icl_text: str, tmpdir: Path) -> Path:
 
 
 def _assert_structurally_valid(icl_text: str, top_name: str, icl_parser_module) -> None:
-    """Confirm icl_text at least reaches (survives) the real structural ``.check()`` pass --
-    tolerating, not hiding, the separately-tracked open retargeting-graph ``AssertionError``
-    (see module docstring). Any OTHER exception is a genuine grammar/structural failure and
-    fails the test; AccessLink is excluded (``include_access_link=False`` by every caller in
-    this file) since icl_parser's own processor raises "Not supported" for it regardless of
-    content, a real limitation of that one external tool, confirmed directly this session."""
+    """Confirm icl_text passes the real structural ``.check()`` pass. Every caller in this file
+    also passes the deeper retargeting-graph build cleanly now (see module docstring) -- the
+    tolerated ``AssertionError`` below is a safety net for any *other*, not-yet-diagnosed
+    internal assertion, not an expected outcome for any shape currently tested here. Any OTHER
+    exception is a genuine grammar/structural failure and fails the test; AccessLink is
+    excluded (``include_access_link=False`` by every caller in this file) since icl_parser's
+    own processor raises "Not supported" for it regardless of content, a real limitation of
+    that one external tool, confirmed directly this session."""
     with tempfile.TemporaryDirectory(prefix="warptap-icl-parser-") as tmpdir:
         path = _write_icl(icl_text, Path(tmpdir))
         try:
             icl_parser_module(top_name, [str(path)])
         except AssertionError:
-            pass  # reached IclRegisterModel -- structural check already passed
+            pass  # not expected for any current caller -- see docstring above
 
 
 def test_realistic_multi_instrument_network_is_structurally_valid(icl_parser_module):
@@ -136,9 +134,8 @@ def test_fixed_stub_read_instrument_with_no_capture_source_is_structurally_valid
 def test_alias_bearing_instrument_is_structurally_valid(icl_parser_module):
     """Stage 15: a real Alias declaration inside a READ instrument, live-validated against
     icl_parser the same way every other Stage 10 construct already is. Width>1 (needed for a
-    meaningful multi-bit alias) means this hits the same tolerated retargeting-graph
-    AssertionError every other width>1 case here does -- structural validity is the real
-    claim, same as this file's own established discipline."""
+    meaningful multi-bit alias) now passes the full retargeting-graph build too, not just the
+    structural check -- see module docstring for the fix."""
     specs = [
         InstrumentSpec(
             "status_reg",
