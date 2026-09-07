@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import pytest
 
-from warptap.icl_model import InstrumentNode, PhysicalGraph, SibNode
+from warptap.icl_model import Alias, InstrumentNode, PhysicalGraph, SibNode
 from warptap.pdl_emit import PdlEmitError, to_pdl
 from warptap.pdl_history import (
     PdlApplyStmt,
@@ -55,9 +55,16 @@ def test_iread_renders_hex_expected_value():
     assert pdl == "iRead status_b 0xAB;\n"
 
 
-def test_irunloop_always_renders_tck():
+def test_irunloop_with_no_sck_port_renders_tck():
     pdl = to_pdl([PdlRunLoopStmt(100)], _graph())
     assert pdl == "iRunLoop 100 -tck;\n"
+
+
+def test_irunloop_with_sck_port_renders_sck_not_the_port_name():
+    """The port name itself is never rendered -- real PDL's -sck/-tck are bare flags."""
+    pdl = to_pdl([PdlRunLoopStmt(100, "sysclk")], _graph())
+    assert pdl == "iRunLoop 100 -sck;\n"
+    assert "sysclk" not in pdl
 
 
 def test_iapply_renders_bare_statement():
@@ -95,3 +102,32 @@ def test_iread_unknown_instrument_raises_named_error():
 def test_unsupported_statement_raises_named_error():
     with pytest.raises(PdlEmitError, match="does not support"):
         to_pdl(["not a statement"], _graph())
+
+
+# --- Stage 15: named sub-field addressing (real ICL Alias) ---------------------------------
+
+
+def test_iwrite_field_naming_an_alias_uses_the_aliases_own_width():
+    graph = _graph(
+        InstrumentNode(
+            name="status_reg", width=8, capture_value=0, aliases=(Alias("mode", 4, 7),)
+        )
+    )
+    pdl = to_pdl([PdlWriteStmt("mode", 0b101)], graph)
+    assert pdl == "iWrite mode 0x5;\n"  # 4-bit alias -> 1 hex digit, not width=8's 2
+
+
+def test_iread_field_naming_an_alias_uses_the_aliases_own_width():
+    graph = _graph(
+        InstrumentNode(
+            name="status_reg", width=8, capture_value=0, aliases=(Alias("flag", 0, 0),)
+        )
+    )
+    pdl = to_pdl([PdlReadStmt("flag", 1)], graph)
+    assert pdl == "iRead flag 0x1;\n"
+
+
+def test_field_naming_neither_instrument_nor_alias_raises_named_error():
+    graph = _graph(InstrumentNode(name="status_reg", width=8, capture_value=0))
+    with pytest.raises(PdlEmitError, match="ghost"):
+        to_pdl([PdlWriteStmt("ghost", 1)], graph)
