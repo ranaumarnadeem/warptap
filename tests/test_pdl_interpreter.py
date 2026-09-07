@@ -7,12 +7,12 @@ from __future__ import annotations
 
 import pytest
 
-from warptap.icl_model import ICLAddressError
+from warptap.icl_model import Alias, ICLAddressError
 from warptap.pdl_interpreter import PDLError, PDLInterpreter
 from warptap.sib_layout import layout_bit_length
 from warptap.sib_plan import InstrumentSpec, build_sib_plan
 from warptap.tap_fsm import TapState
-from warptap.tap_ir import GotoState, ShiftDR, bits_from_int
+from warptap.tap_ir import GotoState, PulsePin, Runtest, ShiftDR, bits_from_int
 
 _SPECS = [
     InstrumentSpec("sensor_a", width=3, capture_value=0b101),
@@ -22,6 +22,21 @@ _SPECS = [
 
 def _interpreter() -> PDLInterpreter:
     graph, root = build_sib_plan(_SPECS)
+    return PDLInterpreter(graph, root)
+
+
+def _interpreter_with_aliases() -> PDLInterpreter:
+    """A single 4-bit instrument with two declared sub-fields -- `lo` = bits[1:0], `hi` =
+    bits[3:2] -- for Stage 15's named sub-field addressing tests."""
+    specs = [
+        InstrumentSpec(
+            "status_reg",
+            width=4,
+            capture_value=0,
+            aliases=(Alias("lo", 0, 1), Alias("hi", 2, 3)),
+        )
+    ]
+    graph, root = build_sib_plan(specs)
     return PDLInterpreter(graph, root)
 
 
@@ -210,3 +225,114 @@ def test_program_accumulates_across_multiple_commands():
     first_apply_ops = pdl.iApply()
     assert pdl.program[0].count == 10
     assert pdl.program[1:] == first_apply_ops
+
+
+# --- Stage 15: named sub-field addressing (real ICL Alias) ---------------------------------
+
+
+def test_iwrite_with_field_merges_into_only_that_sub_range():
+    pdl = _interpreter_with_aliases()
+    pdl.iTarget("status_reg")
+    pdl.iWrite(0b11, field="hi")  # bits[3:2]
+    assert pdl._pending_writes == {"status_reg": 0b1100}
+
+
+def test_iwrite_with_field_preserves_a_previously_queued_different_field():
+    pdl = _interpreter_with_aliases()
+    pdl.iTarget("status_reg")
+    pdl.iWrite(0b01, field="lo")  # bits[1:0]
+    pdl.iWrite(0b11, field="hi")  # bits[3:2] -- must not clobber lo's own bits
+    assert pdl._pending_writes == {"status_reg": 0b1101}
+
+
+def test_iwrite_unknown_field_raises_named_pdlerror():
+    pdl = _interpreter_with_aliases()
+    pdl.iTarget("status_reg")
+    with pytest.raises(PDLError, match="ghost"):
+        pdl.iWrite(1, field="ghost")
+
+
+def test_iwrite_with_no_field_still_addresses_whole_instrument():
+    """field=None (the default) is byte-identical to Stage 5's original whole-instrument
+    behavior -- reconfirmed against the SAME aliased instrument used by the field-based
+    tests above, not just the no-alias _SPECS fixture."""
+    pdl = _interpreter_with_aliases()
+    pdl.iTarget("status_reg")
+    pdl.iWrite(0b1010)
+    assert pdl._pending_writes == {"status_reg": 0b1010}
+
+
+def test_iread_with_field_masks_only_that_sub_range_in_phase2():
+    pdl = _interpreter_with_aliases()
+    pdl.iTarget("status_reg")
+    pdl.iRead(0b11, field="hi")  # bits[3:2]
+    ops = pdl.iApply()
+    phase2 = ops[4]
+
+    fed_mask_bits = bits_from_int(phase2.mask, phase2.bits)
+    position_mask = list(reversed(fed_mask_bits))
+    assert position_mask == [0, 0, 1, 1, 0]  # lo(2 bits) unmasked, hi(2 bits) masked, select=0
+
+    fed_tdo_bits = bits_from_int(phase2.tdo, phase2.bits)
+    position_tdo = list(reversed(fed_tdo_bits))
+    # hi=0b11 LSB-first at its own bit offset (positions 2-3); lo's own positions (0-1) are
+    # don't-care content (0, since no write was queued); trailing bit is the SIB's own select,
+    # asserted (1) since it's the open/target SIB.
+    assert position_tdo == [0, 0, 1, 1, 1]
+
+
+def test_iread_unknown_field_raises_named_pdlerror():
+    pdl = _interpreter_with_aliases()
+    pdl.iTarget("status_reg")
+    with pytest.raises(PDLError, match="ghost"):
+        pdl.iRead(1, field="ghost")
+
+
+def test_iread_with_no_field_still_masks_the_whole_instrument():
+    """field=None (the default) is byte-identical to Stage 5's original whole-instrument
+    mask -- reconfirmed against the aliased instrument."""
+    pdl = _interpreter_with_aliases()
+    pdl.iTarget("status_reg")
+    pdl.iRead(0b1010)
+    ops = pdl.iApply()
+    phase2 = ops[4]
+    fed_mask_bits = bits_from_int(phase2.mask, phase2.bits)
+    position_mask = list(reversed(fed_mask_bits))
+    assert position_mask == [1, 1, 1, 1, 0]  # all 4 content bits masked in, select bit is not
+
+
+# --- Stage 15: iRunLoop's -sck clock selector -----------------------------------------------
+
+
+def test_irunloop_default_still_appends_runtest_not_pulsepin():
+    """sck_port=None (the default) is byte-identical to Stage 5's original -tck behavior."""
+    pdl = _interpreter()
+    pdl.iRunLoop(10)
+    assert len(pdl.program) == 1
+    assert isinstance(pdl.program[0], Runtest)
+
+
+def test_irunloop_with_sck_port_appends_pulsepin_not_runtest():
+    pdl = _interpreter()
+    pdl.iRunLoop(5, sck_port="sysclk")
+    assert len(pdl.program) == 1
+    op = pdl.program[0]
+    assert isinstance(op, PulsePin)
+    assert op.port == "sysclk"
+    assert op.count == 5
+
+
+def test_irunloop_sck_recorded_in_history():
+    from warptap.pdl_history import PdlRunLoopStmt
+
+    pdl = _interpreter()
+    pdl.iRunLoop(5, sck_port="sysclk")
+    assert pdl.history == [PdlRunLoopStmt(5, "sysclk")]
+
+
+def test_irunloop_default_recorded_in_history_with_no_sck_port():
+    from warptap.pdl_history import PdlRunLoopStmt
+
+    pdl = _interpreter()
+    pdl.iRunLoop(5)
+    assert pdl.history == [PdlRunLoopStmt(5, None)]
