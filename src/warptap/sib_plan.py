@@ -13,6 +13,7 @@ from __future__ import annotations
 from typing import NamedTuple
 
 from warptap.icl_model import (
+    Alias,
     InstrumentDirection,
     InstrumentNode,
     ModuleInstance,
@@ -28,6 +29,7 @@ class InstrumentSpec(NamedTuple):
     capture_value: int
     direction: InstrumentDirection = InstrumentDirection.READ
     signal_bits: tuple[SignalBinding, ...] = ()
+    aliases: tuple[Alias, ...] = ()  # named sub-fields PDL's iWrite/iRead can address (Stage 15)
 
 
 def build_sib_plan(
@@ -70,6 +72,7 @@ def build_sib_plan(
             capture_value=spec.capture_value,
             direction=spec.direction,
             signal_bits=spec.signal_bits,
+            aliases=spec.aliases,
         )
         chain.append(SibNode(sib_name=f"sib_{spec.name}", instrument=instrument))
         children.append(ModuleInstance(name=spec.name))

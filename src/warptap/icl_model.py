@@ -45,12 +45,26 @@ class SignalBinding(NamedTuple):
     bit: int = 0
 
 
+class Alias(NamedTuple):
+    """A named, contiguous sub-range within an instrument's own width -- real ICL's
+    ``Alias <name>[hi:lo] = <reg>[hi:lo];`` construct (confirmed real, e.g. a real fixture's
+    own ``Alias okay = DO[0];``/``Alias mode[3:0] = DI[6:5],DI[3:2];``). v1 scopes this to a
+    single contiguous range referencing one instrument's own register -- real ICL's
+    concat-of-multiple-sources ``Alias`` form (multiple comma-joined ranges in one alias) is
+    not modeled here; no real caller needs it yet."""
+
+    name: str
+    low_bit: int
+    high_bit: int  # inclusive; high_bit >= low_bit
+
+
 class InstrumentNode(NamedTuple):
     name: str
     width: int
     capture_value: int  # fixed deterministic stub, mirrors tap_model.IDCODE_VALUE's role
     direction: InstrumentDirection = InstrumentDirection.READ
     signal_bits: tuple[SignalBinding, ...] = ()  # () or exactly `width` long
+    aliases: tuple[Alias, ...] = ()  # named sub-fields PDL's iWrite/iRead can address by name
 
 
 class SibNode(NamedTuple):
