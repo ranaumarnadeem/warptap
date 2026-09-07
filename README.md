@@ -5,9 +5,15 @@ PDL — package/CLI name is `warptap`.
 
 ## Usage
 
-warptap is a library, not (yet) a CLI tool — import it and call its functions directly. The
-core pipeline is: insert a JTAG/IJTAG test-access network into your design, then either drive
-it (`PDLInterpreter`) and emit a real ATE pattern file, or hand the inserted netlist onward.
+warptap is a library, not (yet) a CLI tool: `pip install warptap`, then call its functions
+from your own build/generation pipeline — there's no daemon or service, each call does one
+piece of work and returns. The core pipeline is: insert a JTAG/IJTAG test-access network into
+your design, then either drive it (`PDLInterpreter`) and emit a real ATE pattern file, or hand
+the inserted netlist on to your own normal synthesis flow.
+
+The example below mirrors a real integration shape: a generator (e.g. an MBIST wrapper
+generator) produces RTL with real control/status ports, then warptap wraps a subset of them
+with JTAG/IJTAG access before synthesis.
 
 ```python
 from warptap import (
@@ -15,31 +21,35 @@ from warptap import (
     insert_test_access, PDLInterpreter, to_svf,
 )
 
-# One instrument per real signal you want write/read access to.
+# One instrument per real signal you want write/read access to -- mix WRITE (control) and
+# READ (status) freely in one network.
 specs = [
     InstrumentSpec(
-        "ctrl_write", width=1, capture_value=0,
+        "self_repair_start", width=1, capture_value=0,
         direction=InstrumentDirection.WRITE,
-        signal_bits=(SignalBinding("ctrl_in"),),
+        signal_bits=(SignalBinding("self_repair_start"),),
     ),
     InstrumentSpec(
-        "status_read", width=1, capture_value=0,
+        "self_repair_busy", width=1, capture_value=0,
         direction=InstrumentDirection.READ,
-        signal_bits=(SignalBinding("status_out"),),
+        signal_bits=(SignalBinding("self_repair_busy"),),
     ),
 ]
 
-# Ingest your design, insert the TAP + SIB/instrument network, get back synthesizable Verilog
-# plus everything needed to drive it.
-inserted_verilog, graph, root = insert_test_access(["my_design.v"], "my_design", specs)
+# Ingest your generated/hand-written RTL, insert the TAP + IJTAG network, get back
+# synthesizable Verilog plus everything needed to drive it. From here, feed the returned
+# Verilog into your own normal synthesis flow instead of the original sources.
+inserted_verilog, graph, root = insert_test_access(
+    ["mem_subsystem_mbist.sv"], "mem_subsystem_mbist", specs,
+)
 
-# Drive it: write ctrl_write, wait for it to settle, read status_read.
+# Drive it: write self_repair_start, wait for it to settle, read self_repair_busy.
 pdl = PDLInterpreter(graph, root)
-pdl.iTarget("ctrl_write")
+pdl.iTarget("self_repair_start")
 pdl.iWrite(1)
 pdl.iApply()
-pdl.iRunLoop(3)
-pdl.iTarget("status_read")
+pdl.iRunLoop(10)
+pdl.iTarget("self_repair_busy")
 pdl.iRead(1)
 pdl.iApply()
 
