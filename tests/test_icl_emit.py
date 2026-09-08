@@ -115,7 +115,13 @@ def test_sib_instances_chain_tdi_side_first():
     assert "InputPort SI = warptap_sib_a.SO;" in joined  # second slot chains from the first
 
 
-def test_nested_sib_raises_named_error():
+def test_slot_with_both_instrument_and_nested_raises_named_error():
+    """Renamed from test_nested_sib_raises_named_error once nested networks were genuinely
+    supported (see test_nested_network_renders_correctly below for the real success case) --
+    this test's own graph was never actually testing "nested is unsupported"; it constructs
+    the OTHER, still-genuinely-invalid shape: a slot with both an instrument AND a nested
+    network populated at once, which real IEEE 1687 (a SIB's fromSO binds to either an
+    instrument's SO or another SIB's SO, never both) doesn't allow."""
     graph = PhysicalGraph(
         chain=(
             SibNode(
@@ -125,13 +131,31 @@ def test_nested_sib_raises_named_error():
             ),
         )
     )
-    with pytest.raises(IclEmitError, match="nested"):
+    with pytest.raises(IclEmitError, match="both"):
         render_sib_instances(graph)
+
+
+def test_nested_network_renders_correctly():
+    """The real success case: a hierarchy SIB (no instrument of its own) gates a nested
+    sub-chain -- its own fromSO binds to the nested chain's own tail SIB's SO, not an
+    instrument's, mirroring exactly how sib_insert.py wires nested_so."""
+    inner = SibNode(sib_name="sib_inner", instrument=_read_instrument(name="deep", width=1))
+    outer = SibNode(sib_name="sib_outer", instrument=None, nested=(inner,))
+    graph = PhysicalGraph(chain=(outer,))
+    lines = render_sib_instances(graph)
+    assert any(
+        "Instance warptap_sib_outer" in line and "fromSO = warptap_sib_inner.SO" in line
+        for line in lines
+    )
+    assert any(
+        "Instance warptap_sib_inner" in line and "SI = warptap_sib_outer.toSI" in line
+        for line in lines
+    )
 
 
 def test_instrument_less_slot_raises_named_error():
     graph = PhysicalGraph(chain=(SibNode(sib_name="sib_a", instrument=None),))
-    with pytest.raises(IclEmitError, match="no instrument"):
+    with pytest.raises(IclEmitError, match="neither"):
         render_sib_instances(graph)
 
 

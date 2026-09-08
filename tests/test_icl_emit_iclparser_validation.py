@@ -38,7 +38,7 @@ from pathlib import Path
 
 from warptap.icl_emit import to_icl
 from warptap.icl_model import Alias, InstrumentDirection, SignalBinding
-from warptap.sib_plan import InstrumentSpec, build_sib_plan
+from warptap.sib_plan import HierarchySpec, InstrumentSpec, build_sib_plan
 
 _SPECS = [
     InstrumentSpec("sensor_a", width=3, capture_value=0b101),
@@ -149,3 +149,21 @@ def test_alias_bearing_instrument_is_structurally_valid(icl_parser_module):
     assert "Alias mode[3:0] = DR[7:4];" in icl_text
     assert "Alias flag = DR[0];" in icl_text
     _assert_structurally_valid(icl_text, "chip", icl_parser_module)
+
+
+def test_nested_network_is_structurally_valid_and_retargets_fully(icl_parser_module):
+    """Nested-SIB plan, Phase 6: a hierarchy SIB (no instrument of its own) gating a nested
+    instrument -- the real ICL shape rendered is structurally identical to any other SIB
+    binding its own fromSO to something's SO, just pointing at another warptap_sib instance
+    instead of a warptap_instr_ one, so it needs no new grammar construct and validates the
+    same way every flat network here already does."""
+    specs = [
+        HierarchySpec("bank_a", children=[InstrumentSpec("deep", width=1, capture_value=1)]),
+    ]
+    graph, root = build_sib_plan(specs, top_name="chip")
+    icl_text = to_icl(graph, root, include_access_link=False)
+    assert "InputPort fromSO = warptap_sib_deep.SO;" in icl_text
+    with tempfile.TemporaryDirectory(prefix="warptap-icl-parser-") as tmpdir:
+        path = _write_icl(icl_text, Path(tmpdir))
+        ij = icl_parser_module("chip", [str(path)])  # must NOT raise at all
+    assert ij is not None

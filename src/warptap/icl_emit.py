@@ -125,14 +125,15 @@ second literal that could silently drift out of sync with this one."""
 
 
 class IclEmitError(WarptapError):
-    """Raised when a :class:`~warptap.icl_model.PhysicalGraph` asks for something v1's ICL
-    emitter can't represent -- a nested SIB network (implementation_plan.md §7 Stage 4 scopes
-    v1 to flat/static networks; this re-validates the same invariant
-    :class:`~warptap.sib_insert.SibInsertError` enforces at RTL-insertion time, since a
+    """Raised when a :class:`~warptap.icl_model.PhysicalGraph` asks for something this ICL
+    emitter can't represent -- a slot with neither an instrument nor a nested network (or
+    both at once; this re-validates the same invariant
+    :class:`~warptap.icl_model.validate_physical_graph`/
+    :class:`~warptap.sib_insert.SibInsertError` enforce elsewhere, since a
     ``PhysicalGraph`` can be built directly, e.g. in tests, without ever calling
-    ``insert_sib_network``), an instrument-less slot, a zero-width instrument, or a WRITE
-    instrument with no ``signal_bits`` -- rather than silently emitting something that looks
-    plausible but describes nothing real."""
+    ``insert_sib_network``), a zero-width instrument, or a WRITE instrument with no
+    ``signal_bits`` -- rather than silently emitting something that looks plausible but
+    describes nothing real."""
 
 
 def _sib_instance_name(sib_name: str) -> str:
@@ -302,43 +303,77 @@ def render_instrument_module(instrument: InstrumentNode) -> str:
     return "\n".join(lines)
 
 
-def render_sib_instances(graph: PhysicalGraph) -> List[str]:
-    """One ``Instance <sib> Of warptap_sib { InputPort SI = <prev>.SO; }`` per slot in
-    ``graph.chain``, TDI-side-first -- ``SI`` bound to the previous slot's ``SO``, or to the
-    top module's own ``TDI`` for the first slot, mirroring :mod:`warptap.sib_insert`'s own
-    ``prev_so`` threading exactly. Each instrument gets its own
-    ``Instance <instr> Of warptap_instr_<name> { InputPort SI = <sib>.toSI; }``, nested behind
-    its gating SIB's own host-side scan-out."""
+def _render_chain_instances(chain, prev_so: str) -> tuple:
+    """One level of a chain: each slot's own ``Instance <sib> Of warptap_sib`` binds ``SI``
+    to ``prev_so`` (the previous slot's ``SO``, or the caller's own entry point) and
+    ``fromSO`` to whatever it gates -- a leaf instrument's own ``SO``, or (recursively) a
+    nested sub-chain's own final ``SO``, mirroring exactly how :func:`~warptap.sib_insert.
+    _insert_chain` threads ``prev_so``/wires a hierarchy slot's ``nested_so``. Returns
+    ``(lines, final_so)`` -- ``final_so`` is this chain's own last slot's ``SO`` reference,
+    for the caller to thread as its own ``prev_so`` (top level) or bind into an enclosing
+    SIB's own ``fromSO`` (nested)."""
     lines: List[str] = []
-    prev_so = TDI
-    for node in graph.chain:
-        if node.nested:
+    for node in chain:
+        if node.instrument is None and not node.nested:
             raise IclEmitError(
-                f"SIB {node.sib_name!r} has a nested network -- ICL emission only supports "
-                "flat/static networks in v1 (implementation_plan.md §7 Stage 4)"
+                f"SIB {node.sib_name!r} has neither an instrument nor a nested network"
             )
-        if node.instrument is None:
-            raise IclEmitError(f"SIB {node.sib_name!r} has no instrument")
-        if node.instrument.width < 1:
+        if node.instrument is not None and node.nested:
             raise IclEmitError(
-                f"instrument {node.instrument.name!r} (gated by {node.sib_name!r}) has "
-                f"width {node.instrument.width} -- an instrument needs at least 1 bit"
+                f"SIB {node.sib_name!r} has both an instrument and a nested network -- "
+                "exactly one of the two is allowed, never both"
             )
 
         sib_instance = _sib_instance_name(node.sib_name)
-        instr_instance = f"{INSTRUMENT_MODULE_PREFIX}{node.instrument.name}"
-        instr_module = f"{INSTRUMENT_MODULE_PREFIX}{node.instrument.name}"
-
-        lines.append(
-            f"Instance {sib_instance} Of {SIB_MODULE_TYPE} {{ InputPort SI = {prev_so}; "
-            f"InputPort fromSO = {instr_instance}.SO; }}"
-        )
-        lines.append(
-            f"Instance {instr_instance} Of {instr_module} "
-            f"{{ InputPort SI = {sib_instance}.toSI; }}"
-        )
+        if node.nested:
+            nested_lines, nested_final_so = _render_chain_instances(
+                node.nested, prev_so=f"{sib_instance}.toSI"
+            )
+            lines.append(
+                f"Instance {sib_instance} Of {SIB_MODULE_TYPE} {{ InputPort SI = {prev_so}; "
+                f"InputPort fromSO = {nested_final_so}; }}"
+            )
+            lines.extend(nested_lines)
+        else:
+            if node.instrument.width < 1:
+                raise IclEmitError(
+                    f"instrument {node.instrument.name!r} (gated by {node.sib_name!r}) has "
+                    f"width {node.instrument.width} -- an instrument needs at least 1 bit"
+                )
+            instr_instance = f"{INSTRUMENT_MODULE_PREFIX}{node.instrument.name}"
+            lines.append(
+                f"Instance {sib_instance} Of {SIB_MODULE_TYPE} {{ InputPort SI = {prev_so}; "
+                f"InputPort fromSO = {instr_instance}.SO; }}"
+            )
+            lines.append(
+                f"Instance {instr_instance} Of {instr_instance} "
+                f"{{ InputPort SI = {sib_instance}.toSI; }}"
+            )
         prev_so = f"{sib_instance}.SO"
+    return lines, prev_so
+
+
+def render_sib_instances(graph: PhysicalGraph) -> List[str]:
+    """One ``Instance <sib> Of warptap_sib { InputPort SI = <prev>.SO; }`` per slot in
+    ``graph.chain`` (and, recursively, in any nested sub-chain -- see
+    :func:`_render_chain_instances`), TDI-side-first -- ``SI`` bound to the previous slot's
+    ``SO``, or to the top module's own ``TDI`` for the first slot, mirroring
+    :mod:`warptap.sib_insert`'s own ``prev_so`` threading exactly. Each leaf instrument gets
+    its own ``Instance <instr> Of warptap_instr_<name> { InputPort SI = <sib>.toSI; }``,
+    nested behind its gating SIB's own host-side scan-out."""
+    lines, _final_so = _render_chain_instances(graph.chain, prev_so=TDI)
     return lines
+
+
+def _collect_instruments(chain, seen: dict) -> None:
+    """Recursively walk a chain (and any nested sub-chains) collecting each distinct leaf
+    instrument by name, first-seen order -- mirrors :func:`_render_chain_instances`'s own
+    traversal shape."""
+    for node in chain:
+        if node.nested:
+            _collect_instruments(node.nested, seen)
+        elif node.instrument is not None and node.instrument.name not in seen:
+            seen[node.instrument.name] = node.instrument
 
 
 def to_icl(
@@ -371,10 +406,9 @@ def to_icl(
     Raises :class:`IclEmitError` for anything v1 can't represent."""
     module_type_blocks = [render_sib_module_type()]
     seen_instruments: dict = {}
-    for node in graph.chain:
-        if node.instrument is not None and node.instrument.name not in seen_instruments:
-            seen_instruments[node.instrument.name] = node.instrument
-            module_type_blocks.append(render_instrument_module(node.instrument))
+    _collect_instruments(graph.chain, seen_instruments)
+    for instrument in seen_instruments.values():
+        module_type_blocks.append(render_instrument_module(instrument))
 
     instance_lines = render_sib_instances(graph)
     first_sib = _sib_instance_name(graph.chain[0].sib_name) if graph.chain else None
