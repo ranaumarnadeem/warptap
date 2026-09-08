@@ -19,7 +19,14 @@ _COLUMNS = ("trst_n", "select", "si", "nested_so", "capture_dr", "shift_dr", "up
 
 class _SibCellRef:
     """Minimal single-cell Python reference, independent of how sib_insert.py will later
-    wire `select` -- this only models rtl/sib_cell.v's own always-block/assign shape."""
+    wire `select` -- this only models rtl/sib_cell.v's own always-block/assign shape.
+
+    `nested_select`'s three-way AND (matching the RTL exactly, not just `po & select`) was
+    corrected once the nested-SIB spike (test_sib_cell_nested_cross_sim.py) wired two real
+    cells together and made the missing `shift_ff` term produce an observable mismatch --
+    this file's own tests never happen to hit the differentiating case (po=1, shift_ff=0,
+    select=1) since nested_select here is only observed, never fed into a second cell's
+    `select` to create a real behavioral difference."""
 
     def __init__(self) -> None:
         self.shift_ff = 0
@@ -38,7 +45,7 @@ class _SibCellRef:
 
         so = self.shift_ff
         nested_si = si
-        nested_select = self.po & select
+        nested_select = self.po & self.shift_ff & select
 
         if trst_n and select:
             # rtl/sib_cell.v uses non-blocking (`<=`) assignment for both shift_ff
