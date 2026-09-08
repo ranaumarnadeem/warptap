@@ -9,14 +9,16 @@ only *warptap's own canonical SIB-network shape* -- a top module whose direct ch
 :data:`~warptap.icl_emit.SIB_MODULE_TYPE`-typed instances chained ``InputPort SI = <prev>.SO;``
 from the top module's own ``tdi`` through to its ``tdo``, each gating exactly one instrument
 instance (found via that SIB's own ``fromSO`` binding) named with
-:data:`~warptap.icl_emit.INSTRUMENT_MODULE_PREFIX`. This is *not* a general IEEE 1687 SIB-network
-importer -- the approved plan itself scopes Stage 12 to "flat and simple hierarchical networks
-using warptap's canonical 2-arm self-select ScanMux shape," not arbitrary real-world ICL. Every
-fixture in the vendored tool's own ``tests/test_icls`` corpus uses a genuinely different shape
-(parametrized generic instruments, bare ``ScanMux`` edge cases, an IR-decoded DR-mux TAP with no
-SIB pattern at all) and is correctly rejected here, not silently misinterpreted --
-see ``tests/test_icl_import_external_fixtures.py`` for the specific, pinned rejection reason
-each one hits.
+:data:`~warptap.icl_emit.INSTRUMENT_MODULE_PREFIX`, OR (recursively) another
+:data:`~warptap.icl_emit.SIB_MODULE_TYPE` instance -- a hierarchy SIB gating a nested
+sub-network, detected structurally via that same ``fromSO`` binding, exactly mirroring
+:mod:`warptap.icl_emit`'s own emission the other direction. This is *not* a general IEEE 1687
+SIB-network importer -- arbitrary real-world ICL (parametrized generic instruments, bare
+``ScanMux`` edge cases, an IR-decoded DR-mux TAP with no SIB pattern at all, all genuinely
+different shapes found in the vendored tool's own ``tests/test_icls`` corpus) is correctly
+rejected here, not silently misinterpreted -- see
+``tests/test_icl_import_external_fixtures.py`` for the specific, pinned rejection reason each
+one hits.
 
 **Direction is detected structurally, not by name**: an instrument instance carrying an
 ``IclDataRegister`` (``DataRegister`` in ICL text) is WRITE; one with only an
@@ -84,12 +86,11 @@ from warptap.tap_ports import TDI, TDO
 
 class IclImportError(WarptapError):
     """Raised when the given ``.icl`` file(s) don't describe a network :func:`import_icl` can
-    recognize -- not a warptap-shaped SIB network at all, a nested SIB (Stage 4's own flat-only
-    scope, re-validated here on the way in), or a real gap in the vendored ``icl_parser`` itself
-    (its "Not supported" ``AccessLink`` gap, or some other not-yet-diagnosed internal
-    ``AssertionError`` in its retargeting-graph construction -- see module docstring for the
-    width>1 instrument case that used to live here and is now fixed) -- rather than a bare,
-    undiagnosed exception from third-party code."""
+    recognize -- not a warptap-shaped SIB network at all (flat or nested), or a real gap in the
+    vendored ``icl_parser`` itself (its "Not supported" ``AccessLink`` gap, or some other
+    not-yet-diagnosed internal ``AssertionError`` in its retargeting-graph construction -- see
+    module docstring for the width>1 instrument case that used to live here and is now fixed)
+    -- rather than a bare, undiagnosed exception from third-party code."""
 
 
 def _icl_item_classes(icl_parser_module):
@@ -159,44 +160,86 @@ def _instrument_node(instr_instance, icl_data_register_type, icl_scan_register_t
     return InstrumentNode(name=name, width=width, capture_value=0, direction=direction)
 
 
-def _chain_order(top, sib_instances: List) -> List[Tuple[str, object]]:
-    """Walk ``tdi`` -> SIB -> SIB -> ... -> ``tdo`` via each SIB instance's own ``SI`` binding,
-    TDI-side-first, matching :mod:`warptap.icl_emit`'s own ``prev_so`` threading exactly.
-    Returns ``(recovered_sib_name, sib_instance)`` pairs in chain order. Raises
-    :class:`IclImportError` if any SIB instance doesn't chain (a dangling/foreign network) or
-    the last one's ``SO`` doesn't feed ``tdo``."""
-    remaining = list(sib_instances)
-    ordered: List[Tuple[str, object]] = []
-    current = top.get_icl_item_name(TDI)
+def _sib_name_of(sib_instance) -> str:
+    instance_name = sib_instance.get_name()
+    return (
+        instance_name[len(SIB_INSTANCE_PREFIX) :]
+        if instance_name.startswith(SIB_INSTANCE_PREFIX)
+        else instance_name
+    )
 
-    while remaining:
+
+def _walk_chain(
+    remaining: List, current, terminal_source, icl_data_register_type, icl_scan_register_type
+) -> List[SibNode]:
+    """Walk ``current`` -> SIB -> SIB -> ... -> ``terminal_source`` via each SIB instance's own
+    ``SI`` binding, TDI-side-first, matching :mod:`warptap.icl_emit`'s own ``prev_so``
+    threading exactly -- claiming SIBs from the shared ``remaining`` pool as they're found, so
+    a SIB claimed by a nested recursive call (see :func:`_build_node`) can't also be claimed by
+    an enclosing level's own walk. ``current``/``terminal_source`` are the top module's own
+    ``tdi``/``tdo``-fed source at the top level, or a hierarchy SIB's own ``toSI``/``fromSO``-
+    bound target one level deeper. Raises :class:`IclImportError` if the chain doesn't run
+    cleanly from ``current`` to ``terminal_source``."""
+    ordered: List[SibNode] = []
+    while current is not terminal_source:
         next_sib = next(
             (sib for sib in remaining if _input_binding(sib, "SI") is current), None
         )
         if next_sib is None:
             raise IclImportError(
-                f"{len(remaining)} of {len(sib_instances)} {SIB_MODULE_TYPE!r} instance(s) "
-                "never chain back to tdi via a prior SIB's SO -- not a flat, TDI-to-TDO SIB "
+                f"{len(remaining)} {SIB_MODULE_TYPE!r} instance(s) remain unclaimed and this "
+                "chain never reaches its expected end -- not a flat-or-nested, TDI-to-TDO SIB "
                 "chain this importer recognizes"
             )
-        instance_name = next_sib.get_name()
-        sib_name = (
-            instance_name[len(SIB_INSTANCE_PREFIX) :]
-            if instance_name.startswith(SIB_INSTANCE_PREFIX)
-            else instance_name
-        )
-        ordered.append((sib_name, next_sib))
         remaining.remove(next_sib)
-        current = next_sib.get_icl_item_name("SO")
-
-    tdo_port = top.get_icl_item_name(TDO)
-    tdo_source = _resolve_single(next(iter(tdo_port.sources.values())))
-    if tdo_source is not current:
-        raise IclImportError(
-            "the last SIB in the chain doesn't feed tdo -- not a flat, TDI-to-TDO SIB chain "
-            "this importer recognizes"
+        ordered.append(
+            _build_node(remaining, next_sib, icl_data_register_type, icl_scan_register_type)
         )
+        current = next_sib.get_icl_item_name("SO")
     return ordered
+
+
+def _build_node(
+    remaining: List, sib_instance, icl_data_register_type, icl_scan_register_type
+) -> SibNode:
+    """One already-claimed SIB instance -> one :class:`~warptap.icl_model.SibNode`. Detected
+    structurally, not by name (matching this module's own READ-vs-WRITE convention): a
+    ``fromSO`` binding that resolves to another :data:`~warptap.icl_emit.SIB_MODULE_TYPE`
+    instance is a hierarchy SIB, recursed into (entry point its own ``toSI``, terminal the
+    resolved nested instance itself, exactly mirroring how :mod:`warptap.sib_insert` wires a
+    hierarchy slot's own ``nested_si``/``nested_so``); anything else is a leaf instrument."""
+    sib_name = _sib_name_of(sib_instance)
+    from_so_target = _input_binding(sib_instance, "fromSO")
+    if from_so_target is None:
+        raise IclImportError(
+            f"SIB instance {sib_instance.get_name()!r} has no fromSO binding -- not a "
+            "warptap-shaped SIB instance"
+        )
+
+    target_instance = from_so_target.get_instance()
+    if target_instance.get_module_scope() == SIB_MODULE_TYPE:
+        entry = sib_instance.get_icl_item_name("toSI")
+        nested = _walk_chain(
+            remaining, entry, from_so_target, icl_data_register_type, icl_scan_register_type
+        )
+        return SibNode(sib_name=sib_name, instrument=None, nested=tuple(nested))
+
+    instrument = _instrument_node(target_instance, icl_data_register_type, icl_scan_register_type)
+    return SibNode(sib_name=sib_name, instrument=instrument)
+
+
+def _collect_instrument_children(chain) -> List[ModuleInstance]:
+    """Recursively walk a chain (and any nested sub-chains) collecting each leaf instrument as
+    a flat :class:`~warptap.icl_model.ModuleInstance` sibling -- mirrors
+    :mod:`warptap.sib_plan`'s own flat ``ModuleInstance`` tree regardless of SIB-nesting depth,
+    the direction ``icl_emit.py``'s own ``_collect_instruments`` walks."""
+    children: List[ModuleInstance] = []
+    for node in chain:
+        if node.nested:
+            children.extend(_collect_instrument_children(node.nested))
+        else:
+            children.append(ModuleInstance(name=node.instrument.name))
+    return children
 
 
 def import_icl(
@@ -209,13 +252,13 @@ def import_icl(
 
     Raises :class:`IclImportError` for: a real ``icl_parser`` gap (its own retargeting-graph
     ``AssertionError``, or its "Not supported" ``AccessLink`` rejection -- both already
-    documented in Stage 10); a top module with no :data:`~warptap.icl_emit.SIB_MODULE_TYPE`
-    instances at all; a SIB chain that doesn't run cleanly from ``tdi`` to ``tdo``; an
-    instrument instance not named per :data:`~warptap.icl_emit.INSTRUMENT_MODULE_PREFIX`
-    convention; or a READ instrument with other than exactly one ``ScanRegister``. Explicitly
-    does **not** support nested SIB networks (matches :mod:`warptap.icl_emit`'s and
-    :mod:`warptap.sib_insert`'s own v1 flat-network scope) -- not reachable in v1 since nothing
-    upstream can build one, but stated here rather than left as a silent assumption.
+    documented above); a top module with no :data:`~warptap.icl_emit.SIB_MODULE_TYPE`
+    instances at all; a SIB chain (flat or nested) that doesn't run cleanly from ``tdi`` to
+    ``tdo``; an instrument instance not named per
+    :data:`~warptap.icl_emit.INSTRUMENT_MODULE_PREFIX` convention; or a READ instrument with
+    other than exactly one ``ScanRegister``. A hierarchy SIB (one whose ``fromSO`` resolves to
+    another SIB instance rather than an instrument) is detected structurally and recursed into
+    -- matching :mod:`warptap.icl_emit`'s own emission the other direction.
     """
     try:
         ijtag = icl_parser_module(top_module, [str(p) for p in icl_paths])
@@ -247,22 +290,20 @@ def import_icl(
             "this ICL file doesn't describe a warptap-shaped SIB network"
         )
 
-    ordered_sibs = _chain_order(top, sib_instances)
-
-    chain_nodes: List[SibNode] = []
-    instrument_children: List[ModuleInstance] = []
-    for sib_name, sib_instance in ordered_sibs:
-        instrument_out = _input_binding(sib_instance, "fromSO")
-        if instrument_out is None:
-            raise IclImportError(
-                f"SIB instance {sib_instance.get_name()!r} has no fromSO binding -- not a "
-                "warptap-shaped SIB instance"
-            )
-        instr_instance = instrument_out.get_instance()
-        instrument = _instrument_node(instr_instance, IclDataRegister, IclScanRegister)
-        chain_nodes.append(SibNode(sib_name=sib_name, instrument=instrument))
-        instrument_children.append(ModuleInstance(name=instrument.name))
+    tdo_port = top.get_icl_item_name(TDO)
+    tdo_source = _resolve_single(next(iter(tdo_port.sources.values())))
+    remaining = list(sib_instances)
+    chain_nodes = _walk_chain(
+        remaining, top.get_icl_item_name(TDI), tdo_source, IclDataRegister, IclScanRegister
+    )
+    if remaining:
+        raise IclImportError(
+            f"{len(remaining)} of {len(sib_instances)} {SIB_MODULE_TYPE!r} instance(s) never "
+            "chain back to tdi via a prior SIB's SO -- not a flat-or-nested, TDI-to-TDO SIB "
+            "chain this importer recognizes"
+        )
 
     graph = PhysicalGraph(chain=tuple(chain_nodes))
+    instrument_children = _collect_instrument_children(chain_nodes)
     root = ModuleInstance(name=top_module, children=tuple(instrument_children))
     return graph, root

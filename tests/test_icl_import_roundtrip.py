@@ -25,7 +25,7 @@ import pytest
 from warptap.icl_emit import to_icl
 from warptap.icl_import import IclImportError, import_icl
 from warptap.icl_model import InstrumentDirection, SignalBinding
-from warptap.sib_plan import InstrumentSpec, build_sib_plan
+from warptap.sib_plan import HierarchySpec, InstrumentSpec, build_sib_plan
 
 
 def _write_icl(icl_text: str, tmpdir: Path) -> Path:
@@ -102,6 +102,43 @@ def test_width_gt_1_instrument_network_round_trips_cleanly(icl_parser_module):
         assert imp_node.instrument.name == orig_node.instrument.name
         assert imp_node.instrument.width == orig_node.instrument.width
         assert imp_node.instrument.direction == orig_node.instrument.direction
+
+
+def test_nested_network_round_trips_cleanly(icl_parser_module):
+    """Nested-SIB plan, Phase 6: a hierarchy SIB (no instrument of its own) gating a nested
+    sub-network, alongside an unrelated flat top-level instrument -- confirms import_icl()
+    correctly detects a fromSO binding that resolves to another SIB instance (rather than an
+    instrument) and recurses, recovering the exact same tree shape to_icl() emitted."""
+    specs = [
+        HierarchySpec(
+            "bank_a",
+            children=[InstrumentSpec("deep", width=2, capture_value=0b01)],
+        ),
+        InstrumentSpec("top_level", width=1, capture_value=1),
+    ]
+    graph, root = build_sib_plan(specs, top_name="chip")
+    icl_text = to_icl(graph, root, include_access_link=False)
+
+    with tempfile.TemporaryDirectory(prefix="warptap-icl-import-") as tmpdir:
+        path = _write_icl(icl_text, Path(tmpdir))
+        imported_graph, imported_root = import_icl([path], "chip", icl_parser_module=icl_parser_module)
+
+    assert {c.name for c in imported_root.children} == {"deep", "top_level"}  # flat, any depth
+    assert len(imported_graph.chain) == len(graph.chain) == 2
+
+    orig_bank_a, imp_bank_a = graph.chain[0], imported_graph.chain[0]
+    assert imp_bank_a.sib_name == orig_bank_a.sib_name == "sib_bank_a"
+    assert imp_bank_a.instrument is None
+    assert len(imp_bank_a.nested) == len(orig_bank_a.nested) == 1
+    orig_deep, imp_deep = orig_bank_a.nested[0], imp_bank_a.nested[0]
+    assert imp_deep.sib_name == orig_deep.sib_name == "sib_deep"
+    assert imp_deep.instrument.name == orig_deep.instrument.name == "deep"
+    assert imp_deep.instrument.width == orig_deep.instrument.width == 2
+    assert imp_deep.nested == ()
+
+    orig_top, imp_top = graph.chain[1], imported_graph.chain[1]
+    assert imp_top.sib_name == orig_top.sib_name == "sib_top_level"
+    assert imp_top.instrument.name == orig_top.instrument.name == "top_level"
 
 
 def test_access_link_network_raises_named_error(icl_parser_module):
