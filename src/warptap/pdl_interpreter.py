@@ -33,7 +33,7 @@ from warptap.pdl_history import (
     PdlWriteStmt,
 )
 from warptap.sib_layout import compose_bits, layout_bit_length
-from warptap.sib_retarget import open_path_to
+from warptap.sib_retarget import open_path_to, stage_open_sequence
 from warptap.tap_fsm import TapState
 from warptap.tap_ir import GotoState, PulsePin, Runtest, ShiftDR, bits_to_int
 
@@ -47,13 +47,32 @@ class PDLError(WarptapError):
 def _target_layout(graph: PhysicalGraph, opened: frozenset[str], target_sib: str) -> tuple[int, int]:
     """(offset, width) of ``target_sib``'s own instrument-content bits within
     ``compose_bits``'s position-ordered output for the ``opened`` configuration -- offset
-    counts from index 0 (nearest TDI), the same convention ``compose_bits`` itself uses."""
-    offset = 0
-    for node in graph.chain:
-        if node.sib_name == target_sib:
-            return offset, node.instrument.width
-        offset += node.instrument.width + 1 if node.sib_name in opened else 1
-    raise AssertionError(f"{target_sib!r} not found in graph.chain")
+    counts from index 0 (nearest TDI), the same convention ``compose_bits`` itself uses.
+    Recurses into an open hierarchy slot's own nested sub-chain, matching sib_layout.py's
+    own recursive walk (if the target isn't inside a given nested sub-chain, its full
+    contribution -- via layout_bit_length, reused rather than re-derived -- is skipped over
+    to keep counting the remaining siblings correctly)."""
+
+    def _walk(chain: tuple, base_offset: int) -> Optional[tuple[int, int]]:
+        offset = base_offset
+        for node in chain:
+            if node.sib_name == target_sib:
+                return offset, node.instrument.width
+            if node.sib_name in opened:
+                if node.nested:
+                    found = _walk(node.nested, offset)
+                    if found is not None:
+                        return found
+                    offset += layout_bit_length(PhysicalGraph(chain=node.nested), opened)
+                else:
+                    offset += node.instrument.width
+            offset += 1
+        return None
+
+    found = _walk(graph.chain, 0)
+    if found is None:
+        raise AssertionError(f"{target_sib!r} not found in graph.chain")
+    return found
 
 
 def _read_mask_bits(total_bits: int, offset: int, low: int, high: int) -> list[int]:
@@ -200,31 +219,42 @@ class PDLInterpreter:
 
     def iApply(self) -> list[Union[ShiftDR, GotoState]]:
         """The sole action command. Resolves the current scope's gating SIB, emits phase 1
-        (close whatever's open, open the new target -- sized against the network's actual
-        prior state, implementation_plan.md §3.3's ``network_configuration`` seam) then
-        phase 2 (shift the real payload/expected-read value with the target's segment now
-        spliced in), clears the pending write/read for this target, and returns the ops
-        (also appended to ``self.program``).
+        (one or more rounds closing whatever's open and opening the new target -- sized
+        against the network's actual prior state, implementation_plan.md §3.3's
+        ``network_configuration`` seam) then phase 2 (shift the real payload/expected-read
+        value with the target's segment now spliced in), clears the pending write/read for
+        this target, and returns the ops (also appended to ``self.program``).
 
-        Phase 1's length is a function of whatever is open *right now* (``self.
-        _currently_open``), not a static ``len(graph.chain)`` baseline -- if a previous
-        ``iApply`` targeting a different instrument left some other SIB open, phase 1 must
-        shift through that instrument's still-physically-present content (as don't-care
-        garbage) to close it. This is load-bearing for correctly sequencing back-to-back
-        ``iApply`` calls, not merely future-SAT-extension bookkeeping.
+        Phase 1 is one round per :func:`~warptap.sib_retarget.stage_open_sequence` entry, not
+        always exactly one: a closed SIB's nested content isn't physically part of the live
+        scan chain yet (confirmed against real RTL, ``tests/test_sib_cell_nested_cross_sim.
+        py``), so opening a target nested ``d`` levels deep genuinely needs ``d`` separate
+        Capture-Shift-Update rounds, each one committing one more ancestor open before the
+        next round can address anything inside it. For today's -- and every pre-nesting --
+        case (a directly-gated top-level instrument), this loop runs exactly once, with the
+        same ``open_now``/``open_after`` values phase 1 always used, so behavior is
+        byte-identical to before this loop existed.
+
+        Each round's length is a function of whatever is open *right now* (``self.
+        _currently_open`` for the first round; the previous round's own result after that),
+        not a static ``len(graph.chain)`` baseline -- if a previous ``iApply`` targeting a
+        different instrument left some other SIB open, the first round must shift through
+        that instrument's still-physically-present content (as don't-care garbage) to close
+        it. This is load-bearing for correctly sequencing back-to-back ``iApply`` calls, not
+        merely future-SAT-extension bookkeeping.
 
         For a READ instrument this garbage shift has zero lasting effect (``bc1_shift_only.v``
         has no update latch). **For a WRITE instrument it does** (implementation_plan.md §7
-        Stage 9): phase 1 always feeds ``0`` for a non-target slot's content (``sib_layout.
-        compose_bits``'s own documented behavior), and ``instrument_write.v``'s update-latch
-        commits on any edge that leaves its gating SIB open both before and after -- which
-        includes phase 1's own Update-DR whenever a WRITE instrument stays open across it.
-        Retargeting *away* from an open WRITE instrument (closing it) is safe -- the closing
-        edge itself is gated off (open-before but not-open-after) -- and a value survives
-        being closed and later reopened via a *different* intermediate target, since it's
-        never touched while closed. The one case this does NOT protect: calling ``iApply``
-        twice in a row for the *same* still-open WRITE instrument with no intervening
-        different target -- phase 1 of the second call sees that instrument open both before
+        Stage 9): every phase-1 round always feeds ``0`` for a non-target slot's content
+        (``sib_layout.compose_bits``'s own documented behavior), and ``instrument_write.v``'s
+        update-latch commits on any edge that leaves its gating SIB open both before and
+        after -- which includes a phase-1 round's own Update-DR whenever a WRITE instrument
+        stays open across it. Retargeting *away* from an open WRITE instrument (closing it) is
+        safe -- the closing edge itself is gated off (open-before but not-open-after) -- and a
+        value survives being closed and later reopened via a *different* intermediate target,
+        since it's never touched while closed. The one case this does NOT protect: calling
+        ``iApply`` twice in a row for the *same* still-open WRITE instrument with no
+        intervening different target -- phase 1's round sees that instrument open both before
         and after (nothing changed), so its 0 don't-care fill commits, clobbering the value
         before phase 2 ever runs. A real PDL sequence naturally avoids this (a second touch
         without going elsewhere would normally carry a fresh ``iWrite`` anyway); it is not
@@ -236,20 +266,23 @@ class PDLInterpreter:
         target_path = open_path_to(
             self._graph, instrument_name, network_configuration=self._currently_open
         )
-        target_sib = next(iter(target_path))  # v1: exactly one SIB on a flat network's path
+        target_sib = target_path[-1]
 
-        old = self._currently_open
-        opened = frozenset({target_sib})
         ops: list[Union[ShiftDR, GotoState]] = []
 
-        # Phase 1: assert only the new target's select bit; every other SIB (including
-        # whatever a prior iApply left open) is driven closed. Sized against `old` -- the
-        # network's actual current physical length.
-        len1 = layout_bit_length(self._graph, old)
-        bits1 = compose_bits(self._graph, old, opened, target_sib=None, payload_value=0)
-        ops.append(GotoState(TapState.SHIFT_DR))
-        ops.append(ShiftDR(len1, tdi=bits_to_int(list(reversed(bits1)))))
-        ops.append(GotoState(TapState.RUN_TEST_IDLE))
+        # Phase 1: one round per stage_open_sequence entry. Each round asserts exactly that
+        # round's open_after select bits; every other SIB (including whatever a prior
+        # iApply left open, on round 1) is driven closed. Sized against `prior_open` -- the
+        # network's actual physical state entering that round.
+        prior_open = self._currently_open
+        for open_after in stage_open_sequence(self._graph, frozenset(target_path)):
+            len1 = layout_bit_length(self._graph, prior_open)
+            bits1 = compose_bits(self._graph, prior_open, open_after, target_sib=None, payload_value=0)
+            ops.append(GotoState(TapState.SHIFT_DR))
+            ops.append(ShiftDR(len1, tdi=bits_to_int(list(reversed(bits1)))))
+            ops.append(GotoState(TapState.RUN_TEST_IDLE))
+            prior_open = open_after
+        opened = prior_open  # == frozenset(target_path)
         self._currently_open = opened
 
         # Phase 2: shift the real payload, re-asserting the same (now-physical) select
