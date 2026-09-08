@@ -16,6 +16,7 @@ from warptap.sib_overshift import (
     diagnose_overshift,
     expected_probe_tdo,
 )
+from warptap.sib_retarget import stage_open_sequence
 from warptap.tap_fsm import TapState
 from warptap.tap_ir import GotoState, ShiftDR, ShiftIR, bits_to_int
 from warptap.tap_ir_play import play
@@ -300,3 +301,59 @@ def test_alias_bearing_instrument_is_unaffected():
         layout_bit_length(graph_with_alias, target_open), expected, observed,
     )
     assert result.passed
+
+
+def _nested_graph() -> PhysicalGraph:
+    inner = SibNode("sib_inner", _instrument("deep", width=2, capture_value=0b01))
+    outer = SibNode("sib_outer", instrument=None, nested=(inner,))
+    sibling = SibNode("sib_sibling", _instrument("shallow", width=1, capture_value=0))
+    return PhysicalGraph(chain=(outer, sibling))
+
+
+def test_nested_target_phase1_needs_one_round_per_depth():
+    """Opening a target 2 levels deep from a fully-closed network needs 2 separate phase-1
+    rounds (stage_open_sequence's own finding, shared with PDLInterpreter.iApply) -- not the
+    single round a flat target needs. Pure structural check (no SibNetworkRegister/play --
+    that oracle doesn't support nested networks until a later phase)."""
+    graph = _nested_graph()
+    target_open = frozenset({"sib_inner"})
+    ops = build_overshift_ops(graph, target_open, margin=0)
+    shifts = _shift_ops(ops)
+    assert len(stage_open_sequence(graph, target_open)) == 2  # depth 2 -> 2 rounds
+    assert len(shifts) == 3  # 2 phase-1 rounds + 1 final probe shift
+
+    round1, round2, probe = shifts
+    assert round1.bits == layout_bit_length(graph, frozenset())  # both closed
+    assert round2.bits == layout_bit_length(graph, frozenset({"sib_outer"}))  # outer open, inner not yet
+    assert probe.bits == layout_bit_length(graph, frozenset({"sib_outer", "sib_inner"}))
+
+
+def test_multi_branch_target_merges_independent_paths_into_shared_rounds():
+    """A top-level leaf and an unrelated nested leaf, targeted together: round 1 opens
+    everything reachable at depth 1 (the leaf AND the nested target's own outer ancestor);
+    round 2 additionally opens the nested target itself -- still only 2 rounds total, not 2
+    separate per-branch sequences."""
+    graph = _nested_graph()
+    target_open = frozenset({"sib_inner", "sib_sibling"})
+    ops = build_overshift_ops(graph, target_open, margin=0)
+    shifts = _shift_ops(ops)
+    assert len(shifts) == 3
+
+    round1, round2, probe = shifts
+    assert round1.bits == layout_bit_length(graph, frozenset())
+    assert round2.bits == layout_bit_length(graph, frozenset({"sib_outer", "sib_sibling"}))
+    assert probe.bits == layout_bit_length(
+        graph, frozenset({"sib_outer", "sib_inner", "sib_sibling"})
+    )
+
+
+def test_nested_target_named_without_its_ancestor_still_probes_correctly():
+    """target_open naming only the deep leaf (not its own outer gating SIB explicitly) still
+    produces a self-consistent probe -- stage_open_sequence fills in the implied ancestor, and
+    build_overshift_ops's own tail-probe construction uses that completed set, not the
+    caller's possibly-incomplete one."""
+    graph = _nested_graph()
+    target_open = frozenset({"sib_inner"})
+    ops = build_overshift_ops(graph, target_open, margin=2)
+    probe = _shift_ops(ops)[-1]
+    assert probe.bits == 2 + layout_bit_length(graph, frozenset({"sib_outer", "sib_inner"}))

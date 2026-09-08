@@ -30,12 +30,18 @@ mechanism than his. It still inherits the technique's one honestly-admitted blin
 slide 21): two same-length, same-content candidate paths are indistinguishable by exact
 comparison either.
 
-v1 implements the *primitive* (one probe + comparison), not Keim's hierarchical ring-by-ring
-*search* algorithm -- that machinery exists to localize a fault among many nested candidate
-SIBs in an unknown network; warptap's v1 network is flat (no nested SIB-gating-SIB trees,
-Stage 4's own scoping decision), so there is exactly one candidate SIB per instrument, always
-known in advance. Reuses `sib_layout`/`tap_ir`/`tap_ir_play` exactly as `pdl_interpreter.py`
-does -- no new IR op type, no new lowering.
+Implements the *primitive* (one probe + comparison), not Keim's hierarchical ring-by-ring
+*search* algorithm for localizing a fault among many candidate SIBs in an *unknown* network --
+this project always knows the target network's own real shape (from a real
+:class:`~warptap.icl_model.PhysicalGraph`), known or nested, so there is never a search
+problem to begin with, only the question of which candidate(s) to check. ``target_open`` may
+name any SIB(s) at any depth/branch; opening a target nested behind a previously-closed
+ancestor genuinely needs its own separate round each (a closed SIB's nested content isn't
+physically part of the live scan chain yet -- confirmed against real RTL,
+``tests/test_sib_cell_nested_cross_sim.py``), handled by the same
+:func:`~warptap.sib_retarget.stage_open_sequence` primitive ``PDLInterpreter.iApply`` uses.
+Reuses `sib_layout`/`tap_ir`/`tap_ir_play` exactly as `pdl_interpreter.py` does -- no new IR
+op type, no new lowering.
 """
 
 from __future__ import annotations
@@ -45,6 +51,7 @@ from typing import NamedTuple, Optional, Union
 from warptap.icl_model import PhysicalGraph
 from warptap.sib_layout import compose_bits, layout_bit_length
 from warptap.sib_model import SibNetworkRegister
+from warptap.sib_retarget import stage_open_sequence
 from warptap.tap_fsm import TapState
 from warptap.tap_ir import GotoState, ShiftDR, bits_from_int, bits_to_int
 from warptap.tap_ir_play import play
@@ -70,11 +77,17 @@ def build_overshift_ops(
     margin: int,
     sentinel: Optional[int] = None,
 ) -> list[Union[ShiftDR, GotoState]]:
-    """Phase 1 (retarget ``currently_open`` -> ``target_open``): identical construction to
-    ``PDLInterpreter.iApply``'s own phase 1 -- duplicated, not imported (this check has none
-    of ``iApply``'s pending-write/read state to entangle with; two occurrences is the same
-    "rule of three" case ``sib_layout.py``'s own docstring already cites for not sharing
-    prematurely).
+    """Phase 1 (retarget ``currently_open`` -> ``target_open``): one round per
+    ``stage_open_sequence`` entry, the same shared primitive ``PDLInterpreter.iApply`` uses --
+    ``target_open`` here may span multiple independent branches (not just one instrument's
+    own ancestor path), so this needs the same depth-staged opening any nested target does: a
+    closed SIB's nested content isn't physically part of the live scan chain yet, so a node at
+    tree-depth ``d`` can be newly opened no earlier than round ``d``.
+
+    The per-round shift construction itself (not the staging) is duplicated from
+    ``PDLInterpreter.iApply`` rather than imported -- this check has none of ``iApply``'s
+    pending-write/read state to entangle with; two occurrences is the same "rule of three"
+    case ``sib_layout.py``'s own docstring already cites for not sharing prematurely.
 
     Phase 2 (the probe): ``margin`` free-choice sentinel bits, fed first (chronologically),
     followed by a self-restoring ``N_model``-bit tail built via ``compose_bits(graph,
@@ -103,11 +116,20 @@ def build_overshift_ops(
 
     ops: list[Union[ShiftDR, GotoState]] = []
 
-    len1 = layout_bit_length(graph, currently_open)
-    bits1 = compose_bits(graph, currently_open, target_open, target_sib=None, payload_value=0)
-    ops.append(GotoState(TapState.SHIFT_DR))
-    ops.append(ShiftDR(len1, tdi=bits_to_int(list(reversed(bits1)))))
-    ops.append(GotoState(TapState.RUN_TEST_IDLE))
+    prior_open = currently_open
+    for open_after in stage_open_sequence(graph, target_open):
+        len1 = layout_bit_length(graph, prior_open)
+        bits1 = compose_bits(graph, prior_open, open_after, target_sib=None, payload_value=0)
+        ops.append(GotoState(TapState.SHIFT_DR))
+        ops.append(ShiftDR(len1, tdi=bits_to_int(list(reversed(bits1)))))
+        ops.append(GotoState(TapState.RUN_TEST_IDLE))
+        prior_open = open_after
+    # prior_open now equals target_open plus every implied ancestor stage_open_sequence
+    # filled in (e.g. a nested SIB named without its own outer gating SIB) -- the tail probe
+    # below must use this completed set, not the raw parameter, since compose_bits only ever
+    # descends into a node's nested children when that node's own name is itself in the
+    # open-set it's given.
+    target_open = prior_open
 
     tail_bits = compose_bits(graph, target_open, target_open, target_sib=None, payload_value=0)
     n_model = len(tail_bits)
