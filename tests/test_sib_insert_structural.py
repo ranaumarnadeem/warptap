@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from warptap.netlist import Netlist
 from warptap.sib_insert import insert_sib_network
-from warptap.sib_plan import InstrumentSpec, build_sib_plan
+from warptap.sib_plan import HierarchySpec, InstrumentSpec, build_sib_plan
 from warptap.yosys_io import ingest, synthesize
 
 _SPECS = [
@@ -98,3 +98,47 @@ def test_tap_core_instance_survives_synth(fixtures_dir, yosys_command):
     top_cells = _synthesize(netlist, yosys_command)
     tap_core_instances = [c for c in top_cells.values() if c["type"] == "tap_core"]
     assert len(tap_core_instances) == 1
+
+
+def _all_sib_names(chain) -> set:
+    """Recursive, unlike the flat tests above's own {node.sib_name for node in graph.chain}
+    -- a nested network's own sib_names live at every depth, not just the top level."""
+    names = set()
+    for node in chain:
+        names.add(node.sib_name)
+        names |= _all_sib_names(node.nested)
+    return names
+
+
+_NESTED_SPECS = [
+    HierarchySpec(
+        "bank_a",
+        children=[
+            # Deliberately identical to each other -- the same opt_merge risk this file's own
+            # docstring names, one level deeper than the flat _SPECS above ever reach.
+            InstrumentSpec("nested_a", width=3, capture_value=0b101),
+            InstrumentSpec("nested_b", width=3, capture_value=0b101),
+        ],
+    ),
+    InstrumentSpec("top_level", width=3, capture_value=0b101),  # identical to both, one level up
+]
+
+
+def test_nested_sib_survives_synth_distinctly_from_its_siblings_and_ancestor(
+    fixtures_dir, yosys_command
+):
+    """The recursively-inserted nested SIB cell is the same sib_cell module type as every
+    top-level one, and structurally identical to its own nested sibling and to the unrelated
+    top-level SIB besides -- confirms set_keep is applied at every recursion depth, not just
+    the top level, so none of the three collapse into one shared instance."""
+    netlist, graph, _root = _build_inserted_network(fixtures_dir, yosys_command, _NESTED_SPECS)
+    top_cells = _synthesize(netlist, yosys_command)
+
+    counts: dict[str, int] = {}
+    for cell in top_cells.values():
+        attrs = cell.get("attributes", {})
+        if "warptap_sib_name" in attrs and "warptap_instrument_bit" not in attrs:
+            counts[attrs["warptap_sib_name"]] = counts.get(attrs["warptap_sib_name"], 0) + 1
+
+    assert counts == {name: 1 for name in _all_sib_names(graph.chain)}
+    assert len(counts) == 4  # sib_bank_a, sib_nested_a, sib_nested_b, sib_top_level
