@@ -128,8 +128,8 @@ def _set_bit_range(current: int, low: int, high: int, value: int) -> int:
 
 
 class PDLInterpreter:
-    """Drives ``iTarget``/``iWrite``/``iRead``/``iRunLoop``/``iApply`` against a single
-    flat/static SIB network (implementation_plan.md §7 Stage 4's scope)."""
+    """Drives ``iTarget``/``iWrite``/``iRead``/``iRunLoop``/``iApply`` against a single SIB
+    network (implementation_plan.md §7 Stage 4), flat or nested."""
 
     def __init__(self, graph: PhysicalGraph, root: ModuleInstance) -> None:
         self._graph = graph

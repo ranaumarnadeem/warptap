@@ -30,8 +30,8 @@ def _require_instrument(sib_name: str, instrument) -> None:
     ``layout_bit_length``/``compose_bits``'s own recursive branch."""
     if instrument is None:
         raise NotImplementedError(
-            f"sib_layout does not yet model instrument-less SIBs ({sib_name!r} has none) "
-            "-- implementation_plan.md §7 Stage 4/5 scope v1 to flat/static networks"
+            f"sib_layout requires every leaf slot to gate a real instrument "
+            f"({sib_name!r} has neither an instrument nor a nested network)"
         )
 
 
