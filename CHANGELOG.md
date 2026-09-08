@@ -53,6 +53,5 @@ entry per implementation stage.
 
 ### Explicitly out of scope
 
-Nested/hierarchical SIB trees, dynamic `existPr`-conditional PDL reachability, PDL import (no
-real parser exists anywhere to import via), any conformance claim against a specific IEEE
-standard edition.
+Dynamic `existPr`-conditional PDL reachability, PDL import (no real parser exists anywhere to
+import via), any conformance claim against a specific IEEE standard edition.
