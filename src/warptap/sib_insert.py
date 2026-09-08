@@ -27,7 +27,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from warptap.errors import WarptapError
-from warptap.icl_model import InstrumentDirection, PhysicalGraph
+from warptap.icl_model import InstrumentDirection, PhysicalGraph, SibNode
 from warptap.netlist import Bit, Module, Netlist
 from warptap.tap_ports import TCK, TDI, TDO, TMS, TRST_N
 from warptap.yosys_io import ingest
@@ -46,10 +46,9 @@ DEFAULT_IR_WIDTH = 4
 
 
 class SibInsertError(WarptapError):
-    """Raised when a :class:`~warptap.icl_model.PhysicalGraph` asks for something this v1
-    insertion pass doesn't support -- a SIB with no instrument, a nested SIB-gating-SIB
-    network (implementation_plan.md §7 Stage 4 explicitly scopes v1 to flat/static
-    networks), a zero-width instrument, a WRITE instrument with no ``signal_bits`` (nothing
+    """Raised when a :class:`~warptap.icl_model.PhysicalGraph` asks for something this
+    insertion pass doesn't support -- a SIB with neither an instrument nor a nested
+    sub-network, a zero-width instrument, a WRITE instrument with no ``signal_bits`` (nothing
     for it to drive), or a ``signal_bits`` length that doesn't match the instrument's
     ``width`` -- rather than silently emitting something structurally broken."""
 
@@ -65,6 +64,182 @@ def _import_template(netlist: Netlist, module_name: str, *, yosys_command: str |
     mod.set_module_attribute("keep_hierarchy", 1)
     mod.set_module_attribute("keep", 1)
     return mod
+
+
+def _insert_chain(
+    top_mod: Module,
+    chain: tuple[SibNode, ...],
+    *,
+    entry_bits: list[Bit],
+    select_bits: list,
+    tck_bits: list[Bit],
+    trst_n_bits: list[Bit],
+    capture_dr_bits: list[Bit],
+    shift_dr_bits: list[Bit],
+    update_dr_bits: list[Bit],
+    port_bits_by_name: dict[str, list[Bit]],
+    detached_bits_by_port: dict[str, list[Bit]],
+) -> list[Bit]:
+    """One level of a chain: each slot becomes one ``sib_cell`` instance, its ``select``
+    wired to ``select_bits`` (the constant 1 for a top-level chain; a parent SIB's own
+    ``nested_select`` output for a nested one -- exactly the same signal
+    ``instrument_write.v``'s WRITE instruments already consume today, just fed to another
+    ``sib_cell`` instance instead of an instrument cell; confirmed sound against real RTL,
+    ``tests/test_sib_cell_nested_cross_sim.py``). A leaf slot gets its instrument's own
+    chained bit cells wired between the SIB's ``nested_si``/``nested_so``, exactly as
+    before; a hierarchy slot (``slot.nested`` populated) recurses instead, with its own
+    ``nested_si``/``nested_select`` becoming the recursive call's ``entry_bits``/
+    ``select_bits`` and its returned final ``so`` becoming this slot's own ``nested_so``.
+    Returns the chain's own final ``so`` bits, threaded as the next slot's (or the caller's)
+    ``entry_bits``."""
+    prev_so = entry_bits
+    for slot in chain:
+        if slot.instrument is None and not slot.nested:
+            raise SibInsertError(
+                f"SIB {slot.sib_name!r} has neither an instrument nor a nested network -- "
+                "insert_sib_network requires every slot to gate one of the two"
+            )
+        if slot.instrument is not None and slot.nested:
+            raise SibInsertError(
+                f"SIB {slot.sib_name!r} has both an instrument and a nested network -- "
+                "exactly one of the two is allowed, never both"
+            )
+
+        sib_instance = f"warptap_{slot.sib_name}"
+        sib_so_bits = top_mod.new_wire(1, name=f"{sib_instance}_so")
+        nested_si_bits = top_mod.new_wire(1, name=f"{sib_instance}_nested_si")
+        nested_select_bits = top_mod.new_wire(1, name=f"{sib_instance}_nested_select")
+        nested_active_bits = top_mod.new_wire(1, name=f"{sib_instance}_nested_active")
+
+        if slot.nested:
+            # A nested sib_cell's own `select` must come from nested_active (po & select),
+            # not nested_select (po & shift_ff & select): unlike instrument_write.v's select
+            # (which only gates its update-latch commit), a sib_cell's select gates its WHOLE
+            # always-block, so it must stay asserted for this SIB's entire open window, not
+            # flicker with whatever shift_ff happens to be mirroring mid-shift. Verified
+            # against real RTL -- see tests/test_sib_insert_nested_cross_sim.py.
+            nested_so_bits = _insert_chain(
+                top_mod, slot.nested,
+                entry_bits=nested_si_bits, select_bits=nested_active_bits,
+                tck_bits=tck_bits, trst_n_bits=trst_n_bits,
+                capture_dr_bits=capture_dr_bits, shift_dr_bits=shift_dr_bits,
+                update_dr_bits=update_dr_bits,
+                port_bits_by_name=port_bits_by_name, detached_bits_by_port=detached_bits_by_port,
+            )
+        else:
+            if slot.instrument.width < 1:
+                raise SibInsertError(
+                    f"instrument {slot.instrument.name!r} (gated by {slot.sib_name!r}) has "
+                    f"width {slot.instrument.width} -- an instrument needs at least 1 bit"
+                )
+            width = slot.instrument.width
+            direction = slot.instrument.direction
+            capture_value = slot.instrument.capture_value
+            signal_bits = slot.instrument.signal_bits
+            if signal_bits and len(signal_bits) != width:
+                raise SibInsertError(
+                    f"instrument {slot.instrument.name!r} (gated by {slot.sib_name!r}) has "
+                    f"{len(signal_bits)} signal_bits but width {width}"
+                )
+            if direction is InstrumentDirection.WRITE and not signal_bits:
+                raise SibInsertError(
+                    f"instrument {slot.instrument.name!r} (gated by {slot.sib_name!r}) is a "
+                    "WRITE instrument with no signal_bits -- nothing for it to drive"
+                )
+
+            nested_so_bits = top_mod.new_wire(1, name=f"{sib_instance}_nested_so")
+            prev_inst_so: list[Bit] = nested_si_bits
+            for k in range(width):
+                inst_instance = f"{sib_instance}_inst_{k}"
+                is_last = k == width - 1
+                inst_so_bits = (
+                    nested_so_bits if is_last else top_mod.new_wire(1, name=f"{inst_instance}_so")
+                )
+                common_connections = {
+                    "si": prev_inst_so, "so": inst_so_bits,
+                    "capture_dr": capture_dr_bits, "shift_dr": shift_dr_bits,
+                    "tck": tck_bits, "trst_n": trst_n_bits,
+                }
+                attributes = {
+                    "warptap_sib_name": slot.sib_name,
+                    "warptap_instrument_bit": k,
+                }
+                if direction is InstrumentDirection.WRITE:
+                    binding = signal_bits[k]
+                    if binding.port_name not in detached_bits_by_port:
+                        detached_bits_by_port[binding.port_name] = top_mod.detach_port(
+                            binding.port_name
+                        )
+                    old_bits = detached_bits_by_port[binding.port_name]
+                    top_mod.add_cell(
+                        inst_instance,
+                        _INSTRUMENT_WRITE,
+                        port_directions={
+                            "si": "input", "so": "output", "pin_out": "output", "select": "input",
+                            "capture_dr": "input", "shift_dr": "input", "update_dr": "input",
+                            "tck": "input", "trst_n": "input",
+                        },
+                        connections={
+                            **common_connections,
+                            "pin_out": [old_bits[binding.bit]],
+                            "select": nested_select_bits,
+                            "update_dr": update_dr_bits,
+                        },
+                        attributes=attributes,
+                    )
+                else:
+                    if signal_bits:
+                        binding = signal_bits[k]
+                        pi_bits: list[Bit] = [port_bits_by_name[binding.port_name][binding.bit]]
+                    else:
+                        pi_bits = [str((capture_value >> k) & 1)]
+                    top_mod.add_cell(
+                        inst_instance,
+                        _BC1_SHIFT_ONLY,
+                        port_directions={
+                            "pi": "input", "si": "input", "so": "output",
+                            "capture_dr": "input", "shift_dr": "input",
+                            "tck": "input", "trst_n": "input",
+                        },
+                        connections={**common_connections, "pi": pi_bits},
+                        attributes=attributes,
+                    )
+                top_mod.set_keep(cell_name=inst_instance)
+                prev_inst_so = inst_so_bits
+
+        top_mod.add_cell(
+            sib_instance,
+            _SIB_CELL,
+            port_directions={
+                "si": "input", "so": "output",
+                "nested_so": "input", "nested_si": "output",
+                "nested_select": "output", "nested_active": "output",
+                "select": "input",
+                "capture_dr": "input", "shift_dr": "input", "update_dr": "input",
+                "tck": "input", "trst_n": "input",
+            },
+            connections={
+                "si": prev_so, "so": sib_so_bits,
+                "nested_so": nested_so_bits, "nested_si": nested_si_bits,
+                "nested_select": nested_select_bits, "nested_active": nested_active_bits,
+                "select": select_bits,
+                "capture_dr": capture_dr_bits, "shift_dr": shift_dr_bits,
+                "update_dr": update_dr_bits,
+                "tck": tck_bits, "trst_n": trst_n_bits,
+            },
+            attributes={
+                "warptap_sib_name": slot.sib_name,
+                **(
+                    {"warptap_instrument_name": slot.instrument.name}
+                    if slot.instrument is not None
+                    else {}
+                ),
+            },
+        )
+        top_mod.set_keep(cell_name=sib_instance)
+        prev_so = sib_so_bits
+
+    return prev_so
 
 
 def insert_sib_network(
@@ -86,24 +261,23 @@ def insert_sib_network(
     tree was built (Stage 10's ``icl_emit.to_icl()`` renders that tree's root name as the
     emitted ICL file's real module name) -- nothing here enforces that the two agree.
 
-    Each slot in ``graph.chain`` becomes one ``sib_cell`` instance (its ``select`` tied to
-    the constant 1 -- every v1 network is a flat list of top-level, unconditionally
-    reachable SIBs) plus ``slot.instrument.width`` chained instrument-bit cells wired
-    between the SIB's ``nested_si``/``nested_so`` (implementation_plan.md §7 Stage 9): a
-    READ instrument gets ``bc1_shift_only`` cells, each ``pi`` either tied to one bit of
-    the fixed ``capture_value`` stub (no ``signal_bits``) or fanned out from one real host
-    port bit (``signal_bits`` given); a WRITE instrument gets ``instrument_write`` cells,
-    each ``pin_out`` wired directly onto one bit of its target host port -- ``detach_port``
-    once per distinct port name, so every existing internal driver/reader of that port's old
-    bits is now driven by JTAG instead. A WRITE cell's ``select`` is wired to its own SIB's
-    ``nested_select`` output (``sib_cell.v``'s previously-unconsumed "future nested-SIB use"
-    port, now redefined as ``po & shift_ff`` -- open both before *and* after the current
-    edge) so its update-latch only ever commits on an edge that leaves that SIB open, never
-    one that opens or closes it -- without it, an unrelated ``iApply``'s phase-1 retargeting
-    shift (which walks every instrument cell's ``capture_dr``/``shift_dr``/``update_dr``
-    unconditionally, matching every other v1 cell) would commit garbage into this
-    instrument's real host signal, including while retargeting *away* from it. Mutates
-    ``netlist`` in place and returns
+    Each slot in ``graph.chain`` (and, recursively, in any nested sub-chain -- see
+    :func:`_insert_chain`) becomes one ``sib_cell`` instance plus, for a leaf slot,
+    ``slot.instrument.width`` chained instrument-bit cells wired between the SIB's
+    ``nested_si``/``nested_so`` (implementation_plan.md §7 Stage 9): a READ instrument gets
+    ``bc1_shift_only`` cells, each ``pi`` either tied to one bit of the fixed
+    ``capture_value`` stub (no ``signal_bits``) or fanned out from one real host port bit
+    (``signal_bits`` given); a WRITE instrument gets ``instrument_write`` cells, each
+    ``pin_out`` wired directly onto one bit of its target host port -- ``detach_port`` once
+    per distinct port name, so every existing internal driver/reader of that port's old bits
+    is now driven by JTAG instead. A WRITE cell's ``select`` is wired to its own SIB's
+    ``nested_select`` output (``sib_cell.v``'s ``po & shift_ff`` -- open both before *and*
+    after the current edge) so its update-latch only ever commits on an edge that leaves
+    that SIB open, never one that opens or closes it -- without it, an unrelated
+    ``iApply``'s phase-1 retargeting shift (which walks every instrument cell's
+    ``capture_dr``/``shift_dr``/``update_dr`` unconditionally, matching every other cell)
+    would commit garbage into this instrument's real host signal, including while
+    retargeting *away* from it. Mutates ``netlist`` in place and returns
     ``None`` -- matching ``insert_bsr()``'s convention; the caller already has the
     :class:`~warptap.icl_model.ModuleInstance` tree from ``build_sib_plan`` for dotted-
     address resolution, since instrument naming (unlike Yosys cell instance naming) is
@@ -117,7 +291,7 @@ def insert_sib_network(
     # "read top_mod.ports() before mutating any of them" precaution. A READ instrument
     # bound to a host port taps these bit ids directly (no detach needed, since observing
     # doesn't touch driver wiring); a WRITE instrument detaches its target port instead
-    # (see the per-slot loop below).
+    # (see _insert_chain).
     port_bits_by_name: dict[str, list[Bit]] = {p.name: p.bits for p in top_mod.ports()}
 
     _import_template(netlist, _TAP_CORE, yosys_command=yosys_command)
@@ -137,136 +311,18 @@ def insert_sib_network(
     shift_dr_bits = top_mod.new_wire(1, name="warptap_shift_dr")
     update_dr_bits = top_mod.new_wire(1, name="warptap_update_dr")
 
-    prev_so: list[Bit] = tdi_bits
     # Memoized once per port name (not once per bit): a second detach_port() call on an
     # already-detached port would overwrite the f"{name}_pre_bsr" netname entry the first
     # call created, corrupting it.
     detached_bits_by_port: dict[str, list[Bit]] = {}
 
-    for slot in graph.chain:
-        if slot.nested:
-            raise SibInsertError(
-                f"SIB {slot.sib_name!r} has a nested network -- insert_sib_network only "
-                "supports flat/static networks in v1 (implementation_plan.md §7 Stage 4)"
-            )
-        if slot.instrument is None:
-            raise SibInsertError(
-                f"SIB {slot.sib_name!r} has no instrument -- insert_sib_network requires "
-                "every v1 slot to gate a real instrument stub"
-            )
-        if slot.instrument.width < 1:
-            raise SibInsertError(
-                f"instrument {slot.instrument.name!r} (gated by {slot.sib_name!r}) has "
-                f"width {slot.instrument.width} -- an instrument needs at least 1 bit"
-            )
-
-        sib_instance = f"warptap_{slot.sib_name}"
-        sib_so_bits = top_mod.new_wire(1, name=f"{sib_instance}_so")
-        nested_si_bits = top_mod.new_wire(1, name=f"{sib_instance}_nested_si")
-        nested_so_bits = top_mod.new_wire(1, name=f"{sib_instance}_nested_so")
-        nested_select_bits = top_mod.new_wire(1, name=f"{sib_instance}_nested_select")
-
-        top_mod.add_cell(
-            sib_instance,
-            _SIB_CELL,
-            port_directions={
-                "si": "input", "so": "output",
-                "nested_so": "input", "nested_si": "output", "nested_select": "output",
-                "select": "input",
-                "capture_dr": "input", "shift_dr": "input", "update_dr": "input",
-                "tck": "input", "trst_n": "input",
-            },
-            connections={
-                "si": prev_so, "so": sib_so_bits,
-                "nested_so": nested_so_bits, "nested_si": nested_si_bits,
-                "nested_select": nested_select_bits,
-                "select": ["1"],
-                "capture_dr": capture_dr_bits, "shift_dr": shift_dr_bits,
-                "update_dr": update_dr_bits,
-                "tck": tck_bits, "trst_n": trst_n_bits,
-            },
-            attributes={
-                "warptap_sib_name": slot.sib_name,
-                "warptap_instrument_name": slot.instrument.name,
-            },
-        )
-        top_mod.set_keep(cell_name=sib_instance)
-
-        width = slot.instrument.width
-        direction = slot.instrument.direction
-        capture_value = slot.instrument.capture_value
-        signal_bits = slot.instrument.signal_bits
-        if signal_bits and len(signal_bits) != width:
-            raise SibInsertError(
-                f"instrument {slot.instrument.name!r} (gated by {slot.sib_name!r}) has "
-                f"{len(signal_bits)} signal_bits but width {width}"
-            )
-        if direction is InstrumentDirection.WRITE and not signal_bits:
-            raise SibInsertError(
-                f"instrument {slot.instrument.name!r} (gated by {slot.sib_name!r}) is a "
-                "WRITE instrument with no signal_bits -- nothing for it to drive"
-            )
-
-        prev_inst_so: list[Bit] = nested_si_bits
-        for k in range(width):
-            inst_instance = f"{sib_instance}_inst_{k}"
-            is_last = k == width - 1
-            inst_so_bits = (
-                nested_so_bits if is_last else top_mod.new_wire(1, name=f"{inst_instance}_so")
-            )
-            common_connections = {
-                "si": prev_inst_so, "so": inst_so_bits,
-                "capture_dr": capture_dr_bits, "shift_dr": shift_dr_bits,
-                "tck": tck_bits, "trst_n": trst_n_bits,
-            }
-            attributes = {
-                "warptap_sib_name": slot.sib_name,
-                "warptap_instrument_bit": k,
-            }
-            if direction is InstrumentDirection.WRITE:
-                binding = signal_bits[k]
-                if binding.port_name not in detached_bits_by_port:
-                    detached_bits_by_port[binding.port_name] = top_mod.detach_port(
-                        binding.port_name
-                    )
-                old_bits = detached_bits_by_port[binding.port_name]
-                top_mod.add_cell(
-                    inst_instance,
-                    _INSTRUMENT_WRITE,
-                    port_directions={
-                        "si": "input", "so": "output", "pin_out": "output", "select": "input",
-                        "capture_dr": "input", "shift_dr": "input", "update_dr": "input",
-                        "tck": "input", "trst_n": "input",
-                    },
-                    connections={
-                        **common_connections,
-                        "pin_out": [old_bits[binding.bit]],
-                        "select": nested_select_bits,
-                        "update_dr": update_dr_bits,
-                    },
-                    attributes=attributes,
-                )
-            else:
-                if signal_bits:
-                    binding = signal_bits[k]
-                    pi_bits: list[Bit] = [port_bits_by_name[binding.port_name][binding.bit]]
-                else:
-                    pi_bits = [str((capture_value >> k) & 1)]
-                top_mod.add_cell(
-                    inst_instance,
-                    _BC1_SHIFT_ONLY,
-                    port_directions={
-                        "pi": "input", "si": "input", "so": "output",
-                        "capture_dr": "input", "shift_dr": "input",
-                        "tck": "input", "trst_n": "input",
-                    },
-                    connections={**common_connections, "pi": pi_bits},
-                    attributes=attributes,
-                )
-            top_mod.set_keep(cell_name=inst_instance)
-            prev_inst_so = inst_so_bits
-
-        prev_so = sib_so_bits
+    prev_so = _insert_chain(
+        top_mod, graph.chain,
+        entry_bits=tdi_bits, select_bits=["1"],  # every top-level SIB is unconditionally reachable
+        tck_bits=tck_bits, trst_n_bits=trst_n_bits,
+        capture_dr_bits=capture_dr_bits, shift_dr_bits=shift_dr_bits, update_dr_bits=update_dr_bits,
+        port_bits_by_name=port_bits_by_name, detached_bits_by_port=detached_bits_by_port,
+    )
 
     top_mod.add_cell(
         "warptap_tap_core",

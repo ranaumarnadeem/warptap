@@ -27,6 +27,17 @@ module sib_cell (
                                   // edge, so `po & shift_ff` is true only while a segment
                                   // stays open across the edge, never while it's opening or
                                   // closing.
+    output wire nested_active,   // = po & select: stably true for the SIB's whole open
+                                  // window, unlike nested_select -- needed to gate ANOTHER
+                                  // sib_cell's own `select` (nested-SIB plan): that select
+                                  // enables this WHOLE always-block (capture_dr/shift_dr/
+                                  // update_dr alike, unlike instrument_write.v's own select,
+                                  // which gates only its update-latch commit), so it must
+                                  // stay asserted throughout a multi-cycle shift even while
+                                  // shift_ff is itself busy mirroring varying content one
+                                  // bit at a time -- nested_select's own shift_ff term would
+                                  // otherwise flicker it off mid-shift, freezing the nested
+                                  // SIB the moment this one's shift_ff happens to read 0.
     input  wire select,          // AND-ed into every local action; v1 ties this to the
                                   // constant 1 for every top-level SIB (unconditionally
                                   // reachable directly off the TAP)
@@ -60,4 +71,5 @@ module sib_cell (
     assign so = shift_ff;
     assign nested_si = si;
     assign nested_select = po & shift_ff & select;
+    assign nested_active = po & select;
 endmodule
