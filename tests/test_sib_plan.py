@@ -5,7 +5,8 @@ from __future__ import annotations
 
 import pytest
 
-from warptap.sib_plan import InstrumentSpec, build_sib_plan
+from warptap.icl_model import ICLModelError
+from warptap.sib_plan import HierarchySpec, InstrumentSpec, build_sib_plan
 
 
 def test_single_instrument_gets_one_top_level_sib():
@@ -66,3 +67,91 @@ def test_empty_specs_produces_empty_network():
     graph, root = build_sib_plan([])
     assert graph.chain == ()
     assert root.children == ()
+
+
+def test_hierarchy_spec_produces_a_nested_sib_with_no_instrument():
+    graph, _root = build_sib_plan(
+        [HierarchySpec("bank_a", children=[InstrumentSpec("deep", width=1, capture_value=0)])]
+    )
+    assert len(graph.chain) == 1
+    outer = graph.chain[0]
+    assert outer.sib_name == "sib_bank_a"
+    assert outer.instrument is None
+    assert len(outer.nested) == 1
+    inner = outer.nested[0]
+    assert inner.sib_name == "sib_deep"
+    assert inner.instrument.name == "deep"
+    assert inner.nested == ()
+
+
+def test_hierarchy_spec_can_nest_arbitrarily_deep():
+    graph, _root = build_sib_plan(
+        [
+            HierarchySpec(
+                "level1",
+                children=[
+                    HierarchySpec(
+                        "level2",
+                        children=[InstrumentSpec("leaf", width=1, capture_value=0)],
+                    )
+                ],
+            )
+        ]
+    )
+    level1 = graph.chain[0]
+    level2 = level1.nested[0]
+    leaf = level2.nested[0]
+    assert (level1.sib_name, level2.sib_name, leaf.sib_name) == (
+        "sib_level1", "sib_level2", "sib_leaf",
+    )
+    assert leaf.instrument.name == "leaf"
+
+
+def test_hierarchy_spec_contributes_no_module_instance_of_its_own():
+    """The ModuleInstance tree stays flat regardless of SIB-nesting depth -- only leaf
+    instruments are ever direct siblings of the root, matching the pre-existing sibling-
+    addressing convention every other build_sib_plan test already pins down."""
+    _graph, root = build_sib_plan(
+        [
+            HierarchySpec(
+                "bank_a",
+                children=[
+                    InstrumentSpec("deep_a", width=1, capture_value=0),
+                    InstrumentSpec("deep_b", width=1, capture_value=0),
+                ],
+            ),
+            InstrumentSpec("top_level", width=1, capture_value=0),
+        ]
+    )
+    assert {c.name for c in root.children} == {"deep_a", "deep_b", "top_level"}
+    assert all(c.children == () for c in root.children)
+
+
+def test_duplicate_name_within_the_same_level_raises_value_error():
+    with pytest.raises(ValueError, match="dup"):
+        build_sib_plan(
+            [
+                HierarchySpec("bank_a", children=[InstrumentSpec("x", width=1, capture_value=0)]),
+                HierarchySpec("dup", children=[InstrumentSpec("y", width=1, capture_value=0)]),
+                InstrumentSpec("dup", width=1, capture_value=0),
+            ]
+        )
+
+
+def test_duplicate_name_across_different_levels_raises_icl_model_error():
+    """The per-level ValueError check above can't see this: "shared" appears once under
+    branch_a and once under branch_b -- two SEPARATE sibling lists, each internally
+    duplicate-free, so the per-level check never compares them against each other. Both
+    still produce SIB name "sib_shared", caught only by validate_physical_graph's
+    whole-tree pass."""
+    with pytest.raises(ICLModelError, match="shared"):
+        build_sib_plan(
+            [
+                HierarchySpec(
+                    "branch_a", children=[InstrumentSpec("shared", width=1, capture_value=0)]
+                ),
+                HierarchySpec(
+                    "branch_b", children=[InstrumentSpec("shared", width=1, capture_value=0)]
+                ),
+            ]
+        )
