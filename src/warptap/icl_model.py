@@ -68,11 +68,12 @@ class InstrumentNode(NamedTuple):
 
 
 class SibNode(NamedTuple):
-    """One SIB plus everything it gates (§3.2 structure 1). ``nested`` is always empty in v1
-    (flat/static network per implementation_plan.md §7 Stage 4's scope) but is a real tuple,
-    not ``None`` -- ``sib_retarget.open_path_to`` is genuinely recursive code that only needs
-    deepening, not rewriting, once nested SIB-gating-SIB networks land. Matches
-    tap_model.py's own "give the parameter now" precedent."""
+    """One SIB plus everything it gates (§3.2 structure 1). Exactly one of ``instrument``/
+    ``nested`` is ever populated: a leaf SIB gates one instrument directly; a hierarchy SIB
+    (``instrument=None``) gates a nested sub-network instead, recursively -- real IEEE 1687
+    (a SIB's ``fromSO`` binds to either an instrument's ``SO`` or another SIB's ``SO``, never
+    both). :func:`validate_physical_graph` enforces this invariant, plus global ``sib_name``
+    uniqueness across the whole tree, on every tree this codebase constructs."""
 
     sib_name: str
     instrument: Optional[InstrumentNode]
@@ -81,6 +82,48 @@ class SibNode(NamedTuple):
 
 class PhysicalGraph(NamedTuple):
     chain: tuple[SibNode, ...]  # TDI-side-first order -- fixes each SIB's own bit position
+
+
+class ICLModelError(WarptapError):
+    """Raised by :func:`validate_physical_graph` for a structurally invalid
+    :class:`PhysicalGraph` -- a :class:`SibNode` with both ``instrument`` and ``nested``
+    populated, one with neither, or a ``sib_name`` that repeats anywhere else in the tree.
+    Every membership-based lookup used throughout retargeting/layout (``sib_retarget.py``,
+    ``sib_layout.py``, ``PDLInterpreter._currently_open``) is a flat, unqualified name-keyed
+    set with no path-qualification, so a duplicate name anywhere -- not just within one
+    level -- would silently corrupt those lookups rather than raise."""
+
+
+def validate_physical_graph(graph: PhysicalGraph) -> None:
+    """Walk the whole tree once, recursively, checking both invariants
+    :class:`ICLModelError` documents. Called once at each of the two places a
+    :class:`SibNode` tree is actually constructed (``sib_plan.build_sib_plan``,
+    ``icl_import.import_icl``) rather than re-checked at every consumption site --
+    catches a malformed tree at the one place it could have entered the system."""
+    seen: dict[str, bool] = {}
+
+    def _walk(node: SibNode) -> None:
+        if node.sib_name in seen:
+            raise ICLModelError(
+                f"SIB name {node.sib_name!r} is not unique -- appears more than once in "
+                "this tree (every sib_name must be globally unique, not just per level)"
+            )
+        seen[node.sib_name] = True
+        if node.instrument is not None and node.nested:
+            raise ICLModelError(
+                f"SIB {node.sib_name!r} has both an instrument and a nested network -- "
+                "exactly one of the two is allowed, never both"
+            )
+        if node.instrument is None and not node.nested:
+            raise ICLModelError(
+                f"SIB {node.sib_name!r} has neither an instrument nor a nested network -- "
+                "it must gate exactly one of the two"
+            )
+        for child in node.nested:
+            _walk(child)
+
+    for top in graph.chain:
+        _walk(top)
 
 
 class ModuleInstance(NamedTuple):
