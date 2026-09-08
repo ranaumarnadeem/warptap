@@ -58,12 +58,31 @@ entry point. A separate, independent performance bug in the same construction pa
 source-file resolution) purely to log each parse handler's own already-known name -- made any
 network large enough to be interesting impractically slow; replaced with the equivalent but
 allocation-free ``sys._getframe().f_code.co_name`` (roughly 15x faster on the affected paths,
-confirmed by profiling). ``Ijtag(...)`` also raises ``ValueError`` unconditionally for any
-``AccessLink`` block, regardless of content (a real, still-open gap in the vendored tool, not
-warptap's). Both are caught here and re-raised as :class:`IclImportError` naming the real
-cause, rather than letting a bare third-party traceback surface as this project's own failure;
-the ``AssertionError`` branch remains as a safety net for any *other*, not-yet-diagnosed
-internal assertion the vendored tool might still raise for a shape this project hasn't hit.
+confirmed by profiling).
+
+**A much larger, separate performance finding**: ``Ijtag(...)``'s constructor always built a
+full Z3 SMT-solver-based retargeting-vector model (``IclRegisterModel``/``create_retageter``,
+used for that tool's own ``iWrite``/``iRead``/``iApply`` vector generation) as an inseparable
+part of construction, with no way to opt out through the tool's own original public API.
+Profiling found this -- not the graph traversal above -- is the *real* scaling bottleneck:
+roughly linear in instrument count, but a network of just 5 instruments at width 4 exceeded
+five minutes, while the exact same shape completes in well under a second once this step is
+skipped. :func:`import_icl` never uses ``ijtag.ijtag_reg_model``/``ijtag.icl_retargeter`` at
+all -- only ``ijtag.icl_instance`` (the structural parse tree, fully built *before* this step
+even starts) -- so this cost was always being paid for nothing. Fixed by adding an additive
+``build_register_model: bool = True`` parameter to ``Ijtag.__init__`` (default preserves every
+existing caller's behavior exactly, including ``icl_emit.py``'s own validation tests, which
+deliberately want the full retargeting-graph build); :func:`import_icl` passes ``False``.
+Confirmed empirically: a 100-instrument, width-16 network (1600 total bits, comfortably
+industrial-scale) imports in ~7 seconds with this fix, versus not completing at all within five
+minutes at a small fraction of that size beforehand.
+
+``Ijtag(...)`` also raises ``ValueError`` unconditionally for any ``AccessLink`` block,
+regardless of content (a real, still-open gap in the vendored tool, not warptap's). All three
+are caught here and re-raised as :class:`IclImportError` naming the real cause, rather than
+letting a bare third-party traceback surface as this project's own failure; the
+``AssertionError`` branch remains as a safety net for any *other*, not-yet-diagnosed internal
+assertion the vendored tool might still raise for a shape this project hasn't hit.
 """
 
 from __future__ import annotations
@@ -261,14 +280,16 @@ def import_icl(
     -- matching :mod:`warptap.icl_emit`'s own emission the other direction.
     """
     try:
-        ijtag = icl_parser_module(top_module, [str(p) for p in icl_paths])
+        ijtag = icl_parser_module(
+            top_module, [str(p) for p in icl_paths], build_register_model=False
+        )
     except AssertionError as exc:
         raise IclImportError(
             "icl_parser's own retargeting-graph construction (IclRegisterModel) failed for "
-            f"module {top_module!r} -- a real, unresolved issue in the vendored tool itself, "
-            "confirmed to be triggered by any width>1 instrument regardless of instrument "
-            "count or READ/WRITE direction (implementation_plan.md Stage 10/12); a network "
-            "built entirely from width=1 instruments is confirmed to build cleanly"
+            f"module {top_module!r} -- an internal assertion in the vendored tool itself, "
+            "not yet diagnosed for this specific shape (the previously-diagnosed width>1 "
+            "case is fixed, and this code path no longer even builds the retargeting graph "
+            "at all, see module docstring)"
         ) from exc
     except ValueError as exc:
         if "AccessLink" in str(exc):
