@@ -132,3 +132,47 @@ def test_instrumentless_closed_sib_is_fine():
     graph = PhysicalGraph(chain=(SibNode("sib_a", instrument=None),))
     assert layout_bit_length(graph, frozenset()) == 1
     assert compose_bits(graph, frozenset(), frozenset()) == [0]
+
+
+def _nested_graph() -> PhysicalGraph:
+    inner = SibNode("sib_inner", _instrument("deep", width=3))
+    outer = SibNode("sib_outer", instrument=None, nested=(inner,))
+    return PhysicalGraph(chain=(outer,))
+
+
+def test_closed_hierarchy_sib_contributes_only_its_own_bit():
+    """Regardless of how much is nested inside, a closed hierarchy SIB is exactly as cheap
+    as a closed leaf -- its nested content isn't part of the live chain at all."""
+    assert layout_bit_length(_nested_graph(), frozenset()) == 1
+
+
+def test_open_hierarchy_but_still_closed_nested_child():
+    """Opening the hierarchy SIB alone (its own nested child still closed) exposes the
+    child's own closed-bypass bit, plus the hierarchy SIB's own select bit -- matching the
+    real RTL/cross-sim spike's own finding that a single round can only open one previously-
+    closed level."""
+    graph = _nested_graph()
+    assert layout_bit_length(graph, frozenset({"sib_outer"})) == 1 + 1
+
+
+def test_open_hierarchy_and_open_nested_child():
+    graph = _nested_graph()
+    opened = frozenset({"sib_outer", "sib_inner"})
+    assert layout_bit_length(graph, opened) == (3 + 1) + 1  # deep's width + its own + outer's own
+
+
+def test_compose_bits_closed_hierarchy_contributes_only_its_select_bit():
+    graph = _nested_graph()
+    bits = compose_bits(graph, frozenset(), frozenset(), target_sib=None, payload_value=0)
+    assert bits == [0]
+
+
+def test_compose_bits_open_hierarchy_recurses_into_nested_chain():
+    """target_sib names the leaf SIB directly -- the recursive walk matches it at whatever
+    depth it actually occurs, exactly as compose_bits already does for a flat chain, with
+    the hierarchy SIB's own select bit appended after its nested chain's own bits."""
+    graph = _nested_graph()
+    opened = frozenset({"sib_outer", "sib_inner"})
+    bits = compose_bits(graph, opened, opened, target_sib="sib_inner", payload_value=0b101)
+    # inner: 3 payload content bits (LSB first) + inner's own select bit, then outer's own.
+    assert bits == [1, 0, 1, 1, 1]
