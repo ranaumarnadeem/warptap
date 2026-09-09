@@ -1,4 +1,4 @@
-// N-arm ScanMux cell (multi-arm ScanMux plan, Phase 0): the IEEE 1687 primitive that
+// N-arm ScanMux cell (multi-arm ScanMux plan, Phase 0/5): the IEEE 1687 primitive that
 // conditionally splices exactly ONE of ARMS mutually-exclusive nested segments into the
 // active scan chain, chosen by an SEL_WIDTH-bit self-select register -- the N-arm
 // generalization of sib_cell.v's binary (1-bit, 2-outcome) open/closed splice. A new,
@@ -33,6 +33,21 @@
 // matched, or this cell's own register's LSB (the plain-shift-register readout) while
 // bypassing.
 //
+// Decode/shift logic uses `generate`/`genvar` and reduction operators, NOT a `for` loop
+// inside an `always` block (an earlier version did, and passed its own direct-iverilog
+// cross-sim cleanly, since Phase 0's spike never round-tripped through Yosys) -- found, not
+// assumed: inserting this cell via sib_insert.py (which ingests every RTL template through
+// Yosys `read_verilog`/`write_verilog` to fold it into one netlist, unlike Phase 0's spike,
+// which hands rtl files directly to iverilog) produced genuinely broken output for a
+// `for`-loop-in-`always` integer variable (`assign 32'd2 = <signal>;` -- operands backwards,
+// a real Yosys `write_verilog` round-trip limitation for that construct, reproduced and
+// confirmed via a standalone ingest+write_verilog+iverilog-compile check before rewriting).
+// `generate`/`genvar` and `generate if` (for the SEL_WIDTH==1 degenerate case, which a plain
+// `{fresh_bit, shift_ff[SEL_WIDTH-1:1]}` concatenation can't express -- see sib_cell.v's own
+// note on the same edge case) are both standard, widely-synthesized constructs and round-trip
+// cleanly. Re-verified bit-for-bit equivalent to the original loop-based version via this
+// same file's own cross-sim test before and after the rewrite.
+//
 // V1 requires each arm to have exactly one committed value (icl_model.ScanArm's own
 // `values` field is forward-compatible with a real multi-value catch-all arm, but every
 // consuming code path -- this one included -- assumes ARM_VALUES holds exactly one packed
@@ -47,9 +62,9 @@ module scan_mux_cell #(
                                               // (while matched) the matched arm's relayed so
     input  wire [ARMS-1:0] arm_so,          // scan-out fed back from each of the ARMS arms
     output wire            nested_si,       // = si, fanned to every arm unconditionally
-    output reg  [ARMS-1:0] arm_select,      // per-arm nested_select equivalent: stays-matched
+    output wire [ARMS-1:0] arm_select,      // per-arm nested_select equivalent: stays-matched
                                               // across this edge (old po AND new shift_ff)
-    output reg  [ARMS-1:0] arm_active,      // per-arm nested_active equivalent: matched
+    output wire [ARMS-1:0] arm_active,      // per-arm nested_active equivalent: matched
                                               // before this edge, for the whole open window
     input  wire            select,
     input  wire            capture_dr,
@@ -63,42 +78,60 @@ module scan_mux_cell #(
                                           // hardware-guaranteed-safe-default sib_cell.v's own
                                           // po=0-means-closed already relies on.
 
-    integer i;
-    reg matched_old_c;      // po (OLD, this edge) decodes to some arm
-    reg relay_so_c;         // that arm's own arm_so bit, for the shift-relay and `so` output
+    // arm_match_old[k]/arm_match_new[k]: does po/shift_ff decode to arm k. At most one bit of
+    // each is ever set (icl_model.validate_physical_graph guarantees every arm's value is
+    // unique within one mux), so a plain OR-reduction below correctly picks "the" match.
+    wire [ARMS-1:0] arm_match_old, arm_match_new;
+    genvar g;
+    generate
+        for (g = 0; g < ARMS; g = g + 1) begin : DECODE
+            assign arm_match_old[g] = (po == ARM_VALUES[g*SEL_WIDTH +: SEL_WIDTH]);
+            assign arm_match_new[g] = (shift_ff == ARM_VALUES[g*SEL_WIDTH +: SEL_WIDTH]);
+            assign arm_active[g] = arm_match_old[g] & select;
+            assign arm_select[g] = arm_match_old[g] & arm_match_new[g] & select;
+        end
+    endgenerate
 
-    always @(*) begin
-        matched_old_c = 1'b0;
-        relay_so_c = 1'b0;
-        arm_active = {ARMS{1'b0}};
-        arm_select = {ARMS{1'b0}};
-        for (i = 0; i < ARMS; i = i + 1) begin
-            if (po == ARM_VALUES[i*SEL_WIDTH +: SEL_WIDTH]) begin
-                matched_old_c = 1'b1;
-                relay_so_c = arm_so[i];
-                arm_active[i] = select;
-                arm_select[i] = select
-                    && (shift_ff == ARM_VALUES[i*SEL_WIDTH +: SEL_WIDTH]);
+    wire matched_old_c = |arm_match_old;               // po decodes to some arm
+    wire relay_so_c = |(arm_match_old & arm_so);        // that arm's own arm_so bit (0 if none)
+
+    generate
+        if (SEL_WIDTH == 1) begin : SEL_SCALAR
+            // The concatenation form below needs SEL_WIDTH >= 2 (shift_ff[SEL_WIDTH-1:1]
+            // would otherwise be the invalid, backwards range [0:1]) -- this degenerates to
+            // exactly sib_cell.v's own `shift_ff <= po ? nested_so : si`.
+            always @(posedge tck or negedge trst_n) begin
+                if (!trst_n) begin
+                    shift_ff <= 1'b0;
+                    po <= 1'b0;
+                end else if (select) begin
+                    if (capture_dr)
+                        shift_ff <= po;
+                    else if (shift_dr)
+                        shift_ff <= matched_old_c ? relay_so_c : si;
+                    if (update_dr)
+                        po <= shift_ff;
+                end
+            end
+        end else begin : SEL_VECTOR
+            always @(posedge tck or negedge trst_n) begin
+                if (!trst_n) begin
+                    shift_ff <= {SEL_WIDTH{1'b0}};
+                    po <= {SEL_WIDTH{1'b0}};
+                end else if (select) begin
+                    if (capture_dr) begin
+                        shift_ff <= po;                     // self-capture, mirrors sib_cell.v
+                    end else if (shift_dr) begin
+                        shift_ff <= matched_old_c
+                            ? {relay_so_c, shift_ff[SEL_WIDTH-1:1]}
+                            : {si, shift_ff[SEL_WIDTH-1:1]};
+                    end
+                    if (update_dr)
+                        po <= shift_ff;
+                end
             end
         end
-    end
-
-    always @(posedge tck or negedge trst_n) begin
-        if (!trst_n) begin
-            shift_ff <= {SEL_WIDTH{1'b0}};
-            po <= {SEL_WIDTH{1'b0}};
-        end else if (select) begin
-            if (capture_dr) begin
-                shift_ff <= po;                     // self-capture, mirrors sib_cell.v
-            end else if (shift_dr) begin
-                for (i = 0; i < SEL_WIDTH - 1; i = i + 1)
-                    shift_ff[i] <= shift_ff[i + 1];  // right-shift the rest down
-                shift_ff[SEL_WIDTH - 1] <= matched_old_c ? relay_so_c : si;  // fresh bit in
-            end
-            if (update_dr)
-                po <= shift_ff;
-        end
-    end
+    endgenerate
 
     assign so = matched_old_c ? relay_so_c : shift_ff[0];
     assign nested_si = si;
