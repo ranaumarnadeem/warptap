@@ -20,6 +20,32 @@ Unlike ``bsr_insert.py``, no ``extest_mode`` decode cell is built here: ``sib_ce
 active -- it shifts/captures/updates purely as a function of ``capture_dr``/``shift_dr``/
 ``update_dr``, which are already instruction-independent per-state strobes from ``tap_core``),
 so there is nothing in this insertion pass to consume it.
+
+A :class:`~warptap.icl_model.ScanMuxNode` slot instantiates ``rtl/scan_mux_cell.v`` instead,
+one FRESHLY-IMPORTED, uniquely-named module PER mux instance -- NOT the shared-import-once
+pattern every other template here uses (:func:`_import_template`), and not a per-instance
+``add_cell(parameters={...})`` override either, even though Yosys JSON's own cell-parameters
+mechanism (a fixed-width MSB-first binary string) looks like it should support this. Confirmed
+empirically, not assumed: a module imported via plain ``ingest()`` (the ``hierarchy``/``proc``
+pipeline every other template already goes through once) permanently loses its own
+overridability -- instantiating it with ANY parameter override afterward fails to compile
+(``iverilog`` reports "parameter ... not found"), regardless of whether that parameter affects
+a port width or not. ``scan_mux_cell`` is the first template here that genuinely needs
+different parameter values per instance (every other one is either unparameterized or, like
+``tap_core``, always instantiated with its own defaults), so this gap was never exposed
+before. :func:`_import_scan_mux_template` instead calls
+:func:`~warptap.yosys_io.ingest_with_params` per mux node, baking ``ARMS``/``SEL_WIDTH``/
+``ARM_VALUES`` in via Yosys's own ``chparam`` (a plain-decimal value syntax, a different
+layer/format from JSON cell parameters) *before* ``hierarchy`` runs, under a module name
+derived from the mux's own globally-unique ``mux_name`` (``warptap_scan_mux_<mux_name>``,
+matching the prefix ``icl_import.py``'s own future detection logic looks for) -- one Yosys
+module per distinct mux instance, instantiated with zero further overrides.
+
+Each mux's own instance is tagged ``warptap_mux_name`` (not ``warptap_sib_name``, so every
+existing SIB-only structural test stays unaffected); each arm's own leaf-instrument wiring is
+:func:`_insert_leaf_instrument_bits`, a deliberate duplicate of the SibNode leaf case below
+(two occurrences; keeps this new code path from touching the already real-RTL-cross-sim-proven
+SibNode one at all).
 """
 
 from __future__ import annotations
@@ -27,10 +53,10 @@ from __future__ import annotations
 from pathlib import Path
 
 from warptap.errors import WarptapError
-from warptap.icl_model import InstrumentDirection, PhysicalGraph, SibNode
+from warptap.icl_model import ChainSlot, InstrumentDirection, PhysicalGraph, ScanMuxNode, SibNode
 from warptap.netlist import Bit, Module, Netlist
 from warptap.tap_ports import TCK, TDI, TDO, TMS, TRST_N
-from warptap.yosys_io import ingest
+from warptap.yosys_io import ingest, ingest_with_params
 
 _RTL_DIR = Path(__file__).resolve().parent / "rtl"
 
@@ -38,6 +64,7 @@ _TAP_CORE = "tap_core"
 _BC1_SHIFT_ONLY = "bc1_shift_only"
 _SIB_CELL = "sib_cell"
 _INSTRUMENT_WRITE = "instrument_write"
+_SCAN_MUX_CELL = "scan_mux_cell"
 
 # Must match rtl/tap_core.v's own parameter default: v1 never overrides it on the
 # hierarchical instance (same reasoning as bsr_insert.py's DEFAULT_IR_WIDTH), so this is
@@ -66,9 +93,135 @@ def _import_template(netlist: Netlist, module_name: str, *, yosys_command: str |
     return mod
 
 
-def _insert_chain(
+def _import_scan_mux_template(
+    netlist: Netlist,
+    slot: ScanMuxNode,
+    *,
+    n_arms: int,
+    packed_values: int,
+    yosys_command: str | None,
+) -> str:
+    """Imports a freshly ``ARMS``/``SEL_WIDTH``/``ARM_VALUES``-specialized copy of
+    ``rtl/scan_mux_cell.v`` for THIS mux instance alone, registered into ``netlist`` under a
+    new module name derived from the mux's own globally-unique ``mux_name`` -- see this
+    module's own docstring for why a shared, imported-once template (:func:`_import_template`,
+    every other RTL template's own convention here) can't work for a module needing different
+    parameter values per instance. Returns that new module type name, to instantiate."""
+    module_type = f"warptap_scan_mux_{slot.mux_name}"
+    raw = ingest_with_params(
+        [_RTL_DIR / f"{_SCAN_MUX_CELL}.v"],
+        _SCAN_MUX_CELL,
+        {"ARMS": n_arms, "SEL_WIDTH": slot.select_width, "ARM_VALUES": packed_values},
+        yosys_command=yosys_command,
+    )
+    mod = netlist.add_module(module_type, raw["modules"][_SCAN_MUX_CELL])
+    mod.data.get("attributes", {}).pop("top", None)
+    mod.set_module_attribute("keep_hierarchy", 1)
+    mod.set_module_attribute("keep", 1)
+    return module_type
+
+
+def _insert_leaf_instrument_bits(
     top_mod: Module,
-    chain: tuple[SibNode, ...],
+    instrument,
+    *,
+    owner_desc: str,
+    instance_prefix: str,
+    entry_bits: list[Bit],
+    select_bits: list,
+    base_attributes: dict,
+    tck_bits: list[Bit],
+    trst_n_bits: list[Bit],
+    capture_dr_bits: list[Bit],
+    shift_dr_bits: list[Bit],
+    update_dr_bits: list[Bit],
+    port_bits_by_name: dict[str, list[Bit]],
+    detached_bits_by_port: dict[str, list[Bit]],
+) -> list[Bit]:
+    """One instrument's own chained per-bit cells (WRITE: ``instrument_write``, gated by
+    ``select_bits``; READ: ``bc1_shift_only``, ungated) between ``entry_bits`` and the
+    returned final ``so`` -- exactly the leaf-instrument wiring a plain SibNode's own leaf
+    slot needs, duplicated here (not shared) for a ScanMuxNode arm's own leaf case: two
+    occurrences, this codebase's own "rule of three" threshold, and keeping this new code
+    path fully separate from the just-inserted, real-RTL-cross-sim-proven SibNode one avoids
+    any risk of it regressing while generalizing for muxes."""
+    width = instrument.width
+    if width < 1:
+        raise SibInsertError(
+            f"instrument {instrument.name!r} (gated by {owner_desc}) has width {width} -- "
+            "an instrument needs at least 1 bit"
+        )
+    direction = instrument.direction
+    capture_value = instrument.capture_value
+    signal_bits = instrument.signal_bits
+    if signal_bits and len(signal_bits) != width:
+        raise SibInsertError(
+            f"instrument {instrument.name!r} (gated by {owner_desc}) has "
+            f"{len(signal_bits)} signal_bits but width {width}"
+        )
+    if direction is InstrumentDirection.WRITE and not signal_bits:
+        raise SibInsertError(
+            f"instrument {instrument.name!r} (gated by {owner_desc}) is a WRITE instrument "
+            "with no signal_bits -- nothing for it to drive"
+        )
+
+    prev_inst_so: list[Bit] = entry_bits
+    for k in range(width):
+        inst_instance = f"{instance_prefix}_inst_{k}"
+        inst_so_bits = top_mod.new_wire(1, name=f"{inst_instance}_so")
+        common_connections = {
+            "si": prev_inst_so, "so": inst_so_bits,
+            "capture_dr": capture_dr_bits, "shift_dr": shift_dr_bits,
+            "tck": tck_bits, "trst_n": trst_n_bits,
+        }
+        attributes = {**base_attributes, "warptap_instrument_bit": k}
+        if direction is InstrumentDirection.WRITE:
+            binding = signal_bits[k]
+            if binding.port_name not in detached_bits_by_port:
+                detached_bits_by_port[binding.port_name] = top_mod.detach_port(binding.port_name)
+            old_bits = detached_bits_by_port[binding.port_name]
+            top_mod.add_cell(
+                inst_instance,
+                _INSTRUMENT_WRITE,
+                port_directions={
+                    "si": "input", "so": "output", "pin_out": "output", "select": "input",
+                    "capture_dr": "input", "shift_dr": "input", "update_dr": "input",
+                    "tck": "input", "trst_n": "input",
+                },
+                connections={
+                    **common_connections,
+                    "pin_out": [old_bits[binding.bit]],
+                    "select": select_bits,
+                    "update_dr": update_dr_bits,
+                },
+                attributes=attributes,
+            )
+        else:
+            if signal_bits:
+                binding = signal_bits[k]
+                pi_bits: list[Bit] = [port_bits_by_name[binding.port_name][binding.bit]]
+            else:
+                pi_bits = [str((capture_value >> k) & 1)]
+            top_mod.add_cell(
+                inst_instance,
+                _BC1_SHIFT_ONLY,
+                port_directions={
+                    "pi": "input", "si": "input", "so": "output",
+                    "capture_dr": "input", "shift_dr": "input",
+                    "tck": "input", "trst_n": "input",
+                },
+                connections={**common_connections, "pi": pi_bits},
+                attributes=attributes,
+            )
+        top_mod.set_keep(cell_name=inst_instance)
+        prev_inst_so = inst_so_bits
+    return prev_inst_so
+
+
+def _insert_chain(
+    netlist: Netlist,
+    top_mod: Module,
+    chain: tuple[ChainSlot, ...],
     *,
     entry_bits: list[Bit],
     select_bits: list,
@@ -79,6 +232,7 @@ def _insert_chain(
     update_dr_bits: list[Bit],
     port_bits_by_name: dict[str, list[Bit]],
     detached_bits_by_port: dict[str, list[Bit]],
+    yosys_command: str | None,
 ) -> list[Bit]:
     """One level of a chain: each slot becomes one ``sib_cell`` instance, its ``select``
     wired to ``select_bits`` (the constant 1 for a top-level chain; a parent SIB's own
@@ -94,6 +248,113 @@ def _insert_chain(
     ``entry_bits``."""
     prev_so = entry_bits
     for slot in chain:
+        if isinstance(slot, ScanMuxNode):
+            mux_instance = f"warptap_mux_{slot.mux_name}"
+            n_arms = len(slot.arms)
+
+            # Pass 1: validate every arm and compute the packed ARM_VALUES this specific mux
+            # needs -- BEFORE importing its own specialized module (chparam needs the real
+            # value up front) and before wiring anything.
+            packed_values = 0
+            for k, arm in enumerate(slot.arms):
+                arm_owner_desc = f"ScanMux {slot.mux_name!r} arm {k}"
+                if len(arm.values) != 1:
+                    raise SibInsertError(
+                        f"{arm_owner_desc} claims {len(arm.values)} values -- "
+                        "insert_sib_network requires exactly one value per arm"
+                    )
+                packed_values |= arm.values[0] << (k * slot.select_width)
+                if arm.instrument is None and not arm.nested:
+                    raise SibInsertError(
+                        f"{arm_owner_desc} has neither an instrument nor a nested network -- "
+                        "insert_sib_network requires every arm to gate one of the two"
+                    )
+                if arm.instrument is not None and arm.nested:
+                    raise SibInsertError(
+                        f"{arm_owner_desc} has both an instrument and a nested network -- "
+                        "exactly one of the two is allowed, never both"
+                    )
+
+            mux_module_type = _import_scan_mux_template(
+                netlist, slot, n_arms=n_arms, packed_values=packed_values,
+                yosys_command=yosys_command,
+            )
+
+            mux_so_bits = top_mod.new_wire(1, name=f"{mux_instance}_so")
+            nested_si_bits = top_mod.new_wire(1, name=f"{mux_instance}_nested_si")
+            arm_select_bits = top_mod.new_wire(n_arms, name=f"{mux_instance}_arm_select")
+            arm_active_bits = top_mod.new_wire(n_arms, name=f"{mux_instance}_arm_active")
+
+            # Pass 2: the actual per-arm wiring, now that the mux's own module is imported.
+            arm_so_bits: list[Bit] = []
+            for k, arm in enumerate(slot.arms):
+                arm_owner_desc = f"ScanMux {slot.mux_name!r} arm {k}"
+                if arm.nested:
+                    # Mirrors the hierarchy-SibNode case just below: a nested chain's own
+                    # select must be arm_active (matched before this edge, stable for the
+                    # arm's whole open window), not arm_select (matched before AND after --
+                    # would flicker off mid-shift, freezing the nested chain the moment
+                    # shift_ff happens to stop matching this arm's value).
+                    arm_final_so = _insert_chain(
+                        netlist, top_mod, arm.nested,
+                        entry_bits=nested_si_bits, select_bits=arm_active_bits[k : k + 1],
+                        tck_bits=tck_bits, trst_n_bits=trst_n_bits,
+                        capture_dr_bits=capture_dr_bits, shift_dr_bits=shift_dr_bits,
+                        update_dr_bits=update_dr_bits,
+                        port_bits_by_name=port_bits_by_name,
+                        detached_bits_by_port=detached_bits_by_port,
+                        yosys_command=yosys_command,
+                    )
+                else:
+                    # A leaf arm's own WRITE commit is gated by arm_select (matched both
+                    # before AND after this edge) -- mirrors instrument_write.v's own select
+                    # needing nested_select, not nested_active, for the identical reason
+                    # documented on sib_cell.v's own nested_select output.
+                    arm_final_so = _insert_leaf_instrument_bits(
+                        top_mod, arm.instrument,
+                        owner_desc=arm_owner_desc,
+                        instance_prefix=f"{mux_instance}_arm{k}",
+                        entry_bits=nested_si_bits, select_bits=arm_select_bits[k : k + 1],
+                        base_attributes={"warptap_mux_name": slot.mux_name, "warptap_arm_index": k},
+                        tck_bits=tck_bits, trst_n_bits=trst_n_bits,
+                        capture_dr_bits=capture_dr_bits, shift_dr_bits=shift_dr_bits,
+                        update_dr_bits=update_dr_bits,
+                        port_bits_by_name=port_bits_by_name,
+                        detached_bits_by_port=detached_bits_by_port,
+                    )
+                arm_so_bits.extend(arm_final_so)
+
+            top_mod.add_cell(
+                mux_instance,
+                mux_module_type,
+                port_directions={
+                    "si": "input", "so": "output",
+                    "arm_so": "input", "nested_si": "output",
+                    "arm_select": "output", "arm_active": "output",
+                    "select": "input",
+                    "capture_dr": "input", "shift_dr": "input", "update_dr": "input",
+                    "tck": "input", "trst_n": "input",
+                },
+                connections={
+                    "si": prev_so, "so": mux_so_bits,
+                    "arm_so": arm_so_bits, "nested_si": nested_si_bits,
+                    "arm_select": arm_select_bits, "arm_active": arm_active_bits,
+                    "select": select_bits,
+                    "capture_dr": capture_dr_bits, "shift_dr": shift_dr_bits,
+                    "update_dr": update_dr_bits,
+                    "tck": tck_bits, "trst_n": trst_n_bits,
+                },
+                # No `parameters=` override here -- mux_module_type is already a freshly
+                # imported, fully specialized copy of scan_mux_cell.v for this exact
+                # (n_arms, select_width, packed_values) combination (see
+                # _import_scan_mux_template's own docstring for why a shared-module-plus-
+                # override doesn't work for this particular template).
+                attributes={"warptap_mux_name": slot.mux_name},
+            )
+            top_mod.set_keep(cell_name=mux_instance)
+            prev_so = mux_so_bits
+            continue
+
         if slot.instrument is None and not slot.nested:
             raise SibInsertError(
                 f"SIB {slot.sib_name!r} has neither an instrument nor a nested network -- "
@@ -119,12 +380,13 @@ def _insert_chain(
             # flicker with whatever shift_ff happens to be mirroring mid-shift. Verified
             # against real RTL -- see tests/test_sib_insert_nested_cross_sim.py.
             nested_so_bits = _insert_chain(
-                top_mod, slot.nested,
+                netlist, top_mod, slot.nested,
                 entry_bits=nested_si_bits, select_bits=nested_active_bits,
                 tck_bits=tck_bits, trst_n_bits=trst_n_bits,
                 capture_dr_bits=capture_dr_bits, shift_dr_bits=shift_dr_bits,
                 update_dr_bits=update_dr_bits,
                 port_bits_by_name=port_bits_by_name, detached_bits_by_port=detached_bits_by_port,
+                yosys_command=yosys_command,
             )
         else:
             if slot.instrument.width < 1:
@@ -298,6 +560,9 @@ def insert_sib_network(
     _import_template(netlist, _BC1_SHIFT_ONLY, yosys_command=yosys_command)
     _import_template(netlist, _SIB_CELL, yosys_command=yosys_command)
     _import_template(netlist, _INSTRUMENT_WRITE, yosys_command=yosys_command)
+    # scan_mux_cell.v is NOT imported here -- unlike every other template, it's imported once
+    # PER ScanMuxNode instance, freshly parameter-specialized, inside _insert_chain itself
+    # (see _import_scan_mux_template's own docstring, and this module's own, for why).
 
     tck_bits = top_mod.add_port(TCK, "input")
     tms_bits = top_mod.add_port(TMS, "input")
@@ -317,11 +582,12 @@ def insert_sib_network(
     detached_bits_by_port: dict[str, list[Bit]] = {}
 
     prev_so = _insert_chain(
-        top_mod, graph.chain,
+        netlist, top_mod, graph.chain,
         entry_bits=tdi_bits, select_bits=["1"],  # every top-level SIB is unconditionally reachable
         tck_bits=tck_bits, trst_n_bits=trst_n_bits,
         capture_dr_bits=capture_dr_bits, shift_dr_bits=shift_dr_bits, update_dr_bits=update_dr_bits,
         port_bits_by_name=port_bits_by_name, detached_bits_by_port=detached_bits_by_port,
+        yosys_command=yosys_command,
     )
 
     top_mod.add_cell(
