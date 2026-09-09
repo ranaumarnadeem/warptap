@@ -23,7 +23,7 @@ from __future__ import annotations
 from typing import Optional, Union
 
 from warptap.errors import WarptapError
-from warptap.icl_model import ModuleInstance, PhysicalGraph, resolve_dotted_address
+from warptap.icl_model import ModuleInstance, PhysicalGraph, ScanMuxNode, resolve_dotted_address
 from warptap.pdl_history import (
     PdlApplyStmt,
     PdlReadStmt,
@@ -44,29 +44,54 @@ class PDLError(WarptapError):
     instrument) -- e.g. ``iWrite``/``iRead``/``iApply`` called before any ``iTarget``."""
 
 
-def _target_layout(graph: PhysicalGraph, opened: frozenset[str], target_sib: str) -> tuple[int, int]:
+def _target_layout(graph: PhysicalGraph, opened: dict[str, int], target_sib: str) -> tuple[int, int]:
     """(offset, width) of ``target_sib``'s own instrument-content bits within
     ``compose_bits``'s position-ordered output for the ``opened`` configuration -- offset
     counts from index 0 (nearest TDI), the same convention ``compose_bits`` itself uses.
     Recurses into an open hierarchy slot's own nested sub-chain, matching sib_layout.py's
     own recursive walk (if the target isn't inside a given nested sub-chain, its full
     contribution -- via layout_bit_length, reused rather than re-derived -- is skipped over
-    to keep counting the remaining siblings correctly)."""
+    to keep counting the remaining siblings correctly).
+
+    ``opened`` is always ``dict[str, int]`` here -- ``iApply``'s own ``self._currently_open``,
+    which ``sib_retarget.stage_open_sequence`` always returns as a dict, even for a pure-SibNode
+    network (implicit value ``1``). For a :class:`~warptap.icl_model.ScanMuxNode`, ``target_sib``
+    naming the mux itself means its *currently matched* arm's own instrument is the real
+    target -- mirrors ``compose_bits``'s own ``node.mux_name == target_sib`` check exactly (an
+    ``open_path_to``-derived ``target_sib`` only ever equals a mux's name when that mux's own
+    matched arm directly gates the target instrument, never a bare hierarchy node -- the same
+    invariant that already lets the plain-SIB branch below assume ``node.instrument`` is set
+    whenever ``node.sib_name == target_sib``)."""
 
     def _walk(chain: tuple, base_offset: int) -> Optional[tuple[int, int]]:
         offset = base_offset
         for node in chain:
-            if node.sib_name == target_sib:
-                return offset, node.instrument.width
-            if node.sib_name in opened:
-                if node.nested:
-                    found = _walk(node.nested, offset)
-                    if found is not None:
-                        return found
-                    offset += layout_bit_length(PhysicalGraph(chain=node.nested), opened)
-                else:
-                    offset += node.instrument.width
-            offset += 1
+            if isinstance(node, ScanMuxNode):
+                value = opened.get(node.mux_name)
+                arm = next((a for a in node.arms if value in a.values), None) if value is not None else None
+                if node.mux_name == target_sib:
+                    return offset, arm.instrument.width
+                if arm is not None:
+                    if arm.nested:
+                        found = _walk(arm.nested, offset)
+                        if found is not None:
+                            return found
+                        offset += layout_bit_length(PhysicalGraph(chain=arm.nested), opened)
+                    else:
+                        offset += arm.instrument.width
+                offset += node.select_width
+            else:
+                if node.sib_name == target_sib:
+                    return offset, node.instrument.width
+                if node.sib_name in opened:
+                    if node.nested:
+                        found = _walk(node.nested, offset)
+                        if found is not None:
+                            return found
+                        offset += layout_bit_length(PhysicalGraph(chain=node.nested), opened)
+                    else:
+                        offset += node.instrument.width
+                offset += 1
         return None
 
     found = _walk(graph.chain, 0)
@@ -139,11 +164,11 @@ class PDLInterpreter:
         # (expected, low_bit, high_bit) -- (low_bit, high_bit) = (None, None) means "whole
         # instrument," resolved against the target's real width in iApply itself.
         self._pending_reads: dict[str, tuple[int, Optional[int], Optional[int]]] = {}
-        # Union[frozenset[str], dict[str, int]] once a ScanMuxNode is involved (sib_retarget.
-        # stage_open_sequence now returns dict[str, int] rounds) -- the full type/semantics
-        # generalization is multi-arm ScanMux plan Phase 4; this annotation stays as the
-        # pre-ScanMux shape until then, since layout_bit_length/compose_bits/_target_layout
-        # all already accept either shape transparently.
+        # dict[str, int] once any iApply has run (sib_retarget.stage_open_sequence always
+        # returns dict[str, int] rounds, even for a pure-SibNode network -- implicit value 1)
+        # -- kept as the empty frozenset literal only for its own falsy/empty-collection
+        # convenience before the first iApply, since layout_bit_length/compose_bits/
+        # _target_layout all accept either shape transparently either way.
         self._currently_open: frozenset[str] = frozenset()
         self.program: list[Union[ShiftDR, GotoState, Runtest, PulsePin]] = []
         self.history: list[PdlStatement] = []
@@ -264,6 +289,16 @@ class PDLInterpreter:
         before phase 2 ever runs. A real PDL sequence naturally avoids this (a second touch
         without going elsewhere would normally carry a fresh ``iWrite`` anyway); it is not
         specially detected or rejected here.
+
+        **Targeting an instrument gated by a :class:`~warptap.icl_model.ScanMuxNode` arm --
+        including switching directly from one already-open arm to a different one -- needed no
+        changes here at all** (multi-arm ScanMux plan Phase 4): ``open_path_to``'s own
+        ``PathStep.value`` already carries which arm, and phase 1's existing round-per-
+        ``stage_open_sequence``-entry loop already isolates "commit the new arm" (phase 1,
+        ``target_sib=None``) from "deliver its payload" (phase 2) into separate rounds --
+        exactly the same separation a hierarchy SIB's own open-then-descend already needed, not
+        a new mechanism. Confirmed by :mod:`tests.test_pdl_interpreter_scan_mux`, which drives
+        this exact method (not a hand-built ``compose_bits`` sequence) through an arm switch.
         """
         scope = self._require_scope("iApply")
         self.history.append(PdlApplyStmt())

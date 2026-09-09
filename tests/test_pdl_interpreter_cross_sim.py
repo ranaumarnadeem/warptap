@@ -173,7 +173,7 @@ def test_write_then_reapply_never_persists_on_real_rtl(
     assert rtl_observed == python_observed
 
     second_phase2_observed = rtl_observed[-1]
-    offset, width = _target_layout(graph, frozenset({"sib_sensor_a"}), "sib_sensor_a")
+    offset, width = _target_layout(graph, {"sib_sensor_a": 1}, "sib_sensor_a")
     total_bits = 3 + 1 + 1  # sensor_a open (3 content + 1 select) + sensor_b closed (1)
     position_bits = list(reversed(bits_from_int(second_phase2_observed, total_bits)))
     decoded_content = bits_to_int(position_bits[offset : offset + width])
