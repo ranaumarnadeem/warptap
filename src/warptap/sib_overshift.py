@@ -71,9 +71,9 @@ def default_sentinel_pattern(bits: int) -> int:
 
 def build_overshift_ops(
     graph: PhysicalGraph,
-    target_open: frozenset[str],
+    target_open: Union[frozenset, dict],
     *,
-    currently_open: frozenset[str] = frozenset(),
+    currently_open: Union[frozenset, dict] = frozenset(),
     margin: int,
     sentinel: Optional[int] = None,
 ) -> list[Union[ShiftDR, GotoState]]:
@@ -108,6 +108,14 @@ def build_overshift_ops(
     specifically so a caller/test can construct one to demonstrate that unreliability
     directly, rather than only being able to assert it in prose. Raises :class:`ValueError`
     for a negative ``margin``, which is never meaningful.
+
+    ``target_open``/``currently_open`` accept either shape (see ``sib_layout._normalize_
+    open``) -- a plain ``frozenset[str]`` of names, or a ``dict[str, int]`` naming a specific
+    arm value for any :class:`~warptap.icl_model.ScanMuxNode` entries. Needed no code changes
+    here at all (multi-arm ScanMux plan Phase 6) beyond this annotation: every function this
+    one calls (``stage_open_sequence``, ``layout_bit_length``, ``compose_bits``) was already
+    generalized in Phase 2, exactly the same "it just already worked" finding Phase 4's own
+    ``PDLInterpreter.iApply`` had.
     """
     if margin < 0:
         raise ValueError(f"margin must be >= 0, got {margin}")
@@ -171,7 +179,7 @@ class OverShiftResult(NamedTuple):
 
 def diagnose_overshift(
     graph: PhysicalGraph,
-    target_open: frozenset[str],
+    target_open: Union[frozenset, dict],
     probe_bits: int,
     layout_bits: int,
     expected_tdo: int,
