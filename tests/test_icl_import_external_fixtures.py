@@ -30,7 +30,9 @@ def test_sreg_has_no_instances_at_all(icl_parser_dir, icl_parser_module):
     """SReg is a leaf register module -- no Instance statements of any kind, let alone a
     warptap_sib-typed one."""
     path = _fixture(icl_parser_dir, "Instruments.icl")
-    with pytest.raises(IclImportError, match="no 'warptap_sib'-typed instances found"):
+    with pytest.raises(
+        IclImportError, match="no 'warptap_sib'- or 'warptap_scan_mux_'-typed instances found"
+    ):
         import_icl([path], "SReg", icl_parser_module=icl_parser_module)
 
 
@@ -39,13 +41,17 @@ def test_wrapped_instr_uses_a_different_instrument_wiring_convention(icl_parser_
     directly -- no SIB/select-mux pattern at all, a genuinely different (and, for a bare
     instrument with no chain-select gating, simpler) real ICL idiom than warptap's own."""
     path = _fixture(icl_parser_dir, "Instruments.icl")
-    with pytest.raises(IclImportError, match="no 'warptap_sib'-typed instances found"):
+    with pytest.raises(
+        IclImportError, match="no 'warptap_sib'- or 'warptap_scan_mux_'-typed instances found"
+    ):
         import_icl([path], "WrappedInstr", icl_parser_module=icl_parser_module)
 
 
 def test_wrapped_scan_uses_a_different_instrument_wiring_convention(icl_parser_dir, icl_parser_module):
     path = _fixture(icl_parser_dir, "Instruments.icl")
-    with pytest.raises(IclImportError, match="no 'warptap_sib'-typed instances found"):
+    with pytest.raises(
+        IclImportError, match="no 'warptap_sib'- or 'warptap_scan_mux_'-typed instances found"
+    ):
         import_icl([path], "WrappedScan", icl_parser_module=icl_parser_module)
 
 
@@ -83,13 +89,17 @@ def test_scan_mux_002_needs_instruments_icl_and_still_has_no_sib_pattern(icl_par
         _fixture(icl_parser_dir, "scan_mux_002.icl"),
         _fixture(icl_parser_dir, "Instruments.icl"),
     ]
-    with pytest.raises(IclImportError, match="no 'warptap_sib'-typed instances found"):
+    with pytest.raises(
+        IclImportError, match="no 'warptap_sib'- or 'warptap_scan_mux_'-typed instances found"
+    ):
         import_icl(paths, "scan_mux_002", icl_parser_module=icl_parser_module)
 
 
 def test_icl_syntax_6_reset_value_fixture_has_no_sib_pattern(icl_parser_dir, icl_parser_module):
     path = _fixture(icl_parser_dir, "benchmarks_conv", "ICL", "test_icl_syntax_6.icl")
-    with pytest.raises(IclImportError, match="no 'warptap_sib'-typed instances found"):
+    with pytest.raises(
+        IclImportError, match="no 'warptap_sib'- or 'warptap_scan_mux_'-typed instances found"
+    ):
         import_icl([path], "test_icl_syntax_6", icl_parser_module=icl_parser_module)
 
 
@@ -100,5 +110,7 @@ def test_icl_syntax_7_ir_decoded_dr_mux_tap_has_no_sib_pattern(icl_parser_dir, i
     NOT trip the retargeting-graph issue either -- a real, useful negative data point about
     which shapes hit that bug and which don't."""
     path = _fixture(icl_parser_dir, "benchmarks_conv", "ICL", "test_icl_syntax_7.icl")
-    with pytest.raises(IclImportError, match="no 'warptap_sib'-typed instances found"):
+    with pytest.raises(
+        IclImportError, match="no 'warptap_sib'- or 'warptap_scan_mux_'-typed instances found"
+    ):
         import_icl([path], "test_icl_syntax_7", icl_parser_module=icl_parser_module)

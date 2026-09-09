@@ -92,12 +92,19 @@ from pathlib import Path
 from typing import List, Tuple
 
 from warptap.errors import WarptapError
-from warptap.icl_emit import INSTRUMENT_MODULE_PREFIX, SIB_INSTANCE_PREFIX, SIB_MODULE_TYPE
+from warptap.icl_emit import (
+    INSTRUMENT_MODULE_PREFIX,
+    SCAN_MUX_MODULE_PREFIX,
+    SIB_INSTANCE_PREFIX,
+    SIB_MODULE_TYPE,
+)
 from warptap.icl_model import (
     InstrumentDirection,
     InstrumentNode,
     ModuleInstance,
     PhysicalGraph,
+    ScanArm,
+    ScanMuxNode,
     SibNode,
 )
 from warptap.tap_ports import TDI, TDO
@@ -113,15 +120,15 @@ class IclImportError(WarptapError):
 
 
 def _icl_item_classes(icl_parser_module):
-    """``IclInstance``/``IclDataRegister``/``IclScanRegister`` aren't part of ``Ijtag``'s own
-    public surface, but the module ``Ijtag`` (``icl_parser_module``) is defined in re-exports
-    them as plain module attributes via its own ``from .icl_process import *`` chain
-    (``icl_process.py`` itself does ``from .icl_items import *``) -- pulled off that already-
-    imported module object directly rather than a second, separate absolute import, so this
-    works regardless of how the caller set ``sys.path`` up to make ``icl_parser_module``
+    """``IclInstance``/``IclDataRegister``/``IclScanRegister``/``IclScanMux`` aren't part of
+    ``Ijtag``'s own public surface, but the module ``Ijtag`` (``icl_parser_module``) is defined
+    in re-exports them as plain module attributes via its own ``from .icl_process import *``
+    chain (``icl_process.py`` itself does ``from .icl_items import *``) -- pulled off that
+    already-imported module object directly rather than a second, separate absolute import, so
+    this works regardless of how the caller set ``sys.path`` up to make ``icl_parser_module``
     importable in the first place (see ``tests/conftest.py``'s ``icl_parser_module`` fixture)."""
     mod = sys.modules[icl_parser_module.__module__]
-    return mod.IclInstance, mod.IclDataRegister, mod.IclScanRegister
+    return mod.IclInstance, mod.IclDataRegister, mod.IclScanRegister, mod.IclScanMux
 
 
 def _resolve_single(concat_sig):
@@ -188,45 +195,107 @@ def _sib_name_of(sib_instance) -> str:
     )
 
 
+def _mux_name_of(mux_instance) -> str:
+    instance_name = mux_instance.get_name()
+    return instance_name[len(SCAN_MUX_MODULE_PREFIX) :]
+
+
+def _is_slot_instance(instance) -> bool:
+    """True for an instance that's a chain slot in its own right -- a
+    :data:`~warptap.icl_emit.SIB_MODULE_TYPE` instance, or a
+    :data:`~warptap.icl_emit.SCAN_MUX_MODULE_PREFIX`-prefixed :class:`~warptap.icl_model.
+    ScanMuxNode` instance (each mux gets its own distinct module type, so this checks a
+    prefix, not an exact match, mirroring :mod:`warptap.icl_emit`'s own emission side) --
+    as opposed to a leaf instrument instance."""
+    scope = instance.get_module_scope()
+    return scope == SIB_MODULE_TYPE or scope.startswith(SCAN_MUX_MODULE_PREFIX)
+
+
+def _arm_value_of(mux_instance, from_arm_port, icl_scan_mux_type, k: int) -> int:
+    """The single value that selects arm ``k`` (``fromArm{k}``), recovered from the mux
+    instance's own ``IclScanMux`` item (its ``mux_selects`` list of ``(selectee_list, tos)``
+    pairs -- confirmed empirically, not assumed from the grammar file alone, matching this
+    project's own established discipline: ``tos`` is a ``ConcatSig`` that resolves, via the
+    same :func:`_resolve_single` every other binding here uses, to exactly the ``fromArm{k}``
+    port object by identity)."""
+    scan_muxes = mux_instance.get_icl_item_type(icl_scan_mux_type)
+    if len(scan_muxes) != 1:
+        raise IclImportError(
+            f"ScanMux instance {mux_instance.get_name()!r} has {len(scan_muxes)} ScanMux "
+            "items, expected exactly 1 (its own MUX) -- not a shape this importer recognizes"
+        )
+    for selectee_list, tos in scan_muxes[0].mux_selects:
+        if _resolve_single(tos) is from_arm_port:
+            if len(selectee_list) != 1:
+                raise IclImportError(
+                    f"ScanMux instance {mux_instance.get_name()!r} arm {k} (fromArm{k}) is "
+                    f"selected by {len(selectee_list)} values -- v1 requires exactly one "
+                    "value per arm"
+                )
+            return selectee_list[0].get_number()
+    raise IclImportError(
+        f"ScanMux instance {mux_instance.get_name()!r} has no SelectedBy clause targeting "
+        f"fromArm{k} -- not a shape this importer recognizes"
+    )
+
+
 def _walk_chain(
-    remaining: List, current, terminal_source, icl_data_register_type, icl_scan_register_type
-) -> List[SibNode]:
-    """Walk ``current`` -> SIB -> SIB -> ... -> ``terminal_source`` via each SIB instance's own
-    ``SI`` binding, TDI-side-first, matching :mod:`warptap.icl_emit`'s own ``prev_so``
-    threading exactly -- claiming SIBs from the shared ``remaining`` pool as they're found, so
-    a SIB claimed by a nested recursive call (see :func:`_build_node`) can't also be claimed by
-    an enclosing level's own walk. ``current``/``terminal_source`` are the top module's own
-    ``tdi``/``tdo``-fed source at the top level, or a hierarchy SIB's own ``toSI``/``fromSO``-
-    bound target one level deeper. Raises :class:`IclImportError` if the chain doesn't run
-    cleanly from ``current`` to ``terminal_source``."""
-    ordered: List[SibNode] = []
+    remaining: List, current, terminal_source,
+    icl_data_register_type, icl_scan_register_type, icl_scan_mux_type,
+) -> List:
+    """Walk ``current`` -> slot -> slot -> ... -> ``terminal_source`` via each claimable
+    instance's own ``SI`` binding, TDI-side-first, matching :mod:`warptap.icl_emit`'s own
+    ``prev_so`` threading exactly -- claiming SIB/ScanMux instances from the shared
+    ``remaining`` pool as they're found, so an instance claimed by a nested recursive call
+    (see :func:`_build_node`/:func:`_build_scan_mux_node`) can't also be claimed by an
+    enclosing level's own walk. ``current``/``terminal_source`` are the top module's own
+    ``tdi``/``tdo``-fed source at the top level, a hierarchy SIB's own ``toSI``/``fromSO``-
+    bound target one level deeper, or a ScanMuxNode arm's own ``toSI``/``fromArmK``-bound
+    target. Raises :class:`IclImportError` if the chain doesn't run cleanly from ``current``
+    to ``terminal_source``. The claim-and-dispatch step itself is kind-agnostic (``SI``/``SO``
+    are real ports on both module kinds); only the final per-slot build call
+    (:func:`_build_node` vs :func:`_build_scan_mux_node`) branches on which kind was found."""
+    ordered: List = []
     while current is not terminal_source:
-        next_sib = next(
-            (sib for sib in remaining if _input_binding(sib, "SI") is current), None
+        next_slot = next(
+            (inst for inst in remaining if _input_binding(inst, "SI") is current), None
         )
-        if next_sib is None:
+        if next_slot is None:
             raise IclImportError(
-                f"{len(remaining)} {SIB_MODULE_TYPE!r} instance(s) remain unclaimed and this "
-                "chain never reaches its expected end -- not a flat-or-nested, TDI-to-TDO SIB "
-                "chain this importer recognizes"
+                f"{len(remaining)} SIB/ScanMux instance(s) remain unclaimed and this chain "
+                "never reaches its expected end -- not a flat-or-nested, TDI-to-TDO SIB/"
+                "ScanMux chain this importer recognizes"
             )
-        remaining.remove(next_sib)
-        ordered.append(
-            _build_node(remaining, next_sib, icl_data_register_type, icl_scan_register_type)
-        )
-        current = next_sib.get_icl_item_name("SO")
+        remaining.remove(next_slot)
+        if next_slot.get_module_scope() == SIB_MODULE_TYPE:
+            ordered.append(
+                _build_node(
+                    remaining, next_slot,
+                    icl_data_register_type, icl_scan_register_type, icl_scan_mux_type,
+                )
+            )
+        else:
+            ordered.append(
+                _build_scan_mux_node(
+                    remaining, next_slot,
+                    icl_data_register_type, icl_scan_register_type, icl_scan_mux_type,
+                )
+            )
+        current = next_slot.get_icl_item_name("SO")
     return ordered
 
 
 def _build_node(
-    remaining: List, sib_instance, icl_data_register_type, icl_scan_register_type
+    remaining: List, sib_instance,
+    icl_data_register_type, icl_scan_register_type, icl_scan_mux_type,
 ) -> SibNode:
     """One already-claimed SIB instance -> one :class:`~warptap.icl_model.SibNode`. Detected
     structurally, not by name (matching this module's own READ-vs-WRITE convention): a
-    ``fromSO`` binding that resolves to another :data:`~warptap.icl_emit.SIB_MODULE_TYPE`
-    instance is a hierarchy SIB, recursed into (entry point its own ``toSI``, terminal the
-    resolved nested instance itself, exactly mirroring how :mod:`warptap.sib_insert` wires a
-    hierarchy slot's own ``nested_si``/``nested_so``); anything else is a leaf instrument."""
+    ``fromSO`` binding that resolves to another chain-slot instance (:func:`_is_slot_instance`
+    -- a hierarchy SIB, or (multi-arm ScanMux plan Phase 7) a ScanMuxNode gated directly by
+    this SIB) is recursed into (entry point its own ``toSI``, terminal the resolved nested
+    instance itself, exactly mirroring how :mod:`warptap.sib_insert` wires a hierarchy slot's
+    own ``nested_si``/``nested_so``); anything else is a leaf instrument."""
     sib_name = _sib_name_of(sib_instance)
     from_so_target = _input_binding(sib_instance, "fromSO")
     if from_so_target is None:
@@ -236,10 +305,11 @@ def _build_node(
         )
 
     target_instance = from_so_target.get_instance()
-    if target_instance.get_module_scope() == SIB_MODULE_TYPE:
+    if _is_slot_instance(target_instance):
         entry = sib_instance.get_icl_item_name("toSI")
         nested = _walk_chain(
-            remaining, entry, from_so_target, icl_data_register_type, icl_scan_register_type
+            remaining, entry, from_so_target,
+            icl_data_register_type, icl_scan_register_type, icl_scan_mux_type,
         )
         return SibNode(sib_name=sib_name, instrument=None, nested=tuple(nested))
 
@@ -247,14 +317,77 @@ def _build_node(
     return SibNode(sib_name=sib_name, instrument=instrument)
 
 
+def _build_scan_mux_node(
+    remaining: List, mux_instance,
+    icl_data_register_type, icl_scan_register_type, icl_scan_mux_type,
+) -> ScanMuxNode:
+    """One already-claimed ScanMux instance -> one :class:`~warptap.icl_model.ScanMuxNode`
+    (multi-arm ScanMux plan Phase 7), the mux-side counterpart to :func:`_build_node`.
+    ``select_width`` recovered from the instance's own single ``SELREG`` ``ScanRegister``
+    width (mirroring :func:`_instrument_node`'s own READ-case width recovery); each arm found
+    by walking ``fromArm0``, ``fromArm1``, ... bindings in order until none remain (matching
+    :func:`~warptap.icl_emit.render_scan_mux_module`'s own emission order exactly), each arm's
+    value recovered via :func:`_arm_value_of`, and each arm's own content detected
+    structurally exactly as :func:`_build_node` does for a SIB's ``fromSO`` -- a chain-slot
+    instance target means a nested sub-chain (walked from this mux's own ``toSI``), anything
+    else a leaf instrument."""
+    mux_name = _mux_name_of(mux_instance)
+
+    scan_registers = mux_instance.get_icl_item_type(icl_scan_register_type)
+    if len(scan_registers) != 1:
+        raise IclImportError(
+            f"ScanMux instance {mux_instance.get_name()!r} has {len(scan_registers)} "
+            "ScanRegisters, expected exactly 1 (its own SELREG) -- not a shape this importer "
+            "recognizes"
+        )
+    select_width = scan_registers[0].get_vector_size()
+
+    arms: List[ScanArm] = []
+    k = 0
+    while True:
+        from_arm_target = _input_binding(mux_instance, f"fromArm{k}")
+        if from_arm_target is None:
+            break
+        from_arm_port = mux_instance.get_icl_item_name(f"fromArm{k}")
+        value = _arm_value_of(mux_instance, from_arm_port, icl_scan_mux_type, k)
+        target_instance = from_arm_target.get_instance()
+        if _is_slot_instance(target_instance):
+            entry = mux_instance.get_icl_item_name("toSI")
+            nested = _walk_chain(
+                remaining, entry, from_arm_target,
+                icl_data_register_type, icl_scan_register_type, icl_scan_mux_type,
+            )
+            arms.append(ScanArm(values=(value,), nested=tuple(nested)))
+        else:
+            instrument = _instrument_node(
+                target_instance, icl_data_register_type, icl_scan_register_type
+            )
+            arms.append(ScanArm(values=(value,), instrument=instrument))
+        k += 1
+
+    if len(arms) < 2:
+        raise IclImportError(
+            f"ScanMux instance {mux_instance.get_name()!r} has {len(arms)} arm(s) -- expected "
+            "at least 2 for a warptap-shaped ScanMuxNode"
+        )
+    return ScanMuxNode(mux_name=mux_name, select_width=select_width, arms=tuple(arms))
+
+
 def _collect_instrument_children(chain) -> List[ModuleInstance]:
-    """Recursively walk a chain (and any nested sub-chains) collecting each leaf instrument as
-    a flat :class:`~warptap.icl_model.ModuleInstance` sibling -- mirrors
+    """Recursively walk a chain (and any nested sub-chains, including inside a
+    :class:`~warptap.icl_model.ScanMuxNode`'s own arms) collecting each leaf instrument as a
+    flat :class:`~warptap.icl_model.ModuleInstance` sibling -- mirrors
     :mod:`warptap.sib_plan`'s own flat ``ModuleInstance`` tree regardless of SIB-nesting depth,
     the direction ``icl_emit.py``'s own ``_collect_instruments`` walks."""
     children: List[ModuleInstance] = []
     for node in chain:
-        if node.nested:
+        if isinstance(node, ScanMuxNode):
+            for arm in node.arms:
+                if arm.nested:
+                    children.extend(_collect_instrument_children(arm.nested))
+                else:
+                    children.append(ModuleInstance(name=arm.instrument.name))
+        elif node.nested:
             children.extend(_collect_instrument_children(node.nested))
         else:
             children.append(ModuleInstance(name=node.instrument.name))
@@ -271,13 +404,14 @@ def import_icl(
 
     Raises :class:`IclImportError` for: a real ``icl_parser`` gap (its own retargeting-graph
     ``AssertionError``, or its "Not supported" ``AccessLink`` rejection -- both already
-    documented above); a top module with no :data:`~warptap.icl_emit.SIB_MODULE_TYPE`
-    instances at all; a SIB chain (flat or nested) that doesn't run cleanly from ``tdi`` to
-    ``tdo``; an instrument instance not named per
-    :data:`~warptap.icl_emit.INSTRUMENT_MODULE_PREFIX` convention; or a READ instrument with
-    other than exactly one ``ScanRegister``. A hierarchy SIB (one whose ``fromSO`` resolves to
-    another SIB instance rather than an instrument) is detected structurally and recursed into
-    -- matching :mod:`warptap.icl_emit`'s own emission the other direction.
+    documented above); a top module with no :data:`~warptap.icl_emit.SIB_MODULE_TYPE`/
+    :data:`~warptap.icl_emit.SCAN_MUX_MODULE_PREFIX` instances at all; a SIB/ScanMux chain
+    (flat or nested) that doesn't run cleanly from ``tdi`` to ``tdo``; an instrument instance
+    not named per :data:`~warptap.icl_emit.INSTRUMENT_MODULE_PREFIX` convention; or a READ
+    instrument with other than exactly one ``ScanRegister``. A hierarchy SIB or ScanMuxNode
+    (one whose ``fromSO``/``fromArmK`` resolves to another SIB/ScanMux instance rather than an
+    instrument) is detected structurally and recursed into -- matching
+    :mod:`warptap.icl_emit`'s own emission the other direction.
     """
     try:
         ijtag = icl_parser_module(
@@ -301,26 +435,28 @@ def import_icl(
         raise
 
     top = ijtag.icl_instance
-    IclInstance, IclDataRegister, IclScanRegister = _icl_item_classes(icl_parser_module)
+    IclInstance, IclDataRegister, IclScanRegister, IclScanMux = _icl_item_classes(icl_parser_module)
 
     children = top.get_icl_item_type(IclInstance)
-    sib_instances = [c for c in children if c.get_module_scope() == SIB_MODULE_TYPE]
-    if not sib_instances:
+    slot_instances = [c for c in children if _is_slot_instance(c)]
+    if not slot_instances:
         raise IclImportError(
-            f"no {SIB_MODULE_TYPE!r}-typed instances found in top module {top_module!r} -- "
-            "this ICL file doesn't describe a warptap-shaped SIB network"
+            f"no {SIB_MODULE_TYPE!r}- or {SCAN_MUX_MODULE_PREFIX!r}-typed instances found in "
+            f"top module {top_module!r} -- this ICL file doesn't describe a warptap-shaped "
+            "SIB/ScanMux network"
         )
 
     tdo_port = top.get_icl_item_name(TDO)
     tdo_source = _resolve_single(next(iter(tdo_port.sources.values())))
-    remaining = list(sib_instances)
+    remaining = list(slot_instances)
     chain_nodes = _walk_chain(
-        remaining, top.get_icl_item_name(TDI), tdo_source, IclDataRegister, IclScanRegister
+        remaining, top.get_icl_item_name(TDI), tdo_source,
+        IclDataRegister, IclScanRegister, IclScanMux,
     )
     if remaining:
         raise IclImportError(
-            f"{len(remaining)} of {len(sib_instances)} {SIB_MODULE_TYPE!r} instance(s) never "
-            "chain back to tdi via a prior SIB's SO -- not a flat-or-nested, TDI-to-TDO SIB "
+            f"{len(remaining)} of {len(slot_instances)} SIB/ScanMux instance(s) never chain "
+            "back to tdi via a prior slot's SO -- not a flat-or-nested, TDI-to-TDO SIB/ScanMux "
             "chain this importer recognizes"
         )
 

@@ -37,7 +37,17 @@ import tempfile
 from pathlib import Path
 
 from warptap.icl_emit import to_icl
-from warptap.icl_model import Alias, InstrumentDirection, SignalBinding
+from warptap.icl_model import (
+    Alias,
+    InstrumentDirection,
+    InstrumentNode,
+    ModuleInstance,
+    PhysicalGraph,
+    ScanArm,
+    ScanMuxNode,
+    SibNode,
+    SignalBinding,
+)
 from warptap.sib_plan import HierarchySpec, InstrumentSpec, build_sib_plan
 
 _SPECS = [
@@ -163,6 +173,114 @@ def test_nested_network_is_structurally_valid_and_retargets_fully(icl_parser_mod
     graph, root = build_sib_plan(specs, top_name="chip")
     icl_text = to_icl(graph, root, include_access_link=False)
     assert "InputPort fromSO = warptap_sib_deep.SO;" in icl_text
+    with tempfile.TemporaryDirectory(prefix="warptap-icl-parser-") as tmpdir:
+        path = _write_icl(icl_text, Path(tmpdir))
+        ij = icl_parser_module("chip", [str(path)])  # must NOT raise at all
+    assert ij is not None
+
+
+def _mux_instrument(name, width=1, capture_value=0, direction=InstrumentDirection.READ, signal_bits=()):
+    return InstrumentNode(
+        name=name, width=width, capture_value=capture_value, direction=direction,
+        signal_bits=signal_bits,
+    )
+
+
+def test_scan_mux_network_is_structurally_valid_and_retargets_fully(icl_parser_module):
+    """Multi-arm ScanMux plan, Phase 7: the core deliverable, at the strongest validation
+    level this file's own convention distinguishes -- must pass BOTH the structural check AND
+    the real tool's own retargeting-graph build with zero exceptions, not just the tolerant
+    structural-only check. This exact shape (a 2-arm mux directly at the top of the chain)
+    is what first caught two real, otherwise-undiscoverable grammar requirements this session:
+    a host ScanInterface's own SO port must carry the same width bracket as its Source
+    (SELREG), and a host ScanInterface may hold at most one ScanInPort -- see
+    render_scan_mux_module's own docstring for the full story of both fixes."""
+    mux = ScanMuxNode(
+        "mux_a", select_width=2,
+        arms=(
+            ScanArm(values=(1,), instrument=_mux_instrument("a1", width=3, capture_value=0b101)),
+            ScanArm(
+                values=(2,),
+                instrument=_mux_instrument(
+                    "a2", direction=InstrumentDirection.WRITE,
+                    signal_bits=(SignalBinding("bist_start"),),
+                ),
+            ),
+        ),
+    )
+    graph = PhysicalGraph(chain=(mux,))
+    root = ModuleInstance(name="chip")
+    icl_text = to_icl(graph, root, include_access_link=False)
+    with tempfile.TemporaryDirectory(prefix="warptap-icl-parser-") as tmpdir:
+        path = _write_icl(icl_text, Path(tmpdir))
+        ij = icl_parser_module("chip", [str(path)])  # must NOT raise at all
+    assert ij is not None
+
+
+def test_three_arm_scan_mux_is_structurally_valid_and_retargets_fully(icl_parser_module):
+    """N > 2 specifically -- the per-arm host{k} interface design (render_scan_mux_module's
+    own fix for the real "at most one ScanInPort per host interface" rule) must generalize
+    past the 2-arm case that first caught it, not just happen to work for exactly 2."""
+    mux = ScanMuxNode(
+        "mux_a", select_width=2,
+        arms=(
+            ScanArm(values=(0,), instrument=_mux_instrument("a0")),
+            ScanArm(values=(1,), instrument=_mux_instrument("a1", width=2)),
+            ScanArm(values=(2,), instrument=_mux_instrument("a2", width=3)),
+        ),
+    )
+    graph = PhysicalGraph(chain=(mux,))
+    root = ModuleInstance(name="chip")
+    icl_text = to_icl(graph, root, include_access_link=False)
+    with tempfile.TemporaryDirectory(prefix="warptap-icl-parser-") as tmpdir:
+        path = _write_icl(icl_text, Path(tmpdir))
+        ij = icl_parser_module("chip", [str(path)])  # must NOT raise at all
+    assert ij is not None
+
+
+def test_scan_mux_gated_by_hierarchy_sib_is_structurally_valid_and_retargets_fully(icl_parser_module):
+    """The other real network shape Phase 7 must support: a hierarchy SIB gating a
+    ScanMuxNode instead of a leaf instrument -- exercises _slot_instance_name's own
+    ScanMuxNode branch (the SIB's fromSO binds to the mux's own module-type-as-instance-name,
+    not a warptap_sib_ one)."""
+    mux = ScanMuxNode(
+        "mux_a", select_width=1,
+        arms=(
+            ScanArm(values=(0,), instrument=_mux_instrument("a0")),
+            ScanArm(values=(1,), instrument=_mux_instrument("a1")),
+        ),
+    )
+    outer = SibNode(sib_name="gate_a", instrument=None, nested=(mux,))
+    graph = PhysicalGraph(chain=(outer,))
+    root = ModuleInstance(name="chip")
+    icl_text = to_icl(graph, root, include_access_link=False)
+    assert "InputPort fromSO = warptap_scan_mux_mux_a.SO;" in icl_text
+    with tempfile.TemporaryDirectory(prefix="warptap-icl-parser-") as tmpdir:
+        path = _write_icl(icl_text, Path(tmpdir))
+        ij = icl_parser_module("chip", [str(path)])  # must NOT raise at all
+    assert ij is not None
+
+
+def test_scan_mux_arm_gating_a_nested_hierarchy_sib_is_structurally_valid_and_retargets_fully(
+    icl_parser_module,
+):
+    """The reverse nesting direction from the test above: one of a mux's own arms gates a
+    nested hierarchy SIB rather than a leaf instrument -- exercises
+    _render_scan_mux_instance's own arm.nested branch (genuinely different code from
+    _render_chain_instances's node.nested branch), live-validated separately since the two
+    are not the same code path."""
+    inner = SibNode(sib_name="sib_inner", instrument=_mux_instrument("deep", width=2))
+    mux = ScanMuxNode(
+        "mux_a", select_width=1,
+        arms=(
+            ScanArm(values=(0,), nested=(inner,)),
+            ScanArm(values=(1,), instrument=_mux_instrument("a1")),
+        ),
+    )
+    graph = PhysicalGraph(chain=(mux,))
+    root = ModuleInstance(name="chip")
+    icl_text = to_icl(graph, root, include_access_link=False)
+    assert "InputPort fromArm0 = warptap_sib_inner.SO;" in icl_text
     with tempfile.TemporaryDirectory(prefix="warptap-icl-parser-") as tmpdir:
         path = _write_icl(icl_text, Path(tmpdir))
         ij = icl_parser_module("chip", [str(path)])  # must NOT raise at all

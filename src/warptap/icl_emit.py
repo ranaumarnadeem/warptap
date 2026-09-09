@@ -103,7 +103,14 @@ from __future__ import annotations
 from typing import List
 
 from warptap.errors import WarptapError
-from warptap.icl_model import InstrumentDirection, InstrumentNode, ModuleInstance, PhysicalGraph
+from warptap.icl_model import (
+    ChainSlot,
+    InstrumentDirection,
+    InstrumentNode,
+    ModuleInstance,
+    PhysicalGraph,
+    ScanMuxNode,
+)
 from warptap.tap_ports import TCK, TDI, TDO, TMS, TRST_N
 
 SIB_MODULE_TYPE = "warptap_sib"
@@ -123,6 +130,16 @@ every SIB instance is ``Of``, not a per-instance name). Exported so
 :mod:`warptap.icl_import` strips the exact same prefix back off, rather than re-deriving a
 second literal that could silently drift out of sync with this one."""
 
+SCAN_MUX_MODULE_PREFIX = "warptap_scan_mux_"
+"""Prefix every :class:`~warptap.icl_model.ScanMuxNode`'s own module type/instance name
+carries (``warptap_scan_mux_<mux_name>``) -- unlike :data:`SIB_MODULE_TYPE` (one module type
+shared by every SIB instance), each mux gets its OWN distinct module (arm count/select width/
+values all vary per instance, mirroring :func:`render_instrument_module`'s own one-per-
+distinct-instrument shape, and :mod:`warptap.sib_insert`'s own per-instance-imported-RTL-
+module design for the identical reason -- see that module's own docstring). Exported for the
+same reason as :data:`SIB_MODULE_TYPE`/:data:`INSTRUMENT_MODULE_PREFIX`: :mod:`warptap.
+icl_import` recognizes this exact prefix walking a parsed network back in."""
+
 
 class IclEmitError(WarptapError):
     """Raised when a :class:`~warptap.icl_model.PhysicalGraph` asks for something this ICL
@@ -138,6 +155,16 @@ class IclEmitError(WarptapError):
 
 def _sib_instance_name(sib_name: str) -> str:
     return f"{SIB_INSTANCE_PREFIX}{sib_name}"
+
+
+def _slot_instance_name(slot: ChainSlot) -> str:
+    """The ``Instance`` name a chain slot is referred to by, regardless of kind -- a SIB uses
+    :func:`_sib_instance_name`; a :class:`~warptap.icl_model.ScanMuxNode` reuses its own module
+    type name (see :func:`_render_scan_mux_instance`'s docstring for why that's correct: each
+    mux module type is only ever instantiated once)."""
+    if isinstance(slot, ScanMuxNode):
+        return _scan_mux_module_type(slot.mux_name)
+    return _sib_instance_name(slot.sib_name)
 
 
 def render_sib_module_type() -> str:
@@ -173,6 +200,101 @@ def render_sib_module_type() -> str:
         "\n"
         "    ScanRegister SR { ScanInSource SIBmux; CaptureSource SR; ResetValue 1'b0; }\n"
         "    ScanMux SIBmux SelectedBy SR { 1'b0 : SI; 1'b1 : fromSO; }\n"
+        "}"
+    )
+
+
+def _scan_mux_module_type(mux_name: str) -> str:
+    return f"{SCAN_MUX_MODULE_PREFIX}{mux_name}"
+
+
+def render_scan_mux_module(node: ScanMuxNode) -> str:
+    """One ``Module`` block per distinct :class:`~warptap.icl_model.ScanMuxNode` -- unlike
+    :func:`render_sib_module_type`'s single shared definition, a mux's own arm count/select
+    width/values genuinely vary per instance, so this is synthesized fresh per node, mirroring
+    :func:`render_instrument_module`'s own one-per-distinct-instrument shape (and
+    :mod:`warptap.sib_insert`'s own per-instance-imported-RTL-module design, forced by the
+    exact same underlying fact -- see that module's own docstring for the Yosys-side version
+    of this same story).
+
+    Directly generalizes :func:`render_sib_module_type`'s own real, confirmed shape (``SR``
+    becomes the ``SELREG[W-1:0]`` register; the binary ``ScanMux SIBmux SelectedBy SR
+    {1'b0:SI; 1'b1:fromSO;}`` becomes N value:fromArmK pairs) rather than inventing a new
+    pattern. **A real, deliberate limitation shared with the SIB case**: no explicit "bypass"
+    entry is listed for a select value matching no declared arm -- real ICL's own grammar has
+    no wildcard/else clause, and the real vendored ``mux_3`` fixture examined while planning
+    this feature leaves the exact same kind of value gaps unlisted (its own 4-bit select field
+    only explicitly covers a subset of the 16 possible values) -- so this isn't a gap unique to
+    warptap's own emitter, it's an inherent property of the real language. v1 also requires
+    exactly one value per arm (:class:`~warptap.icl_model.ScanArm`'s own forward-compatible
+    ``values`` field notwithstanding) -- re-validated here (belt-and-suspenders, not a new
+    rule invented here; :class:`~warptap.icl_model.validate_physical_graph` already enforces
+    it at construction time).
+
+    Same topology-level scope boundary as the SIB case (see module docstring): ``toSELk``'s
+    own ``LogicSignal`` (``(SELREG == value) & SEL``) does not attempt to re-encode
+    ``rtl/scan_mux_cell.v``'s own ``arm_active``-vs-``arm_select`` before/after-this-edge
+    distinction -- ICL has no vocabulary for that, matching exactly how the SIB module's own
+    ``toSEL`` already elides ``nested_active`` vs ``nested_select``.
+
+    **A real structural constraint, found only by live-validating against the vendored
+    ``Honza255/icl_parser`` (not derivable from the grammar file alone)**: a ``host``
+    ``ScanInterface`` may contain *at most one* ``ScanInPort`` and *exactly one*
+    ``ScanOutPort`` (its own real "rule f1") -- it models exactly one scan-in/scan-out pair,
+    never an N-way fan-in bundle. A single shared ``host`` interface listing all N
+    ``fromArmK`` ports at once (this function's first-draft shape) fails that check as soon
+    as N > 1. Fixed by declaring **N separate host interfaces** (``host0``..``hostN-1``), one
+    per arm, each pairing exactly one ``fromArmK`` with the one shared ``toSI`` -- this isn't
+    a workaround but the actually-correct idiom: the real spec's own rule (6.4.16-m, unchecked
+    by this vendored tool but stated in its comments) already describes a module's interfaces
+    as "uniquely selectable, with all others disabled," which is exactly a mux's own real
+    semantics (only one arm is ever live at a time)."""
+    module_name = _scan_mux_module_type(node.mux_name)
+    width = node.select_width
+    width_suffix = f"[{width - 1}:0]" if width > 1 else ""
+
+    from_arm_lines: list[str] = []
+    to_sel_port_lines: list[str] = []
+    to_sel_logic_lines: list[str] = []
+    mux_arm_clauses: list[str] = []
+    host_interface_lines: list[str] = []
+    for k, arm in enumerate(node.arms):
+        if len(arm.values) != 1:
+            raise IclEmitError(
+                f"ScanMux {node.mux_name!r} arm {k} claims {len(arm.values)} values -- "
+                "v1 requires exactly one value per arm"
+            )
+        value = arm.values[0]
+        from_arm_lines.append(f"    ScanInPort fromArm{k};")
+        to_sel_port_lines.append(f"    ToSelectPort toSEL{k} {{ Source toSelSignal{k}; }}")
+        to_sel_logic_lines.append(
+            f"    LogicSignal toSelSignal{k} {{ (SELREG == {width}'d{value}) & SEL; }}"
+        )
+        mux_arm_clauses.append(f"{width}'d{value} : fromArm{k}")
+        host_interface_lines.append(
+            f"    ScanInterface host{k} {{ Port fromArm{k}; Port toSI; Port toSEL{k}; }}"
+        )
+
+    return (
+        f"Module {module_name} {{\n"
+        "    ScanInPort SI;\n"
+        "    SelectPort SEL;\n"
+        f"    ScanOutPort SO{width_suffix} {{ Source SELREG{width_suffix}; }}\n"
+        "    ScanInterface client { Port SI; Port SEL; Port SO; }\n"
+        "\n"
+        + "\n".join(from_arm_lines) + "\n"
+        "    ScanOutPort toSI { Source SI; }\n"
+        + "\n".join(to_sel_port_lines) + "\n"
+        + "\n".join(host_interface_lines) + "\n"
+        "\n"
+        + "\n".join(to_sel_logic_lines) + "\n"
+        "\n"
+        f"    ScanRegister SELREG{width_suffix} {{\n"
+        "        ScanInSource MUX;\n"
+        f"        CaptureSource SELREG{width_suffix};\n"
+        f"        ResetValue {width}'b0;\n"
+        "    }\n"
+        f"    ScanMux MUX SelectedBy SELREG{width_suffix} {{ " + "; ".join(mux_arm_clauses) + "; }\n"
         "}"
     )
 
@@ -303,17 +425,78 @@ def render_instrument_module(instrument: InstrumentNode) -> str:
     return "\n".join(lines)
 
 
+def _render_scan_mux_instance(node: ScanMuxNode, prev_so: str) -> tuple:
+    """One :class:`~warptap.icl_model.ScanMuxNode`'s own ``Instance ... Of
+    warptap_scan_mux_<name>`` binds ``SI`` to ``prev_so`` and each ``fromArmK`` to that arm's
+    own gated content -- a leaf instrument's own ``SO``, or (recursively) a nested sub-chain's
+    own final ``SO`` -- directly generalizing :func:`_render_chain_instances`'s own SibNode
+    ``fromSO`` binding to N arms instead of one. Like :func:`render_instrument_module`'s own
+    module-type/instance-name reuse (each distinct instrument module is only ever instantiated
+    once), the instance name here is the same string as the module type -- each mux gets its
+    own distinct, uniquely-named module (:data:`SCAN_MUX_MODULE_PREFIX`), so there's exactly
+    one instance of it. Returns ``(lines, final_so)``, the same shape
+    :func:`_render_chain_instances` returns, so callers don't need to special-case a mux
+    slot's own return value."""
+    mux_instance = _scan_mux_module_type(node.mux_name)
+    arm_bindings: List[str] = []
+    arm_lines: List[str] = []
+    for k, arm in enumerate(node.arms):
+        if arm.instrument is None and not arm.nested:
+            raise IclEmitError(
+                f"ScanMux {node.mux_name!r} arm {k} has neither an instrument nor a "
+                "nested network"
+            )
+        if arm.instrument is not None and arm.nested:
+            raise IclEmitError(
+                f"ScanMux {node.mux_name!r} arm {k} has both an instrument and a nested "
+                "network -- exactly one of the two is allowed, never both"
+            )
+        if arm.nested:
+            nested_lines, nested_final_so = _render_chain_instances(
+                arm.nested, prev_so=f"{mux_instance}.toSI"
+            )
+            arm_bindings.append(f"InputPort fromArm{k} = {nested_final_so};")
+            arm_lines.extend(nested_lines)
+        else:
+            if arm.instrument.width < 1:
+                raise IclEmitError(
+                    f"instrument {arm.instrument.name!r} (arm {k} of ScanMux "
+                    f"{node.mux_name!r}) has width {arm.instrument.width} -- an "
+                    "instrument needs at least 1 bit"
+                )
+            instr_instance = f"{INSTRUMENT_MODULE_PREFIX}{arm.instrument.name}"
+            arm_bindings.append(f"InputPort fromArm{k} = {instr_instance}.SO;")
+            arm_lines.append(
+                f"Instance {instr_instance} Of {instr_instance} "
+                f"{{ InputPort SI = {mux_instance}.toSI; }}"
+            )
+    lines = [
+        f"Instance {mux_instance} Of {mux_instance} {{ InputPort SI = {prev_so}; "
+        + " ".join(arm_bindings)
+        + " }"
+    ]
+    lines.extend(arm_lines)
+    return lines, f"{mux_instance}.SO"
+
+
 def _render_chain_instances(chain, prev_so: str) -> tuple:
     """One level of a chain: each slot's own ``Instance <sib> Of warptap_sib`` binds ``SI``
     to ``prev_so`` (the previous slot's ``SO``, or the caller's own entry point) and
     ``fromSO`` to whatever it gates -- a leaf instrument's own ``SO``, or (recursively) a
     nested sub-chain's own final ``SO``, mirroring exactly how :func:`~warptap.sib_insert.
-    _insert_chain` threads ``prev_so``/wires a hierarchy slot's ``nested_so``. Returns
-    ``(lines, final_so)`` -- ``final_so`` is this chain's own last slot's ``SO`` reference,
-    for the caller to thread as its own ``prev_so`` (top level) or bind into an enclosing
-    SIB's own ``fromSO`` (nested)."""
+    _insert_chain` threads ``prev_so``/wires a hierarchy slot's ``nested_so``. A
+    :class:`~warptap.icl_model.ScanMuxNode` slot delegates to :func:`_render_scan_mux_instance`
+    instead -- an N-arm generalization of the same ``fromSO`` idea, not a different shape.
+    Returns ``(lines, final_so)`` -- ``final_so`` is this chain's own last slot's ``SO``
+    reference, for the caller to thread as its own ``prev_so`` (top level) or bind into an
+    enclosing SIB's own ``fromSO`` (nested)."""
     lines: List[str] = []
     for node in chain:
+        if isinstance(node, ScanMuxNode):
+            mux_lines, prev_so = _render_scan_mux_instance(node, prev_so)
+            lines.extend(mux_lines)
+            continue
+
         if node.instrument is None and not node.nested:
             raise IclEmitError(
                 f"SIB {node.sib_name!r} has neither an instrument nor a nested network"
@@ -366,14 +549,37 @@ def render_sib_instances(graph: PhysicalGraph) -> List[str]:
 
 
 def _collect_instruments(chain, seen: dict) -> None:
-    """Recursively walk a chain (and any nested sub-chains) collecting each distinct leaf
+    """Recursively walk a chain (and any nested sub-chains, including inside a
+    :class:`~warptap.icl_model.ScanMuxNode`'s own arms) collecting each distinct leaf
     instrument by name, first-seen order -- mirrors :func:`_render_chain_instances`'s own
     traversal shape."""
     for node in chain:
-        if node.nested:
+        if isinstance(node, ScanMuxNode):
+            for arm in node.arms:
+                if arm.nested:
+                    _collect_instruments(arm.nested, seen)
+                elif arm.instrument is not None and arm.instrument.name not in seen:
+                    seen[arm.instrument.name] = arm.instrument
+        elif node.nested:
             _collect_instruments(node.nested, seen)
         elif node.instrument is not None and node.instrument.name not in seen:
             seen[node.instrument.name] = node.instrument
+
+
+def _collect_scan_muxes(chain, seen: dict) -> None:
+    """Recursively walk a chain (and any nested sub-chains, including inside a
+    :class:`~warptap.icl_model.ScanMuxNode`'s own arms) collecting each distinct
+    :class:`~warptap.icl_model.ScanMuxNode` by name, first-seen order -- mirrors
+    :func:`_collect_instruments`'s own traversal shape."""
+    for node in chain:
+        if isinstance(node, ScanMuxNode):
+            if node.mux_name not in seen:
+                seen[node.mux_name] = node
+            for arm in node.arms:
+                if arm.nested:
+                    _collect_scan_muxes(arm.nested, seen)
+        elif node.nested:
+            _collect_scan_muxes(node.nested, seen)
 
 
 def to_icl(
@@ -385,16 +591,19 @@ def to_icl(
     since accepting the real name twice would only reintroduce a keep-two-values-in-sync risk
     ``sib_plan.build_sib_plan``'s own ``top_name`` fix was meant to remove).
 
-    Emits: ``render_sib_module_type()`` once, one ``render_instrument_module()`` per distinct
-    instrument, then the top module -- a ``ScanInterface`` naming the five real JTAG pins
-    (:mod:`warptap.tap_ports`), the SIB/instrument ``Instance`` statements
-    (``render_sib_instances``), and (when ``include_access_link``) a trailing
+    Emits: ``render_sib_module_type()`` once, one ``render_scan_mux_module()`` per distinct
+    :class:`~warptap.icl_model.ScanMuxNode` (any depth/branch), one ``render_instrument_
+    module()`` per distinct instrument, then the top module -- a ``ScanInterface`` naming the
+    five real JTAG pins (:mod:`warptap.tap_ports`), the SIB/mux/instrument ``Instance``
+    statements (``render_sib_instances``), and (when ``include_access_link``) a trailing
     ``AccessLink ... Of STD_1149_1_2001`` naming ``EXTEST`` (see module docstring for why).
-    The ``wdr_select`` clause's shape (``ScanInterface { <sib>; }``, no ``ActiveSignals``)
+    The ``wdr_select`` clause's shape (``ScanInterface { <slot>; }``, no ``ActiveSignals``)
     matches the confirmed real example directly (a real chip's ``MultiCoreAccessLink.icl``) --
     ``ActiveSignals`` there names the ``wir_select`` clause's own IR-decode signal, a genuinely
     different thing this v1 emitter doesn't need since it only ever describes one flat DR
-    chain, not IR-based multi-core selection.
+    chain, not IR-based multi-core selection. The chain's first slot works here whether it's a
+    SIB or a mux -- both module kinds declare the identically-shaped ``ScanInterface client
+    { Port SI; Port SEL; Port SO; }``, so ``wdr_select``'s reference is agnostic to which.
 
     ``include_access_link`` defaults to ``True`` (real, grammatically valid ICL, useful to any
     consumer that implements it) but the vendored ``Honza255/icl_parser`` -- Stage 10's own
@@ -405,19 +614,35 @@ def to_icl(
     the ICL this function emits, and is documented here rather than silently worked around.
     Raises :class:`IclEmitError` for anything v1 can't represent."""
     module_type_blocks = [render_sib_module_type()]
+    seen_muxes: dict = {}
+    _collect_scan_muxes(graph.chain, seen_muxes)
+    for mux in seen_muxes.values():
+        module_type_blocks.append(render_scan_mux_module(mux))
     seen_instruments: dict = {}
     _collect_instruments(graph.chain, seen_instruments)
     for instrument in seen_instruments.values():
         module_type_blocks.append(render_instrument_module(instrument))
 
     instance_lines = render_sib_instances(graph)
-    first_sib = _sib_instance_name(graph.chain[0].sib_name) if graph.chain else None
-    last_so = f"{_sib_instance_name(graph.chain[-1].sib_name)}.SO" if graph.chain else TDI
+    first_slot = _slot_instance_name(graph.chain[0]) if graph.chain else None
+    last_so = f"{_slot_instance_name(graph.chain[-1])}.SO" if graph.chain else TDI
+    # A SibNode's own SO is always 1 bit (render_sib_module_type's SR), but a ScanMuxNode's
+    # own SO carries its select_width (render_scan_mux_module's SO/SELREG pairing) -- tdo's
+    # own declared width must match whatever it's bound to, the same same-module port_size==
+    # source_size rule that forced render_scan_mux_module's own SO fix (see that function's
+    # docstring), confirmed here by live-validating a mux sitting directly at the chain's tail
+    # with no SIB wrapper (every other existing test only ever had a 1-bit SibNode there).
+    last_so_width = (
+        graph.chain[-1].select_width
+        if graph.chain and isinstance(graph.chain[-1], ScanMuxNode)
+        else 1
+    )
+    tdo_bits = f"[{last_so_width - 1}:0]" if last_so_width > 1 else ""
 
     top_lines = [
         f"Module {root.name} {{",
         f"    ScanInPort {TDI};",
-        f"    ScanOutPort {TDO} {{ Source {last_so if graph.chain else TDI}; }}",
+        f"    ScanOutPort {TDO}{tdo_bits} {{ Source {last_so if graph.chain else TDI}; }}",
         f"    TCKPort {TCK};",
         f"    TMSPort {TMS};",
         f"    TRSTPort {TRST_N};",
@@ -431,8 +656,8 @@ def to_icl(
         top_lines.append("")
         top_lines.append("    AccessLink warptap_tap Of STD_1149_1_2001 {")
         top_lines.append(f"        BSDLEntity {root.name};")
-        if first_sib is not None:
-            top_lines.append(f"        wdr_select {{ ScanInterface {{ {first_sib}; }} }}")
+        if first_slot is not None:
+            top_lines.append(f"        wdr_select {{ ScanInterface {{ {first_slot}; }} }}")
         top_lines.append("    }")
     top_lines.append("}")
 
