@@ -134,8 +134,11 @@ def test_sequential_iapply_to_different_instruments_second_phase1_reflects_first
     # And the SECOND call's own phase-1 select pattern must open sensor_b, close sensor_a:
     # decode chronological-order tdi back to position order (reverse) and check the tail
     # two bits are sib_sensor_a's own (now-deasserted) select bit and... actually simplest:
-    # after this iApply, sensor_a's SIB must no longer be tracked as open.
-    assert pdl._currently_open == frozenset({"sib_sensor_b"})
+    # after this iApply, sensor_a's SIB must no longer be tracked as open. (Now a dict, not a
+    # frozenset -- sib_retarget.stage_open_sequence returns dict[str, int] rounds since the
+    # multi-arm ScanMux plan's Phase 2; _currently_open's own type formally generalizes in
+    # that plan's Phase 4, but already receives whatever stage_open_sequence itself returns.)
+    assert pdl._currently_open == {"sib_sensor_b": 1}
 
 
 def test_iwrite_payload_reaches_phase2_tdi():

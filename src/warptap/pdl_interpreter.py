@@ -139,6 +139,11 @@ class PDLInterpreter:
         # (expected, low_bit, high_bit) -- (low_bit, high_bit) = (None, None) means "whole
         # instrument," resolved against the target's real width in iApply itself.
         self._pending_reads: dict[str, tuple[int, Optional[int], Optional[int]]] = {}
+        # Union[frozenset[str], dict[str, int]] once a ScanMuxNode is involved (sib_retarget.
+        # stage_open_sequence now returns dict[str, int] rounds) -- the full type/semantics
+        # generalization is multi-arm ScanMux plan Phase 4; this annotation stays as the
+        # pre-ScanMux shape until then, since layout_bit_length/compose_bits/_target_layout
+        # all already accept either shape transparently.
         self._currently_open: frozenset[str] = frozenset()
         self.program: list[Union[ShiftDR, GotoState, Runtest, PulsePin]] = []
         self.history: list[PdlStatement] = []
@@ -266,7 +271,7 @@ class PDLInterpreter:
         target_path = open_path_to(
             self._graph, instrument_name, network_configuration=self._currently_open
         )
-        target_sib = target_path[-1]
+        target_sib = target_path[-1].name
 
         ops: list[Union[ShiftDR, GotoState]] = []
 
@@ -275,14 +280,15 @@ class PDLInterpreter:
         # iApply left open, on round 1) is driven closed. Sized against `prior_open` -- the
         # network's actual physical state entering that round.
         prior_open = self._currently_open
-        for open_after in stage_open_sequence(self._graph, frozenset(target_path)):
+        target_open = {step.name: step.value for step in target_path}
+        for open_after in stage_open_sequence(self._graph, target_open):
             len1 = layout_bit_length(self._graph, prior_open)
             bits1 = compose_bits(self._graph, prior_open, open_after, target_sib=None, payload_value=0)
             ops.append(GotoState(TapState.SHIFT_DR))
             ops.append(ShiftDR(len1, tdi=bits_to_int(list(reversed(bits1)))))
             ops.append(GotoState(TapState.RUN_TEST_IDLE))
             prior_open = open_after
-        opened = prior_open  # == frozenset(target_path)
+        opened = prior_open  # == target_open plus every implied ancestor, each with its value
         self._currently_open = opened
 
         # Phase 2: shift the real payload, re-asserting the same (now-physical) select

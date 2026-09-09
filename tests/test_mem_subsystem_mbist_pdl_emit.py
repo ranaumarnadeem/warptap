@@ -89,14 +89,14 @@ def test_real_mem_subsystem_mbist_scenario_renders_and_matches_actual_shifted_pa
     # PDLInterpreter itself uses but called fresh here, what phase 2's tdi/tdo SHOULD be for
     # this real 8-deep chain, and confirm the rendered iWrite/iRead values agree with the
     # ACTUAL bits that were shifted -- not just that to_pdl() echoed back its own inputs.
-    write_target = next(iter(open_path_to(graph, "self_repair_start")))
+    write_target = next(iter(open_path_to(graph, "self_repair_start"))).name
     expected_write_bits = compose_bits(
         graph, frozenset({write_target}), frozenset({write_target}),
         target_sib=write_target, payload_value=1,
     )
     assert write_ops[4].tdi == bits_to_int(list(reversed(expected_write_bits)))
 
-    read_target = next(iter(open_path_to(graph, "self_repair_busy")))
+    read_target = next(iter(open_path_to(graph, "self_repair_busy"))).name
     expected_read_bits = compose_bits(
         graph, frozenset({read_target}), frozenset({read_target}),
         target_sib=read_target, payload_value=1,

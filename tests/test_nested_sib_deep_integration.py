@@ -19,7 +19,7 @@ from warptap.pdl_verify import check_reads
 from warptap.sib_insert import insert_sib_network
 from warptap.sib_model import SibNetworkRegister
 from warptap.sib_plan import HierarchySpec, InstrumentSpec, build_sib_plan
-from warptap.sib_retarget import open_path_to, stage_open_sequence
+from warptap.sib_retarget import PathStep, open_path_to, stage_open_sequence
 from warptap.sim_io import run_verilog_testbench
 from warptap.tap_fsm import TapState
 from warptap.tap_ir import GotoState, ShiftIR, bits_to_int
@@ -109,8 +109,11 @@ def test_three_level_nested_read_matches_real_rtl_and_python_model(
     # The retargeting path itself is genuinely 3 deep -- not exercised by any earlier phase's
     # own tests, which only ever went 2 levels.
     target_path = open_path_to(graph, "deep_sensor")
-    assert target_path == ("sib_bank_a", "sib_bank_b", "sib_deep_sensor")
-    assert len(stage_open_sequence(graph, frozenset(target_path))) == 3
+    assert target_path == (
+        PathStep("sib_bank_a", 1), PathStep("sib_bank_b", 1), PathStep("sib_deep_sensor", 1),
+    )
+    target_open = {step.name: step.value for step in target_path}
+    assert len(stage_open_sequence(graph, target_open)) == 3
 
     pdl = PDLInterpreter(graph, root)
     pdl.iTarget("deep_sensor")
