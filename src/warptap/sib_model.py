@@ -304,8 +304,43 @@ class SibNetworkRegister:
         return layout
 
     @staticmethod
+    def _live_so(slots: List) -> int:
+        """What the given chain's own final `so` (feeding whatever's next -- a gating SIB's
+        own nested_so, or a mux arm's own arm_so[k]) currently reads as, without building a
+        full ``_live_layout_chain`` list -- mirrors rtl/scan_mux_cell.v's own `so` assign
+        exactly: the matched arm's own relayed so while matched, else the register's own
+        LSB. Needed because a mux's own select field is ONE shared register (unlike an
+        instrument's N independently-chained bit cells): `so` is always wired to bit 0 (or
+        the matched arm's relay) specifically, never `shift_ff[k]` for any other k -- getting
+        this backwards (giving every select-field bit position independent, unconditional
+        read access to its own `shift_ff[k]`) was a real bug this method fixes, caught by a
+        real RTL cross-sim mismatch (tests/test_sib_insert_scan_mux_cross_sim.py), not just
+        reasoned here: Phase 3's own pure-Python tests happened to never exercise a case
+        where the distinction was observable."""
+        last = slots[-1]
+        if isinstance(last, _MuxSlotState):
+            matched_value = _value_of(last.po)
+            matched_arm = next((a for a in last.arms if matched_value in a.values), None)
+            if matched_arm is not None:
+                if matched_arm.children is not None:
+                    return SibNetworkRegister._live_so(matched_arm.children)
+                return matched_arm.inst_shift_ff[matched_arm.width - 1]
+            return last.shift_ff[0]
+        # A SibNode's own `so` is always its own sib_shift_ff (rtl/sib_cell.v's `assign
+        # so = shift_ff`, unconditional) -- REGARDLESS of what's nested inside it, leaf or
+        # deeper. Whatever's nested only ever affects this SIB's own shift_ff indirectly,
+        # through the one-cycle relay (`shift_ff <= po ? nested_so : si`); it's never this
+        # SIB's own externally-visible `so` directly.
+        return last.sib_shift_ff
+
+    @staticmethod
     def _read(ref: _CellRef) -> int:
         if isinstance(ref.slot, _MuxSlotState):
+            if ref.bit == 0:
+                # The only select-field position that's ever externally observable (rtl/
+                # scan_mux_cell.v's own `so`) -- every other bit is purely internal,
+                # cascaded-through-but-never-read-directly, so it's unaffected.
+                return SibNetworkRegister._live_so([ref.slot])
             return ref.slot.shift_ff[ref.bit]
         if ref.bit is None:
             return ref.slot.sib_shift_ff
