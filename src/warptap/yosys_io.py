@@ -110,6 +110,57 @@ def ingest(
         return json.loads((tmp / out_name).read_text(encoding="utf-8"))
 
 
+def ingest_with_params(
+    verilog_files: list[Path | str],
+    top: str,
+    chparams: dict[str, int],
+    *,
+    yosys_command: str | None = None,
+    use_sv: bool = False,
+) -> dict[str, Any]:
+    """Like :func:`ingest`, but applies ``chparam -set <name> <value> ...`` to ``top``
+    *before* ``hierarchy`` runs, baking in specific parameter values for a genuinely
+    parameterized module (e.g. ``rtl/scan_mux_cell.v``'s ``ARMS``/``SEL_WIDTH``/
+    ``ARM_VALUES``, which vary per :class:`~warptap.icl_model.ScanMuxNode` instance).
+
+    Needed because ``hierarchy`` (part of plain :func:`ingest`'s own script) resolves every
+    parameter-dependent port/register width to a concrete value AND strips the module's own
+    overridability entirely -- confirmed empirically (not assumed): a module imported via
+    plain ``ingest()`` and later instantiated with an ``add_cell(..., parameters={...})``
+    override fails to compile (``iverilog`` reports "parameter ... not found in ..."),
+    regardless of whether that specific parameter affects any port width at all. The only
+    way to get a correctly-shaped, correctly-valued instance of such a module is to import a
+    freshly, fully parameter-specialized copy of it -- one Yosys module per distinct
+    parameter combination actually needed, instantiated with zero further overrides.
+
+    ``chparam``'s own value syntax is a plain decimal integer (unlike Yosys JSON's own
+    cell-``parameters`` binary-string encoding -- a different layer, a different format)."""
+    with tempfile.TemporaryDirectory(prefix="warptap-ingest-") as tmpdir:
+        tmp = Path(tmpdir)
+        local_names: list[str] = []
+        for f in verilog_files:
+            src = Path(f)
+            if src.name in local_names:
+                raise ValueError(f"duplicate Verilog source filename: {src.name!r}")
+            shutil.copy(src, tmp / src.name)
+            local_names.append(src.name)
+
+        out_name = "netlist.json"
+        sv_flag = "-sv " if use_sv else ""
+        read_cmds = " ".join(f"read_verilog {sv_flag}{name};" for name in local_names)
+        chparam_flags = " ".join(f"-set {name} {value}" for name, value in chparams.items())
+        script = (
+            f"{read_cmds} "
+            f"chparam {chparam_flags} {top}; "
+            f"hierarchy -top {top}; "
+            f"proc; "
+            f"memory_collect; "
+            f"write_json {out_name}"
+        )
+        run_yosys_script(script, yosys_command=yosys_command, cwd=tmp)
+        return json.loads((tmp / out_name).read_text(encoding="utf-8"))
+
+
 def write_verilog_from_json(
     netlist_json: dict[str, Any], *, yosys_command: str | None = None
 ) -> str:
