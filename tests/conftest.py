@@ -167,6 +167,65 @@ def icl_parser_module(icl_parser_dir: Path):
 
 
 @pytest.fixture(scope="session")
+def pdl_parser_module(icl_parser_dir: Path):
+    """A ``parse_pdl(text) -> list[str]`` callable backed by a real, independently-authored PDL
+    grammar (``third_party/icl_parser/src/pdl_parser/pdl.g4``, a "PDL0 grammar v20130806") --
+    compiled here via ANTLR 4.7.2 (matching the same pinned version ``icl_parser_module`` uses)
+    after fixing several real bugs in the grammar file itself (an unterminated rule, an
+    undefined rule reference, two rule names -- ``range``/``format`` -- colliding with Python
+    builtins under the Python3 target, a missing ``WS`` token before ``-sck``'s own port
+    operand) -- see ``pdl_emit.py``'s own module docstring for the full story, including the
+    real ``pdl_emit.py`` bug this compiled grammar caught (``-sck`` rendered with no port name,
+    which the real grammar requires).
+
+    Entry point is the grammar's own ``commands`` rule (a bare sequence of statements, each
+    ending in ``eoc``), not the file-level ``pdl_source`` rule -- ``pdl_source`` requires an
+    enclosing ``iProc { ... }`` block, which ``pdl_emit.to_pdl()`` deliberately never emits
+    (Stage 11's own scope: a flat statement history, not a named, reusable procedure).
+
+    Returns a list of ``"line L:C message"`` syntax-error strings (empty means a clean parse) --
+    both lexer and parser errors are collected via a custom ``ErrorListener`` rather than
+    letting ANTLR print to stderr, matching this project's other external-tool fixtures'
+    "return something a test can assert on directly" convention. Requires
+    ``antlr4-python3-runtime==4.7.2`` (the same dependency ``icl_parser_module`` already needs)
+    -- skips (not fails) when the submodule isn't checked out or that package isn't importable."""
+    src_dir = str(icl_parser_dir / "src" / "pdl_parser")
+    if src_dir not in sys.path:
+        sys.path.insert(0, src_dir)
+    try:
+        from antlr4 import CommonTokenStream, InputStream
+        from antlr4.error.ErrorListener import ErrorListener
+        from pdlLexer import pdlLexer
+        from pdlParser import pdlParser
+    except ImportError as exc:
+        pytest.skip(
+            f"pdl parser not importable from {src_dir}: {exc} -- run `git submodule update "
+            "--init third_party/icl_parser` and `pip install antlr4-python3-runtime==4.7.2`"
+        )
+
+    class _CollectingErrorListener(ErrorListener):
+        def __init__(self):
+            super().__init__()
+            self.errors: list[str] = []
+
+        def syntaxError(self, recognizer, offendingSymbol, line, column, msg, e):
+            self.errors.append(f"line {line}:{column} {msg}")
+
+    def parse_pdl(text: str) -> list[str]:
+        errors = _CollectingErrorListener()
+        lexer = pdlLexer(InputStream(text))
+        lexer.removeErrorListeners()
+        lexer.addErrorListener(errors)
+        parser = pdlParser(CommonTokenStream(lexer))
+        parser.removeErrorListeners()
+        parser.addErrorListener(errors)
+        parser.commands()
+        return errors.errors
+
+    return parse_pdl
+
+
+@pytest.fixture(scope="session")
 def semiate_stil_parser():
     """``STILParser`` (``Semi-ATE-STIL``'s own public API class, pip-installable unlike
     ``icl_parser`` -- implementation_plan.md §7 Stage 13) -- a real, independent, Lark-based

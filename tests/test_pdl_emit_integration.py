@@ -2,15 +2,14 @@
 ``PDLInterpreter``-driven history through ``to_pdl()``, mirroring
 tests/test_tap_ir_emitters_integration.py's own end-to-end style.
 
-**Self-consistency-only, not an independent-tool validation** -- no independent PDL parser
-exists to validate against (see pdl_emit.py's own module docstring for the exhaustive search
-and the direct confirmation that the vendored icl_parser's own pdl_parser is unwired). What
-this file actually proves: the high-level ``history`` record (what ``to_pdl`` renders) and the
-low-level ``self.program`` ops (what actually gets shifted) agree with EACH OTHER for the same
-``iApply`` call -- i.e. ``to_pdl()`` isn't silently rendering a stale or wrong value. This is
-weaker than Stage 7's OpenOCD/Jam-player validation or Stage 10's icl_parser validation, which
-both check conformance against code this project didn't write; here there is no such oracle,
-stated permanently and explicitly rather than glossed over.
+**Self-consistency-only here, not an independent-tool validation** -- independent *grammar*
+validation (a real, compiled PDL parser) lives in ``test_pdl_emit_grammar_validation.py``; see
+``pdl_emit.py``'s own module docstring for what that does and doesn't prove (grammar
+correctness, not retargeting-semantics correctness -- no tool checks the latter for any
+format). What this file actually proves: the high-level ``history`` record (what ``to_pdl``
+renders) and the low-level ``self.program`` ops (what actually gets shifted) agree with EACH
+OTHER for the same ``iApply`` call -- i.e. ``to_pdl()`` isn't silently rendering a stale or
+wrong value.
 """
 
 from __future__ import annotations
@@ -128,4 +127,4 @@ def test_irunloop_with_sck_port_produces_pulsepin_and_renders_sck():
     assert pdl.program[-1] == PulsePin("sysclk", 3)
 
     pdl_text = to_pdl(pdl.history, graph)
-    assert pdl_text.splitlines()[-1] == "iRunLoop 3 -sck;"
+    assert pdl_text.splitlines()[-1] == "iRunLoop 3 -sck sysclk;"

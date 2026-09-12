@@ -38,10 +38,10 @@ class PdlReadStmt(NamedTuple):
 
 class PdlRunLoopStmt(NamedTuple):
     """``iRunLoop <count> -tck;`` (``sck_port is None``, Stage 5's original, still-default
-    case) or ``iRunLoop <count> -sck;`` (``sck_port`` names a real functional-clock port --
-    Stage 15's addition to ``PDLInterpreter.iRunLoop``). ``sck_port`` itself is never rendered
-    in PDL text -- real PDL's ``-sck``/``-tck`` are bare flags, carrying no port name -- it
-    only exists here to tell ``pdl_emit.to_pdl`` which flag to render."""
+    case) or ``iRunLoop <count> -sck <sck_port>;`` (``sck_port`` names a real functional-clock
+    port -- Stage 15's addition to ``PDLInterpreter.iRunLoop``). Real PDL's own compiled
+    grammar (``pdl_emit.py``'s own module docstring) requires ``-sck`` to carry its port name;
+    ``-tck`` stays a bare flag since TCK is always the one, implicit TAP clock."""
 
     count: int
     sck_port: Optional[str] = None

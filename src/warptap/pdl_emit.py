@@ -6,17 +6,36 @@ statement text, the third of §3.4's "stateless pretty-printers over one IR/mode
 (after ``tap_ir_svf.py``/``tap_ir_stapl.py``'s ``tap_ir`` emitters and ``icl_emit.py``'s
 ``icl_model`` emitter).
 
-**No independent PDL validation tool exists anywhere** -- confirmed by an exhaustive search of
-the real PDL ecosystem earlier this session, and reconfirmed directly against the vendored
-``Honza255/icl_parser`` submodule itself: its ``src/pdl_parser/pdl.g4`` is a bare ANTLR
-grammar file with zero generated lexer/parser code, zero Python wiring, and zero other
-reference anywhere in that repository (a full-repo grep found nothing beyond that one file and
-a spec-quoting comment in an unrelated ICL test) -- confirming, not merely suspecting, that
-it's an unwired grammar definition, not a real parser, exactly the "if negative" branch this
-stage's own plan anticipated. Unlike ``icl_emit.py``, this emitter therefore has **no
-independent oracle to validate against** -- see ``tests/test_pdl_emit_integration.py``'s own
-self-consistency-only cross-check, loudly documented there as NOT equivalent-strength to
-Stage 7's OpenOCD/Jam-player validation or Stage 10's ``icl_parser`` validation.
+**No independent PDL *semantic* validation tool exists anywhere** -- confirmed by an exhaustive
+search of the real PDL ecosystem, and reconfirmed directly against the vendored
+``Honza255/icl_parser`` submodule's own retargeting engine (``IclRegisterModel``/``Ijtag.
+iWrite``/``iApply``/``getiApplyVectors``): tried directly against a warptap-canonical SIB
+network and confirmed it doesn't compute a correct result for one -- that engine's own README
+states plainly that DataRegister retargeting ("Data registers"/"Retargeting for data
+registers") is explicitly **not supported**, exactly the register kind a WRITE instrument's
+own committed value lives in.
+
+**A real, independent GRAMMAR *does* now exist**, though: that same submodule's
+``src/pdl_parser/pdl.g4`` was a bare, never-compiled ANTLR grammar (a real "PDL0 grammar
+v20130806", not a stub -- it covers every statement kind this emitter renders) with zero
+generated lexer/parser code and zero Python wiring anywhere in that repository. Compiled here
+via ANTLR 4.7.2 (matching the exact version already pinned for the ICL grammar) after fixing
+several real bugs in the grammar file itself (an unterminated rule, an undefined rule
+reference, two rule names colliding with Python builtins in the Python3 target, a missing
+``WS`` token) -- see the vendored fork's own commit history for the full list. This closes the
+gap at the same tier Stage 7's SVF/STAPL validation already sits at: independent *grammar*
+correctness (this emitter's output parses as real PDL syntax), not independent *retargeting-
+semantics* correctness (which nothing here checks, for any format, including the ones with
+real external validators) -- see ``tests/test_pdl_emit_iclparser_validation.py``.
+
+Live-validating against this newly-compiled grammar caught one real, genuine bug this way:
+this emitter used to render ``-sck`` as a bare flag with no port name, reasoning (at the time)
+that neither PDL text nor ICL gave the port a confirmed place to live. The compiled grammar's
+own ``irunloop_def`` rule proves that reasoning incomplete for the PDL-text half of that claim
+-- ``-sck`` takes a mandatory port-name operand (``WS '-sck' WS port``, the last ``WS`` itself
+a real grammar bug fixed above) -- and ``pdl_emit.py`` already has that name in hand
+(``PdlRunLoopStmt.sck_port``), so omitting it produced text that fails to parse as real PDL.
+Fixed by rendering it: ``iRunLoop <count> -sck <port>;``.
 
 **Field addressing (Stage 15)**: real PDL addresses a named sub-field (``TDR_bit``/``UCreg``/
 ICL ``Alias``) inside ``iWrite``/``iRead``. ``pdl_history.PdlWriteStmt``/``PdlReadStmt.field``
@@ -32,12 +51,12 @@ width when one was addressed, else the whole instrument's) -- matching real PDL 
 session's research found, and this project's own "always emit every field explicitly" house
 style (``tap_ir_svf.py``, ``tap_ir_stapl.py``).
 
-**``iRunLoop`` renders ``-sck`` or ``-tck`` (Stage 15)** depending on whether
+**``iRunLoop`` renders ``-sck <port>`` or bare ``-tck`` (Stage 15)** depending on whether
 ``PdlRunLoopStmt.sck_port`` is set -- matching whichever selector
 ``PDLInterpreter.iRunLoop(..., sck_port=...)`` was actually called with (Stage 5's original
-``-tck``-only rendering was the ``sck_port is None`` case all along). The port name itself is
-never rendered -- real PDL's ``-sck``/``-tck`` are bare flags in the text, carrying no port
-name.
+``-tck``-only rendering was the ``sck_port is None`` case all along). ``-tck`` stays a bare
+flag (TCK is always the one, implicit TAP clock, needing no name); ``-sck`` renders its own
+port name, per the newly-compiled grammar's own requirement (see module docstring above).
 """
 
 from __future__ import annotations
@@ -101,8 +120,10 @@ def to_pdl(history: List[PdlStatement], graph: PhysicalGraph) -> str:
             width = _instrument_width(graph, stmt.field)
             lines.append(f"iRead {stmt.field} {_hex(stmt.expected, width)};")
         elif isinstance(stmt, PdlRunLoopStmt):
-            flag = "-sck" if stmt.sck_port is not None else "-tck"
-            lines.append(f"iRunLoop {stmt.count} {flag};")
+            if stmt.sck_port is not None:
+                lines.append(f"iRunLoop {stmt.count} -sck {stmt.sck_port};")
+            else:
+                lines.append(f"iRunLoop {stmt.count} -tck;")
         elif isinstance(stmt, PdlApplyStmt):
             lines.append("iApply;")
         else:

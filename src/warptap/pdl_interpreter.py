@@ -234,11 +234,14 @@ class PDLInterpreter:
         :class:`~warptap.tap_ir.PulsePin` instead of a :class:`~warptap.tap_ir.Runtest`  --
         real PDL's ``-sck`` (system clock) selector, reusing the exact primitive Stage 13/14
         already built and real-cross-sim-validated for "pulse a named signal independent of
-        TCK's own timing domain," rather than inventing a second, parallel concept. Neither
-        PDL text nor ICL gives ``-sck``'s target port a confirmed real place to live, so
-        ``sck_port`` is a Python-side-only parameter -- the same "caller must separately
-        supply the real clock's name" pattern ``faultflow_retarget.retarget_faultflow_patterns``'s
-        own ``clock_port`` parameter already established."""
+        TCK's own timing domain," rather than inventing a second, parallel concept. ICL has no
+        confirmed mechanism for declaring a port as "the system clock" (unlike TCK, which is a
+        real, named port kind), so ``sck_port`` is a Python-side-only parameter, never bound to
+        an ICL declaration -- the same "caller must separately supply the real clock's name"
+        pattern ``faultflow_retarget.retarget_faultflow_patterns``'s own ``clock_port``
+        parameter already established. PDL text itself, unlike ICL, does have a real place for
+        this name -- ``pdl_emit.to_pdl`` renders it as ``-sck``'s own operand (confirmed
+        against a real, independently-authored PDL grammar; see that module's own docstring)."""
         if sck_port is None:
             self.program.append(
                 Runtest(count, run_state=TapState.RUN_TEST_IDLE, end_state=TapState.RUN_TEST_IDLE)

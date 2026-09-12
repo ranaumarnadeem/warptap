@@ -3,10 +3,12 @@ renders real PDL text for the exact scenario Stage 9's own `pdl_verify.py` tier-
 cross-simulates (write `self_repair_start=1`, settle, read `self_repair_busy` expecting 1)
 against the real 8-instrument network -- but PDL emission, like `PDLInterpreter` itself,
 operates purely on the abstract `PhysicalGraph`/`ModuleInstance` model, so this needs neither
-the real openMBIST checkout nor Yosys/Icarus. Self-consistency-validated only, matching
-`pdl_emit.py`'s own permanent, honest scope (no independent PDL parser exists anywhere to
-validate against) -- reconfirmed here across a real, deeper (8-instrument) chain, not just the
-2-instrument case `test_pdl_emit_integration.py` already proves the underlying mechanism with.
+the real openMBIST checkout nor Yosys/Icarus. Self-consistency-validated only here (independent
+*grammar* validation against a real, compiled PDL parser lives in
+`test_pdl_emit_grammar_validation.py`; see `pdl_emit.py`'s own module docstring for what that
+does and doesn't prove) -- reconfirmed here across a real, deeper (8-instrument) chain, not
+just the 2-instrument case `test_pdl_emit_integration.py` already proves the underlying
+mechanism with.
 """
 
 from __future__ import annotations

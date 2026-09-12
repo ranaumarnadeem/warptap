@@ -60,11 +60,13 @@ def test_irunloop_with_no_sck_port_renders_tck():
     assert pdl == "iRunLoop 100 -tck;\n"
 
 
-def test_irunloop_with_sck_port_renders_sck_not_the_port_name():
-    """The port name itself is never rendered -- real PDL's -sck/-tck are bare flags."""
+def test_irunloop_with_sck_port_renders_the_port_name():
+    """Regression test: -sck used to render as a bare flag (no port name), reasoned at the
+    time to have "no confirmed place to live" in PDL text. A real, independently-compiled PDL
+    grammar (pdl_emit.py's own module docstring) proved that wrong -- -sck takes a mandatory
+    port-name operand -- so the bare-flag form was actually invalid PDL syntax."""
     pdl = to_pdl([PdlRunLoopStmt(100, "sysclk")], _graph())
-    assert pdl == "iRunLoop 100 -sck;\n"
-    assert "sysclk" not in pdl
+    assert pdl == "iRunLoop 100 -sck sysclk;\n"
 
 
 def test_iapply_renders_bare_statement():
