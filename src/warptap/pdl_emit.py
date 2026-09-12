@@ -17,16 +17,28 @@ own committed value lives in.
 
 **A real, independent GRAMMAR *does* now exist**, though: that same submodule's
 ``src/pdl_parser/pdl.g4`` was a bare, never-compiled ANTLR grammar (a real "PDL0 grammar
-v20130806", not a stub -- it covers every statement kind this emitter renders) with zero
-generated lexer/parser code and zero Python wiring anywhere in that repository. Compiled here
-via ANTLR 4.7.2 (matching the exact version already pinned for the ICL grammar) after fixing
-several real bugs in the grammar file itself (an unterminated rule, an undefined rule
-reference, two rule names colliding with Python builtins in the Python3 target, a missing
-``WS`` token) -- see the vendored fork's own commit history for the full list. This closes the
-gap at the same tier Stage 7's SVF/STAPL validation already sits at: independent *grammar*
+v20130806", not a stub) with zero generated lexer/parser code and zero Python wiring anywhere
+in that repository. Compiled here via ANTLR 4.7.2 (matching the exact version already pinned
+for the ICL grammar) after fixing several real bugs in the grammar file itself (an unterminated
+rule, an undefined rule reference, two rule names colliding with Python builtins in the Python3
+target, a missing ``WS`` token) and adding one new entry rule (see
+:func:`tests.conftest.pdl_parser_module`'s own docstring for why: invoking the grammar's bare
+``commands`` rule directly does not require full input consumption, which silently hid real
+failures) -- see the vendored fork's own commit history for the full list. This closes the gap
+at the same tier Stage 7's SVF/STAPL validation already sits at: independent *grammar*
 correctness (this emitter's output parses as real PDL syntax), not independent *retargeting-
 semantics* correctness (which nothing here checks, for any format, including the ones with
-real external validators) -- see ``tests/test_pdl_emit_iclparser_validation.py``.
+real external validators) -- see ``tests/test_pdl_emit_grammar_validation.py``.
+
+**A real, confirmed, permanent gap in this specific bundled grammar**: it has no
+``iTarget``/scoping construct at all (absent from its own ``keyword`` list, from ``command``'s
+own alternatives, and from the file entirely) -- an older PDL dialect than the one this
+project's own earlier research found ``iTarget`` in (``implementation_plan.md``'s own §3.2/§9
+research, predating this grammar ever being compiled). Every real ``to_pdl()`` output opens
+with ``iTarget``, so this grammar can validate each statement's own inner syntax but never a
+full emitted sequence as one unit -- ``test_pdl_emit_grammar_validation.py`` strips ``iTarget``
+lines before validating everything else, and separately pins the gap itself with a real,
+reported parse error rather than leaving it silently unchecked.
 
 Live-validating against this newly-compiled grammar caught one real, genuine bug this way:
 this emitter used to render ``-sck`` as a bare flag with no port name, reasoning (at the time)

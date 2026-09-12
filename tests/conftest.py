@@ -174,14 +174,31 @@ def pdl_parser_module(icl_parser_dir: Path):
     after fixing several real bugs in the grammar file itself (an unterminated rule, an
     undefined rule reference, two rule names -- ``range``/``format`` -- colliding with Python
     builtins under the Python3 target, a missing ``WS`` token before ``-sck``'s own port
-    operand) -- see ``pdl_emit.py``'s own module docstring for the full story, including the
-    real ``pdl_emit.py`` bug this compiled grammar caught (``-sck`` rendered with no port name,
-    which the real grammar requires).
+    operand) and adding one new rule (see below) -- see ``pdl_emit.py``'s own module docstring
+    for the full story, including the real ``pdl_emit.py`` bug this compiled grammar caught
+    (``-sck`` rendered with no port name, which the real grammar requires).
 
-    Entry point is the grammar's own ``commands`` rule (a bare sequence of statements, each
-    ending in ``eoc``), not the file-level ``pdl_source`` rule -- ``pdl_source`` requires an
-    enclosing ``iProc { ... }`` block, which ``pdl_emit.to_pdl()`` deliberately never emits
-    (Stage 11's own scope: a flat statement history, not a named, reusable procedure).
+    Entry point is a new ``flat_commands : commands EOF ;`` rule (added here, not part of the
+    original grammar) rather than ``commands`` directly: invoking ``commands`` (a bare
+    ``command*``) as an ANTLR entry point does NOT require it to consume the whole input --
+    zero repetitions is a legal match, so text starting with anything ``command`` doesn't
+    recognize silently "succeeds" with zero reported errors while leaving everything
+    unconsumed. Confirmed directly (not assumed): the original ``pdl_parser_module`` design
+    used bare ``commands`` and reported zero errors for both genuine garbage AND, more
+    importantly, for every ``iTarget``-prefixed sequence ``to_pdl()`` actually emits -- because
+    **this specific "PDL0" grammar has no ``iTarget``/scoping construct at all** (confirmed:
+    absent from the ``keyword`` list, absent from ``command``'s own alternatives, absent
+    anywhere in the file) -- an older PDL dialect than the one this project's own earlier
+    research found ``iTarget`` in. ``flat_commands`` makes that failure loud (a real
+    "mismatched input ``'iTarget'`` expecting ``<EOF>``" error) instead of silent.
+
+    **Consequence for callers**: this grammar can validate each individual statement's own
+    inner syntax (``iWrite``/``iRead``/``iApply``/``iRunLoop``, values, hex formatting, the
+    ``-sck``/``-tck`` flags) but NOT a `to_pdl()`-emitted sequence as a whole, since real
+    output always opens with ``iTarget``. Callers validating real ``to_pdl()`` output need to
+    strip ``iTarget`` lines first (see ``test_pdl_emit_grammar_validation.py``'s own
+    ``_strip_itarget_lines`` helper) and treat ``iTarget``'s own syntax as a confirmed,
+    permanent gap in this specific bundled dialect -- not silently unchecked.
 
     Returns a list of ``"line L:C message"`` syntax-error strings (empty means a clean parse) --
     both lexer and parser errors are collected via a custom ``ErrorListener`` rather than
@@ -219,7 +236,7 @@ def pdl_parser_module(icl_parser_dir: Path):
         parser = pdlParser(CommonTokenStream(lexer))
         parser.removeErrorListeners()
         parser.addErrorListener(errors)
-        parser.commands()
+        parser.flat_commands()
         return errors.errors
 
     return parse_pdl
