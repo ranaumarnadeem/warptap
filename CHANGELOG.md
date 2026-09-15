@@ -137,19 +137,35 @@ entry per implementation stage.
   technique (real primary source: Dr. Martin Keim, Nordic Test Forum 2017) is for fault
   localization in an *unknown*-structure network, already correctly ruled out as inapplicable by
   this project's own earlier `sib_overshift.py` research; not chased here.
-
-### Known issues (found, not yet fixed)
-
-- **A `WRITE`-direction instrument gated by a `ScanMuxNode` arm does not correctly round-trip
-  its own value on readback.** Found as a side effect of strengthening a previously-weak test
-  assertion (it only ever checked shift-op *count*, never the actual value, despite a comment
-  falsely claiming otherwise). Confirmed on real RTL, not just the Python model, and present
-  even in the already-`"safe"` switch-away-and-back pattern `test_sib_insert_scan_mux_cross_
-  sim.py`'s own `test_written_value_survives_switching_away_and_back_on_real_rtl` claims is
-  proven (that test only ever checked RTL-vs-Python-model *agreement*, never the value itself).
-  The plain-`SibNode` case is unaffected — proven correct via `check_reads()` on real RTL. Root
-  cause not yet identified; likely in `sib_model.py`'s `ScanMuxNode`-arm capture/update logic
-  specifically, not a general WRITE-instrument issue.
+- **Fixed: a `WRITE`-direction instrument gated by a `ScanMuxNode` arm didn't correctly
+  round-trip its own value on readback.** Found as a side effect of strengthening a previously-
+  weak test assertion (it only ever checked shift-op *count*, never the actual value, despite a
+  comment falsely claiming otherwise), and initially mischaracterized (in this file and the
+  project's own memory) as a `sib_model.py` bug — direct re-investigation found its own shift/
+  capture/update simulation matches real RTL exactly, including a `_read`-time redirect a
+  blanket-removal patch confirmed is load-bearing (broke 4 real, previously-passing tests, 2 of
+  them real RTL). The real bug: `PDLInterpreter._target_layout`/`iApply`'s pending-read block
+  computed the *expected* comparison value by reusing `compose_bits`' position-order-then-
+  reversed layout, which assumes a uniform linear cascade through the whole `width +
+  select_width` block — wrong for a matched mux arm. Confirmed by reading `rtl/scan_mux_cell.v`
+  directly and a dedicated RTL spike (`tests/test_scan_mux_write_arm_readback_cross_sim.py`,
+  using a real multi-bit host port so MSB-first vs LSB-first is actually distinguishable, unlike
+  every existing 1-bit fixture): while an arm stays matched, `so` is a *combinational
+  passthrough* of the matched arm's own `so` for the round's entire duration (`matched_old_c`
+  can't change mid-round), so its content surfaces on the round's own first `width`
+  chronological cycles, MSB-first — not wherever the reused linear layout would place it. Fixed
+  with a dedicated `_mux_arm_read_chronological_bits`, confirmed on real RTL in the two tests
+  that had deliberately documented-but-skipped this exact check
+  (`test_sib_insert_scan_mux_cross_sim.py`). The plain-`SibNode` case was never affected.
+- **Found, not fixed here: a read-only `iApply` of an already-open `WRITE` instrument silently
+  zeroes its own stored value for any later read.** Broader than the "same instrument twice
+  with no intervening target" footgun the retargeting shift-length optimization plan fixed —
+  phase 2 always delivers `payload_value` (defaulting to `0` absent a fresh `iWrite`), and
+  `stays_matched`/`stays_open` naturally holds for a round that doesn't change what's selected,
+  so that `0` commits via Update-DR regardless of mux involvement or intervening targets. Not
+  mux-specific. Tracked for a dedicated follow-up (`iApply`'s own payload-selection logic would
+  need to default an unwritten `WRITE` instrument's payload to its last-known committed value,
+  not `0`) — not folded into the mux-arm-readback fix above.
 
 ### Explicitly out of scope
 
