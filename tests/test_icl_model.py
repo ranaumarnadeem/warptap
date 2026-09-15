@@ -18,6 +18,7 @@ from warptap.icl_model import (
     ScanArm,
     ScanMuxNode,
     SibNode,
+    SignalBinding,
     resolve_dotted_address,
     slot_name,
     validate_one_hot_data_group,
@@ -204,39 +205,44 @@ def test_slot_name_reads_the_right_field_for_each_kind():
     assert slot_name(sib) == "sib_a"
 
 
-def _reg(name: str, address: int, width: int = 8, *, writable=True, readable=True) -> OneHotDataRegister:
-    return OneHotDataRegister(
-        name=name, address=address, width=width, writable=writable, readable=readable,
+def _reg(name: str, address: int, width: int = 8) -> OneHotDataRegister:
+    return OneHotDataRegister(name=name, address=address, width=width)
+
+
+def _group(*registers, address_width=2, data_width=8, writable=True, readable=True) -> OneHotDataGroup:
+    return OneHotDataGroup(
+        "REGFILE", address_width=address_width, data_width=data_width,
+        registers=registers, writable=writable, readable=readable,
     )
 
 
 def test_validate_one_hot_data_group_accepts_a_minimal_group():
-    group = OneHotDataGroup("REGFILE", address_width=2, data_width=8, registers=(_reg("REG0", 0),))
-    validate_one_hot_data_group(group)  # must not raise
+    validate_one_hot_data_group(_group(_reg("REG0", 0)))  # must not raise
 
 
 def test_validate_one_hot_data_group_accepts_mixed_register_widths():
     """Deliberately NOT rejected -- confirmed real: the vendored checker accepts a register
     narrower than the shared bus (multi-arm ScanMux plan's own OneHotDataGroup Phase 0,
     sub-step 5)."""
-    group = OneHotDataGroup(
-        "REGFILE", address_width=2, data_width=8,
-        registers=(_reg("REG0", 0, width=8), _reg("REG1", 1, width=4)),
-    )
+    group = _group(_reg("REG0", 0, width=8), _reg("REG1", 1, width=4))
     validate_one_hot_data_group(group)  # must not raise
 
 
+def test_validate_one_hot_data_group_accepts_write_only_and_read_only_groups():
+    """Group-level writable/readable, independent of each other -- confirmed real (Phase 0
+    sub-step 6: a write-only module makes every register writable and none readable, and
+    vice versa)."""
+    validate_one_hot_data_group(_group(_reg("REG0", 0), writable=True, readable=False))
+    validate_one_hot_data_group(_group(_reg("REG0", 0), writable=False, readable=True))
+
+
 def test_validate_one_hot_data_group_rejects_zero_registers():
-    group = OneHotDataGroup("REGFILE", address_width=2, data_width=8, registers=())
     with pytest.raises(OneHotDataGroupError, match="no registers"):
-        validate_one_hot_data_group(group)
+        validate_one_hot_data_group(_group())
 
 
 def test_validate_one_hot_data_group_rejects_a_duplicate_register_name():
-    group = OneHotDataGroup(
-        "REGFILE", address_width=2, data_width=8,
-        registers=(_reg("REG0", 0), _reg("REG0", 1)),
-    )
+    group = _group(_reg("REG0", 0), _reg("REG0", 1))
     with pytest.raises(OneHotDataGroupError, match="REG0"):
         validate_one_hot_data_group(group)
 
@@ -245,34 +251,42 @@ def test_validate_one_hot_data_group_rejects_two_registers_sharing_an_address():
     """A real safety net this project adds on top of the vendored checker, not redundant --
     confirmed the real checker has no cross-register address-uniqueness check at all (Phase 0
     sub-step 7)."""
-    group = OneHotDataGroup(
-        "REGFILE", address_width=2, data_width=8,
-        registers=(_reg("REG0", 0), _reg("REG1", 0)),
-    )
+    group = _group(_reg("REG0", 0), _reg("REG1", 0))
     with pytest.raises(OneHotDataGroupError, match="address 0"):
         validate_one_hot_data_group(group)
 
 
 def test_validate_one_hot_data_group_rejects_an_out_of_range_address():
-    group = OneHotDataGroup(
-        "REGFILE", address_width=1, data_width=8, registers=(_reg("REG0", 2),),
-    )
+    group = _group(_reg("REG0", 2), address_width=1)
     with pytest.raises(OneHotDataGroupError, match="outside the range"):
         validate_one_hot_data_group(group)
 
 
 def test_validate_one_hot_data_group_rejects_a_register_wider_than_the_group():
-    group = OneHotDataGroup(
-        "REGFILE", address_width=2, data_width=4, registers=(_reg("REG0", 0, width=8),),
-    )
+    group = _group(_reg("REG0", 0, width=8), data_width=4)
     with pytest.raises(OneHotDataGroupError, match="wider than"):
         validate_one_hot_data_group(group)
 
 
-def test_validate_one_hot_data_group_rejects_a_register_that_is_neither_writable_nor_readable():
-    group = OneHotDataGroup(
-        "REGFILE", address_width=2, data_width=8,
-        registers=(_reg("REG0", 0, writable=False, readable=False),),
-    )
+def test_validate_one_hot_data_group_rejects_a_group_that_is_neither_writable_nor_readable():
+    group = _group(_reg("REG0", 0), writable=False, readable=False)
     with pytest.raises(OneHotDataGroupError, match="neither writable nor readable"):
+        validate_one_hot_data_group(group)
+
+
+def test_validate_one_hot_data_group_rejects_write_signal_bits_on_a_read_only_group():
+    """A real, confirmed correction to this project's own first-draft design: writable/
+    readable are group-level, not per-register (see OneHotDataRegister's own docstring) -- a
+    register carrying write_signal_bits in a group that isn't writable is inconsistent data,
+    since no real WriteEnPort/DataInPort would exist for it to bind to."""
+    reg = OneHotDataRegister("REG0", address=0, width=8, write_signal_bits=(SignalBinding("x"),) * 8)
+    group = _group(reg, writable=False, readable=True)
+    with pytest.raises(OneHotDataGroupError, match="write_signal_bits"):
+        validate_one_hot_data_group(group)
+
+
+def test_validate_one_hot_data_group_rejects_read_signal_bits_on_a_write_only_group():
+    reg = OneHotDataRegister("REG0", address=0, width=8, read_signal_bits=(SignalBinding("y"),) * 8)
+    group = _group(reg, writable=True, readable=False)
+    with pytest.raises(OneHotDataGroupError, match="read_signal_bits"):
         validate_one_hot_data_group(group)

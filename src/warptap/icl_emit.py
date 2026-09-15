@@ -108,8 +108,10 @@ from warptap.icl_model import (
     InstrumentDirection,
     InstrumentNode,
     ModuleInstance,
+    OneHotDataGroup,
     PhysicalGraph,
     ScanMuxNode,
+    validate_one_hot_data_group,
 )
 from warptap.tap_ports import TCK, TDI, TDO, TMS, TRST_N
 
@@ -139,6 +141,17 @@ distinct-instrument shape, and :mod:`warptap.sib_insert`'s own per-instance-impo
 module design for the identical reason -- see that module's own docstring). Exported for the
 same reason as :data:`SIB_MODULE_TYPE`/:data:`INSTRUMENT_MODULE_PREFIX`: :mod:`warptap.
 icl_import` recognizes this exact prefix walking a parsed network back in."""
+
+ONE_HOT_GROUP_MODULE_PREFIX = "warptap_one_hot_group_"
+"""Prefix every :class:`~warptap.icl_model.OneHotDataGroup`'s own module type/instance name
+carries (``warptap_one_hot_group_<group_name>``) -- mirrors :data:`SCAN_MUX_MODULE_PREFIX`'s
+exact convention (each group gets its own distinct module, since its own register count/
+address width/data width all vary per instance). Genuinely unrelated to the SIB/ScanMux scan
+topology every other prefix here describes -- a :class:`~warptap.icl_model.OneHotDataGroup` is
+a parallel, non-scan, address-decoded register-file bus, rendered as its own wholly standalone
+``Module`` block by :func:`render_one_hot_data_group_module`, never touched by :func:`to_icl`.
+Exported for the same reason as every other prefix here: :mod:`warptap.icl_import` recognizes
+this exact prefix walking a parsed network back in."""
 
 
 class IclEmitError(WarptapError):
@@ -703,3 +716,124 @@ def to_icl(
     top_lines.append("}")
 
     return "\n\n".join(module_type_blocks) + "\n\n" + "\n".join(top_lines) + "\n"
+
+
+def render_one_hot_data_group_module(group: OneHotDataGroup) -> str:
+    """One standalone ``Module`` block for a :class:`~warptap.icl_model.OneHotDataGroup` --
+    real IEEE 1687 ICL's own parallel, non-scan, address-decoded register-file bus. Genuinely
+    unrelated to :func:`to_icl`'s own topology (never touches ``TDI``/``TDO``, never called
+    from ``to_icl`` -- a caller wanting one ``.icl`` file with both simply concatenates this
+    function's own output with ``to_icl()``'s, or passes both as separate files to the same
+    ``Ijtag`` construction, already supported with zero new plumbing).
+
+    Shape confirmed empirically against the real vendored ``icl_parser``, not assumed from the
+    grammar file alone (multi-arm ScanMux plan's own OneHotDataGroup Phase 0 spike,
+    ``tests/test_one_hot_data_group_icl_spike.py``, a permanent live-validation artifact kept
+    in the suite specifically so a future change upstream can't silently invalidate this):
+
+    - ``AddressPort``/``WriteEnPort``/``ReadEnPort``/``DataInPort``/``DataOutPort`` are
+      declared at *Module* scope, siblings of the ``OneHotDataGroup`` itself, never bound to
+      it by name -- confirmed real: the vendored checker resolves them by *type* across the
+      whole enclosing module (``get_port_type_sequence``), not by explicit association, and a
+      ``Port <signal>;`` binding *inside* the group (the ``ScanInterface``-style idiom every
+      other module block in this file uses) is unconditionally rejected by the real ANTLR
+      listener with a named error ("Post source not supported").
+    - The ``OneHotDataGroup { ... }`` body contains only ``DataRegister { AddressValue ...;
+      }`` blocks -- an ``Instance`` item is grammar-legal but, like the ``Port`` case above,
+      unconditionally rejected by the real listener ("Instance not supported").
+    - Exactly one ``OneHotDataGroup`` per rendered ``Module`` is a hard constraint, not just a
+      style choice -- confirmed real: two groups in one module, each wanting their own
+      ``WriteEnPort``, would have both concatenated into one combined signal by the
+      type-keyed lookup above, producing a real, named error ("Write EN has more than one
+      bit") the instant any register tries to use it. This function only ever renders one
+      group, so this can't happen by construction.
+    - ``WriteEnPort``/``DataInPort`` (resp. ``ReadEnPort``/``DataOutPort``) are declared only
+      when ``group.writable`` (resp. ``group.readable``) -- confirmed real: a module with
+      only a write-capable port pair makes *every* register in it writable and *none*
+      readable, and vice versa, regardless of anything register-specific (this project's own
+      first-draft design got this wrong -- see :class:`~warptap.icl_model.OneHotDataRegister`'s
+      own docstring for how a live-validated example caught it).
+
+    ``writable``/``readable`` (and the ``WriteEnPort``+``DataInPort`` / ``ReadEnPort``+
+    ``DataOutPort`` pairs they control) are :class:`~warptap.icl_model.OneHotDataGroup`-level,
+    not per-register -- confirmed real (see that class's own docstring): every register in a
+    writable-capable group is automatically writable, with no way to carve out an exception
+    per register, so this function only ever declares the port pair a *group* actually needs,
+    and requires *every* register to carry the corresponding ``write_signal_bits``/
+    ``read_signal_bits`` when the group offers that capability (mirrors
+    :func:`render_instrument_module`'s own WRITE-needs-``signal_bits`` precondition: nothing
+    real to document driving/observing otherwise -- raises :class:`IclEmitError` naming the
+    specific register missing one). Re-validates
+    :func:`~warptap.icl_model.validate_one_hot_data_group`'s own invariants belt-and-suspenders
+    (a :class:`~warptap.icl_model.OneHotDataGroup` can be constructed directly, without that
+    function ever being called, exactly as :class:`~warptap.icl_model.PhysicalGraph` already
+    can).
+
+    Like an instrument's ``CaptureSource``/``WriteDataSource``, a register's real host-net
+    binding has no ICL grammar mechanism to attach to per-register at all -- the addressable
+    ``DataRegister`` shape has only ``AddressValue`` (plus the common ``ResetValue``/
+    ``RefEnum``/``Attribute`` items every ``DataRegister`` shares), no ``Source`` clause of
+    any kind. ``write_signal_bits``/``read_signal_bits`` therefore render as ``//`` comments
+    only, the same permanent, stated-not-hidden limitation as the instrument case.
+
+    ``reset_value``, when given, renders as a real ``ResetValue`` clause -- legal ICL, but a
+    confirmed, permanent round-trip casualty of the vendored tool itself (see
+    :class:`~warptap.icl_model.OneHotDataRegister`'s own docstring): safe to emit, never
+    recoverable on import through this tool."""
+    validate_one_hot_data_group(group)
+    module_name = f"{ONE_HOT_GROUP_MODULE_PREFIX}{group.name}"
+    address_bits = f"[{group.address_width - 1}:0]" if group.address_width > 1 else ""
+    data_bits = f"[{group.data_width - 1}:0]" if group.data_width > 1 else ""
+
+    register_lines: list[str] = []
+    for reg in group.registers:
+        if group.writable and not reg.write_signal_bits:
+            raise IclEmitError(
+                f"OneHotDataGroup {group.name!r} is writable but register {reg.name!r} has "
+                "no write_signal_bits -- nothing real for it to drive, so there is nothing "
+                "honest to emit as its own real DataInPort binding"
+            )
+        if group.readable and not reg.read_signal_bits:
+            raise IclEmitError(
+                f"OneHotDataGroup {group.name!r} is readable but register {reg.name!r} has "
+                "no read_signal_bits -- nothing real for it to observe, so there is nothing "
+                "honest to emit as its own real DataOutPort binding"
+            )
+        reg_bits = f"[{reg.width - 1}:0]" if reg.width > 1 else ""
+        comment_lines: list[str] = []
+        if reg.write_signal_bits:
+            comment_lines.append(
+                f"        // DataInPort DI drives real host port bit(s) via WEN: "
+                + ", ".join(f"{b.port_name}[{b.bit}]" for b in reg.write_signal_bits)
+            )
+        if reg.read_signal_bits:
+            comment_lines.append(
+                f"        // DataOutPort DO fans out to real host port bit(s) via REN: "
+                + ", ".join(f"{b.port_name}[{b.bit}]" for b in reg.read_signal_bits)
+            )
+        reset_line = f"\n            ResetValue {reg.width}'b{reg.reset_value:0{reg.width}b};" if reg.reset_value is not None else ""
+        register_lines.append(
+            "\n".join(comment_lines) + ("\n" if comment_lines else "")
+            + f"        DataRegister {reg.name}{reg_bits} {{\n"
+            f"            AddressValue {reg.address};{reset_line}\n"
+            "        }"
+        )
+
+    bus_port_lines: list[str] = []
+    if group.writable:
+        bus_port_lines.append("    WriteEnPort WEN;")
+        bus_port_lines.append(f"    DataInPort DI{data_bits};")
+    if group.readable:
+        bus_port_lines.append("    ReadEnPort REN;")
+        bus_port_lines.append(f"    DataOutPort DO{data_bits};")
+
+    return (
+        f"Module {module_name} {{\n"
+        f"    AddressPort ADDR{address_bits};\n"
+        + "\n".join(bus_port_lines) + "\n"
+        "\n"
+        f"    OneHotDataGroup {group.name}{data_bits} {{\n"
+        + "\n".join(register_lines) + "\n"
+        "    }\n"
+        "}"
+    )

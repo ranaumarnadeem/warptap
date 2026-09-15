@@ -293,15 +293,18 @@ class OneHotDataRegister(NamedTuple):
     ``icl_parser``'s own grammar/checker/processor, not assumed from the grammar file alone --
     see the multi-arm ScanMux plan's own OneHotDataGroup phase for the full research trail).
 
-    ``writable``/``readable`` are independent explicit booleans, not derived from
-    ``write_signal_bits``/``read_signal_bits`` being non-empty -- confirmed real (the vendored
-    checker's own ``IclDataRegister.check()`` sets ``is_writable()``/``is_readable()``
-    independently of each other, based purely on which port *pairs*
-    (``WriteEnPort``+``DataInPort``, ``ReadEnPort``+``DataOutPort``) a module happens to
-    declare) and deliberately decouples "does this register participate in the write/read
-    path" from "do we know what real net it corresponds to," the same reason
-    :class:`InstrumentNode` keeps ``direction`` and ``signal_bits`` as separate fields rather
-    than inferring one from the other.
+    Deliberately has **no** ``writable``/``readable`` fields of its own -- a real, confirmed
+    correction to this project's own first-draft design, caught only once a rendered example
+    was actually fed through the real checker (not derivable from reading the grammar/checker
+    code alone): ``IclDataRegister.check()`` sets ``is_writable()``/``is_readable()`` purely
+    from whether the *enclosing module* happens to declare a ``WriteEnPort``+``DataInPort`` /
+    ``ReadEnPort``+``DataOutPort`` pair at all (the same module-wide, type-keyed port
+    resolution behind the "one group per module" constraint) -- with zero reference to
+    anything register-specific. Confirmed directly: a register given no write intent still
+    came back ``is_writable() is True`` once ANY other register in the same group made the
+    module writable. Read/write capability is therefore a :class:`OneHotDataGroup`-level
+    property (see its own ``writable``/``readable`` fields below), never a per-register one --
+    real ICL has no way to make one register in an otherwise-writable group read-only.
 
     ``reset_value`` is real, legal ICL (``ResetValue`` on a ``DataRegister``) but a confirmed,
     permanent round-trip casualty of the vendored tool itself, not a warptap choice: its own
@@ -315,8 +318,6 @@ class OneHotDataRegister(NamedTuple):
     name: str
     address: int
     width: int
-    writable: bool = False
-    readable: bool = False
     reset_value: Optional[int] = None
     write_signal_bits: tuple[SignalBinding, ...] = ()  # () or exactly `width` long
     read_signal_bits: tuple[SignalBinding, ...] = ()  # () or exactly `width` long
@@ -330,6 +331,14 @@ class OneHotDataGroup(NamedTuple):
     peripheral register file. Genuinely unrelated to :class:`PhysicalGraph`/:class:`ChainSlot`
     (never part of the scan chain, never touched by ``sib_insert.py``/``pdl_interpreter.py``/
     ``sib_model.py``) -- warptap's own scope for this construct is ICL emit/import only.
+
+    ``writable``/``readable`` gate the *whole group*, not any one register -- see
+    :class:`OneHotDataRegister`'s own docstring for the real, confirmed reason: the vendored
+    checker resolves ``WriteEnPort``/``DataInPort``/``ReadEnPort``/``DataOutPort`` once per
+    module, so every register in a writable-capable group is automatically writable (same for
+    readable), with no real ICL mechanism to carve out an exception per register. A group with
+    both ``False`` is meaningless (a bus nothing can use) and rejected by
+    :func:`validate_one_hot_data_group`.
 
     ``data_width`` deliberately collapses two quantities the real vendored checker enforces
     *independently* (confirmed directly: the read path additionally requires the group's own
@@ -351,6 +360,8 @@ class OneHotDataGroup(NamedTuple):
     address_width: int
     data_width: int
     registers: tuple[OneHotDataRegister, ...]
+    writable: bool = False
+    readable: bool = False
 
 
 def validate_one_hot_data_group(group: OneHotDataGroup) -> None:
@@ -365,13 +376,21 @@ def validate_one_hot_data_group(group: OneHotDataGroup) -> None:
     same address would both "work" as far as it's concerned -- a real, necessary warptap-side
     safety net, not redundant belt-and-suspenders, with the exact same precedent as
     :class:`ScanMuxNode`'s own arm-value-uniqueness check); an ``address`` outside
-    ``[0, 2**address_width)``; a register wider than ``data_width``; a register that's
-    neither ``writable`` nor ``readable``. Mixed register widths within one group are
-    deliberately *not* rejected -- confirmed real (the vendored checker accepts a register
-    narrower than the shared bus)."""
+    ``[0, 2**address_width)``; a register wider than ``data_width``; the group itself being
+    neither ``writable`` nor ``readable`` (a bus nothing can use); a register carrying
+    ``write_signal_bits``/``read_signal_bits`` the group's own ``writable``/``readable``
+    doesn't support (real ICL has no way to honor a per-register binding the whole bus
+    doesn't offer -- see :class:`OneHotDataRegister`'s own docstring). Mixed register widths
+    within one group are deliberately *not* rejected -- confirmed real (the vendored checker
+    accepts a register narrower than the shared bus)."""
     if not group.registers:
         raise OneHotDataGroupError(
             f"OneHotDataGroup {group.name!r} has no registers -- a bus with nothing on it"
+        )
+    if not (group.writable or group.readable):
+        raise OneHotDataGroupError(
+            f"OneHotDataGroup {group.name!r} is neither writable nor readable -- a bus "
+            "nothing can use"
         )
 
     seen_names: dict[str, int] = {}
@@ -403,8 +422,15 @@ def validate_one_hot_data_group(group: OneHotDataGroup) -> None:
                 f"OneHotDataGroup {group.name!r} register {reg.name!r} has width {reg.width}, "
                 f"wider than the group's own shared bus width {group.data_width}"
             )
-        if not (reg.writable or reg.readable):
+        if reg.write_signal_bits and not group.writable:
             raise OneHotDataGroupError(
-                f"OneHotDataGroup {group.name!r} register {reg.name!r} is neither writable "
-                "nor readable -- a register that does nothing"
+                f"OneHotDataGroup {group.name!r} register {reg.name!r} has write_signal_bits "
+                "but the group itself isn't writable -- no real WriteEnPort/DataInPort would "
+                "exist for it to bind to"
+            )
+        if reg.read_signal_bits and not group.readable:
+            raise OneHotDataGroupError(
+                f"OneHotDataGroup {group.name!r} register {reg.name!r} has read_signal_bits "
+                "but the group itself isn't readable -- no real ReadEnPort/DataOutPort would "
+                "exist for it to bind to"
             )
