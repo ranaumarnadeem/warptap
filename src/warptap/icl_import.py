@@ -109,6 +109,7 @@ from typing import List, Tuple
 from warptap.errors import WarptapError
 from warptap.icl_emit import (
     INSTRUMENT_MODULE_PREFIX,
+    ONE_HOT_GROUP_MODULE_PREFIX,
     SCAN_MUX_MODULE_PREFIX,
     SIB_INSTANCE_PREFIX,
     SIB_MODULE_TYPE,
@@ -117,6 +118,8 @@ from warptap.icl_model import (
     InstrumentDirection,
     InstrumentNode,
     ModuleInstance,
+    OneHotDataGroup,
+    OneHotDataRegister,
     PhysicalGraph,
     ScanArm,
     ScanMuxNode,
@@ -409,6 +412,49 @@ def _collect_instrument_children(chain) -> List[ModuleInstance]:
     return children
 
 
+def _construct_ijtag(icl_parser_module, top_module: str, icl_paths: List[Path]):
+    """``icl_parser_module(top_module, icl_paths, build_register_model=False)``, with three
+    real, already-diagnosed ``icl_parser`` gaps translated into a named :class:`IclImportError`
+    instead of a bare third-party traceback: its own retargeting-graph ``AssertionError`` and
+    its "Not supported" ``AccessLink`` rejection (both documented in this module's own
+    docstring), plus a bare ``KeyError`` for a ``top_module`` name that doesn't match any
+    module actually found in ``icl_paths`` (confirmed directly: ``Ijtag.__process_icl_module``
+    does a plain, unguarded dict lookup, ``all_icl_modules[scope][module_name]``, with no
+    existence check of its own -- a real gap, not something this project needs to fix upstream,
+    since re-raising it here as a named error is enough). Shared by every import entry point in
+    this module (:func:`import_icl` and :func:`import_one_hot_data_group`) -- both need
+    ``build_register_model=False`` for the same reason (a OneHotDataGroup needs it because it's
+    scan-free by construction and the default crashes unconditionally for that shape; a
+    SIB/ScanMux network needs it purely for performance, see module docstring), and both need
+    the identical exception translation."""
+    try:
+        return icl_parser_module(
+            top_module, [str(p) for p in icl_paths], build_register_model=False
+        )
+    except AssertionError as exc:
+        raise IclImportError(
+            "icl_parser's own retargeting-graph construction (IclRegisterModel) failed for "
+            f"module {top_module!r} -- an internal assertion in the vendored tool itself, "
+            "not yet diagnosed for this specific shape (the previously-diagnosed width>1 "
+            "case is fixed, and this code path no longer even builds the retargeting graph "
+            "at all, see module docstring)"
+        ) from exc
+    except ValueError as exc:
+        if "AccessLink" in str(exc):
+            raise IclImportError(
+                "icl_parser does not support AccessLink blocks at all (a real, confirmed gap "
+                "in the vendored tool, not of the ICL itself -- see implementation_plan.md "
+                "Stage 10); re-emit/re-author the file with include_access_link=False"
+            ) from exc
+        raise
+    except KeyError as exc:
+        raise IclImportError(
+            f"no module {top_module!r} found in {[str(p) for p in icl_paths]!r} -- icl_parser "
+            f"raised a bare KeyError ({exc}) rather than a clean error for this, so this is "
+            "re-raised here with the actual missing name"
+        ) from exc
+
+
 def import_icl(
     icl_paths: List[Path], top_module: str, *, icl_parser_module
 ) -> Tuple[PhysicalGraph, ModuleInstance]:
@@ -428,26 +474,7 @@ def import_icl(
     instrument) is detected structurally and recursed into -- matching
     :mod:`warptap.icl_emit`'s own emission the other direction.
     """
-    try:
-        ijtag = icl_parser_module(
-            top_module, [str(p) for p in icl_paths], build_register_model=False
-        )
-    except AssertionError as exc:
-        raise IclImportError(
-            "icl_parser's own retargeting-graph construction (IclRegisterModel) failed for "
-            f"module {top_module!r} -- an internal assertion in the vendored tool itself, "
-            "not yet diagnosed for this specific shape (the previously-diagnosed width>1 "
-            "case is fixed, and this code path no longer even builds the retargeting graph "
-            "at all, see module docstring)"
-        ) from exc
-    except ValueError as exc:
-        if "AccessLink" in str(exc):
-            raise IclImportError(
-                "icl_parser does not support AccessLink blocks at all (a real, confirmed gap "
-                "in the vendored tool, not of the ICL itself -- see implementation_plan.md "
-                "Stage 10); re-emit/re-author the file with include_access_link=False"
-            ) from exc
-        raise
+    ijtag = _construct_ijtag(icl_parser_module, top_module, icl_paths)
 
     top = ijtag.icl_instance
     IclInstance, IclDataRegister, IclScanRegister, IclScanMux = _icl_item_classes(icl_parser_module)
@@ -479,3 +506,131 @@ def import_icl(
     instrument_children = _collect_instrument_children(chain_nodes)
     root = ModuleInstance(name=top_module, children=tuple(instrument_children))
     return graph, root
+
+
+def _one_hot_item_classes(icl_parser_module):
+    """``IclOneHotDataGroup``/``IclDataRegister`` pulled off the same already-imported module
+    object :func:`_icl_item_classes` already uses -- see that function's own docstring for why
+    (``Ijtag``'s own ``from .icl_process import *`` re-export chain)."""
+    mod = sys.modules[icl_parser_module.__module__]
+    return mod.IclOneHotDataGroup, mod.IclDataRegister
+
+
+def import_one_hot_data_group(
+    icl_paths: List[Path], module_name: str, *, icl_parser_module
+) -> OneHotDataGroup:
+    """Parse ``icl_paths`` and recover the single :class:`~warptap.icl_model.OneHotDataGroup`
+    declared in ``module_name`` -- the mirror-image recognition path to
+    :func:`~warptap.icl_emit.render_one_hot_data_group_module`.
+
+    Returns a single :class:`~warptap.icl_model.OneHotDataGroup`, not a tuple of them, even
+    though the plan that originally sketched this function's signature drafted a plural
+    ``Tuple[OneHotDataGroup, ...]`` return -- that draft predates Phase 0's own empirical
+    confirmation (sub-step 8) that exactly one ``OneHotDataGroup`` per ``Module`` is a hard v1
+    constraint, not just a convention (a second group's own same-typed bus ports would
+    silently concatenate into the first's via the real checker's type-keyed port lookup, see
+    :class:`~warptap.icl_model.OneHotDataGroup`'s own docstring). A singular return type keeps
+    this function's own shape consistent with that confirmed constraint, and mirrors
+    :func:`import_icl`'s own "one named module in, one warptap object out" shape exactly.
+
+    Uses ``build_register_model=False`` unconditionally (not just for performance the way
+    :func:`import_icl` uses it) -- a ``OneHotDataGroup`` module is scan-free by construction
+    (no ``ScanInPort``/``ScanOutPort`` at all), and the real vendored tool's own retargeting-
+    graph build crashes unconditionally for any scan-free module (Phase 0 sub-step 0's own
+    confirmed finding, an ``AssertionError`` from ``icl_retargeting.py``'s own
+    ``_add_one_hot_and_ir_chain``).
+
+    Recovers ``group.name`` from ``module_name`` itself via
+    :data:`~warptap.icl_emit.ONE_HOT_GROUP_MODULE_PREFIX`, not from the ``OneHotDataGroup``
+    construct's own internal name (the two happen to hold the same value in anything this
+    project's own emitter produces, but recovering it from the module name mirrors
+    :func:`_mux_name_of`/:func:`_sib_name_of`'s own established convention exactly). Recovers
+    ``data_width`` from the ``OneHotDataGroup`` item's own ``get_vector_size()`` (its own
+    declared ``[hi:lo]``, always present regardless of which bus ports the group actually
+    declares) and ``address_width`` from the ``ADDR`` port's ``get_vector_size()`` directly
+    (warptap's own canonical port name, matching :func:`import_icl`'s own "hardcode warptap's
+    own naming convention, recognize nothing else" discipline for ``SI``/``SO``/``tdi``/
+    ``tdo``). ``writable``/``readable`` are read off the *first* recovered register's own
+    ``is_writable()``/``is_readable()`` -- a confirmed group-level property in real ICL (see
+    :class:`~warptap.icl_model.OneHotDataGroup`'s own docstring), so every register in one
+    module agrees by construction; no redundant per-register consistency check is needed here.
+    Registers come back sorted by ``address`` for a deterministic round trip, since parse order
+    isn't a documented guarantee of the vendored tool's own ``get_icl_item_type``.
+
+    ``reset_value``/``write_signal_bits``/``read_signal_bits`` always come back ``None``/``()``
+    -- the same real, permanent round-trip limitation :func:`import_icl` already documents for
+    an instrument's ``signal_bits``: ``ResetValue`` is parsed but never stored by the vendored
+    tool at all (Phase 0 finding #4), and no per-register ``Source`` clause exists in real ICL
+    for a host-net binding to be recovered from in the first place.
+
+    Raises :class:`IclImportError` for: a real ``icl_parser`` gap (same two as
+    :func:`import_icl`); ``module_name`` not prefixed with
+    :data:`~warptap.icl_emit.ONE_HOT_GROUP_MODULE_PREFIX`; zero or more-than-one
+    ``OneHotDataGroup`` items found (the latter a defensive check against hand-authored input --
+    warptap's own emitter never produces it, see the docstring paragraph above); zero
+    ``DataRegister`` items; a group that's neither writable nor readable -- none of these three
+    can happen for anything this project's own emitter produces (:func:`~warptap.icl_emit.
+    render_one_hot_data_group_module`'s own preconditions already forbid them), but this
+    importer accepts arbitrary ``.icl`` input, matching :func:`import_icl`'s own "recognize
+    warptap's own canonical shape, reject anything else" discipline.
+    """
+    ijtag = _construct_ijtag(icl_parser_module, module_name, icl_paths)
+    top = ijtag.icl_instance
+    IclOneHotDataGroup, IclDataRegister = _one_hot_item_classes(icl_parser_module)
+
+    if not module_name.startswith(ONE_HOT_GROUP_MODULE_PREFIX):
+        raise IclImportError(
+            f"module {module_name!r} doesn't start with {ONE_HOT_GROUP_MODULE_PREFIX!r} -- "
+            "this importer only recovers a OneHotDataGroup's original name from warptap's own "
+            "naming convention"
+        )
+    group_name = module_name[len(ONE_HOT_GROUP_MODULE_PREFIX) :]
+
+    groups = top.get_icl_item_type(IclOneHotDataGroup)
+    if len(groups) != 1:
+        raise IclImportError(
+            f"module {module_name!r} has {len(groups)} OneHotDataGroup item(s), expected "
+            "exactly 1 -- not a shape this importer recognizes (real ICL resolves "
+            "AddressPort/WriteEnPort/etc. by type across the whole module, so a second "
+            "group's own ports would silently concatenate into the first's; see "
+            "render_one_hot_data_group_module's own docstring)"
+        )
+    data_width = groups[0].get_vector_size()
+    address_width = top.get_icl_item_name("ADDR").get_vector_size()
+
+    icl_registers = top.get_icl_item_type(IclDataRegister)
+    if not icl_registers:
+        raise IclImportError(
+            f"OneHotDataGroup {group_name!r} in module {module_name!r} has no DataRegister "
+            "items -- not a shape this importer recognizes"
+        )
+
+    writable = icl_registers[0].is_writable() is True
+    readable = icl_registers[0].is_readable() is True
+    if not (writable or readable):
+        raise IclImportError(
+            f"OneHotDataGroup {group_name!r} in module {module_name!r} is neither writable "
+            "nor readable -- not a shape this importer recognizes"
+        )
+
+    registers = tuple(
+        sorted(
+            (
+                OneHotDataRegister(
+                    name=reg.get_name(),
+                    address=reg.get_reg_address(),
+                    width=reg.get_vector_size(),
+                )
+                for reg in icl_registers
+            ),
+            key=lambda reg: reg.address,
+        )
+    )
+    return OneHotDataGroup(
+        name=group_name,
+        address_width=address_width,
+        data_width=data_width,
+        registers=registers,
+        writable=writable,
+        readable=readable,
+    )
