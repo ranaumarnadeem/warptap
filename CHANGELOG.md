@@ -104,6 +104,23 @@ entry per implementation stage.
   `PdlImportError`, matching `icl_import.py`'s own discipline. Round-trips real, multi-
   statement histories (write, settle via both `-tck` and `-sck`, read, write again; alias-
   addressed fields) cleanly on the first pass.
+- **`OneHotDataGroup` (address-decoded register-file bus).** Closes the "indirect/paged
+  addressing" gap — but with real ICL's own genuinely different shape, not the originally-
+  assumed JTAG-window-into-memory pattern (that pattern turns out to need no new ICL vocabulary
+  at all). `OneHotDataGroup` is a parallel, non-scan, address-decoded register-file bus: a
+  bounded set of individually-addressed `DataRegister`s sharing one `AddressPort`/`WriteEnPort`/
+  `ReadEnPort`/`DataInPort`/`DataOutPort` quintet. Scope is ICL emit/import only — never touches
+  the scan chain, RTL insertion, or retargeting. No real fixture exists anywhere in the vendored
+  `icl_parser`'s own test corpus for this construct, unlike every other ICL feature this project
+  has built — closed with a permanent, gating live-validation spike before any production code,
+  confirming (among other things) that exactly one `OneHotDataGroup` per Module is a hard v1
+  constraint, and that `writable`/`readable` are a whole-group property in real ICL, not a
+  per-register one (an early design draft got this wrong, caught the same way — a live-rendered
+  example checked against the real vendored `Ijtag`, not just reasoned from the grammar). Live-
+  validated at both this project's usual tiers (pure-Python shape assertions, and the real
+  vendored checker with `build_register_model=False`, required because this construct is
+  scan-free by construction and the checker's default crashes unconditionally for that shape),
+  plus a full emit→import round trip.
 
 ### Explicitly out of scope
 
