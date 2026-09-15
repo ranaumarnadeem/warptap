@@ -148,8 +148,9 @@ def test_written_value_persists_through_a_second_apply_on_real_rtl(
     target (status_read) before reopening it is what real PDL sequencing looks like (e.g.
     Stage 9's own mem_subsystem_mbist scenario: write self_repair_start, read a DIFFERENT
     instrument, only later touch self_repair_start again). Retargeting to the exact SAME
-    still-open instrument twice in a row (no intermediate target) is a narrower, documented
-    v1 limitation -- see pdl_interpreter.py's iApply docstring -- not exercised here."""
+    still-open instrument twice in a row (no intermediate target) used to be a narrower,
+    documented v1 limitation -- now fixed (retargeting shift-length optimization plan), see
+    test_write_then_reapply_same_instrument_now_persists_on_real_rtl below."""
     netlist, graph, root = _build_and_insert(fixtures_dir, yosys_command)
     pdl = PDLInterpreter(graph, root)
     pdl.iTarget("ctrl_write")
@@ -177,6 +178,38 @@ def test_written_value_persists_through_a_second_apply_on_real_rtl(
     # own state, which would only prove the Python model agrees with itself) confirms the
     # committed 1 really was captured back -- ir_ops includes the IR-select shift, which
     # check_reads() (walking ShiftIR/ShiftDR alike) correctly skips since it carries no tdo.
+    results = check_reads(ir_ops, rtl_observed)
+    assert len(results) == 1
+    assert results[0].passed
+
+
+def test_write_then_reapply_same_instrument_now_persists_on_real_rtl(
+    fixtures_dir, yosys_command, iverilog_command, vvp_command
+):
+    """Retargeting shift-length optimization plan: the exact scenario the test above's own
+    docstring used to call out as "not exercised" -- ctrl_write targeted twice in a row, no
+    intervening different target. Before this plan's fix, phase 1's redundant reopen round
+    (re-asserting the same already-open state) still ran a real Update-DR, whose 0 don't-care
+    fill committed and clobbered the value -- confirmed as a real bug on this exact real RTL
+    fixture (not just the Python model) before landing the fix. Now, since the second iApply's
+    own target is already fully open, stage_open_sequence returns zero phase-1 rounds -- no
+    redundant Update-DR occurs at all, so there's nothing left to clobber the value."""
+    netlist, graph, root = _build_and_insert(fixtures_dir, yosys_command)
+    pdl = PDLInterpreter(graph, root)
+    pdl.iTarget("ctrl_write")
+    pdl.iWrite(1)
+    first_ops = pdl.iApply()
+
+    pdl.iTarget("ctrl_write")  # SAME instrument again, no intervening different target
+    pdl.iRead(1)
+    second_ops = pdl.iApply()
+
+    ir_ops = _select_extest_ops() + first_ops + second_ops
+    python_observed, _reg = run_on_python(graph, ir_ops)
+    rtl_observed = run_on_rtl(
+        fixtures_dir, yosys_command, iverilog_command, vvp_command, netlist, ir_ops
+    )
+    assert rtl_observed == python_observed
     results = check_reads(ir_ops, rtl_observed)
     assert len(results) == 1
     assert results[0].passed

@@ -26,7 +26,7 @@ from warptap.sib_insert import insert_sib_network
 from warptap.sib_model import SibNetworkRegister
 from warptap.sim_io import run_verilog_testbench
 from warptap.tap_fsm import TapState
-from warptap.tap_ir import GotoState, ShiftIR, bits_to_int
+from warptap.tap_ir import GotoState, ShiftDR, ShiftIR, bits_to_int
 from warptap.tap_ir_play import play, shift_op_ranges, to_cycles
 from warptap.tap_model import Instruction, TapModel
 from warptap.yosys_io import ingest, write_verilog_from_json
@@ -164,7 +164,19 @@ def test_written_value_survives_switching_away_and_back_on_real_rtl(
     test_written_value_persists_through_a_second_apply_on_real_rtl: arm1's committed WRITE
     value must survive being switched away from (to arm2) and never touched again -- proven
     on real hardware, not just the Python oracle (already covered by Phase 3's sib_model
-    tests and Phase 4's PDLInterpreter tests, neither of which touches real RTL)."""
+    tests and Phase 4's PDLInterpreter tests, neither of which touches real RTL).
+
+    **Caveat, found during the retargeting shift-length optimization plan, NOT fixed by it**:
+    this test only ever asserted rtl_observed == python_observed (RTL agrees with the Python
+    model) -- it never checked the observed value against what was actually written. Adding a
+    real pdl_verify.check_reads() call here (confirmed both on this real RTL fixture and in
+    the Python model alone) finds arm1's own value does NOT actually round-trip correctly
+    through a mux arm's own self-capture, even in this exact "safe" pattern -- a real,
+    separate, pre-existing bug in sib_model.py's ScanMuxNode-arm handling, confirmed to predate
+    and be unrelated to this plan (reproduced identically against the pre-fix retargeting
+    code). Deliberately NOT asserted here -- see the plain-SIB case in
+    test_sib_insert_write_instrument_cross_sim.py, which IS proven correct via check_reads(),
+    for contrast. Flagged separately for its own investigation."""
     netlist, graph, root = _build_and_insert(fixtures_dir, yosys_command)
     pdl = PDLInterpreter(graph, root)
     pdl.iTarget("ctrl_write")
@@ -184,4 +196,43 @@ def test_written_value_survives_switching_away_and_back_on_real_rtl(
         fixtures_dir, yosys_command, iverilog_command, vvp_command, netlist, ir_ops
     )
 
+    assert rtl_observed == python_observed
+
+
+def test_same_arm_retargeted_twice_needs_no_redundant_round_on_real_rtl(
+    fixtures_dir, yosys_command, iverilog_command, vvp_command
+):
+    """Retargeting shift-length optimization plan, mux-arm counterpart to
+    test_sib_insert_write_instrument_cross_sim.py's own test_write_then_reapply_same_
+    instrument_now_persists_on_real_rtl: re-targeting the exact same already-open arm1 (no
+    intervening different target) must emit zero phase-1 rounds -- proven here on real
+    hardware (RTL still agrees with the Python model) that the shorter sequence executes
+    cleanly, matching test_pdl_interpreter_scan_mux.py's own Python-model-only confirmation of
+    the same round-count reduction.
+
+    Deliberately does NOT assert check_reads() here -- see test_written_value_survives_
+    switching_away_and_back_on_real_rtl's own docstring above: a mux arm's own WRITE value
+    does not correctly round-trip through self-capture at all, a separate, pre-existing bug
+    unrelated to this plan. What this test proves is narrower and still real: the retargeting
+    orchestration itself (round count, RTL/Python-model agreement) is correct for this shape."""
+    netlist, graph, root = _build_and_insert(fixtures_dir, yosys_command)
+    pdl = PDLInterpreter(graph, root)
+    pdl.iTarget("ctrl_write")
+    pdl.iWrite(1)
+    first_ops = pdl.iApply()  # bypass -> arm1, write 1
+
+    pdl.iTarget("ctrl_write")  # SAME arm again, no intervening different target
+    pdl.iRead(1)
+    second_ops = pdl.iApply()
+
+    first_shifts = [op for op in first_ops if isinstance(op, ShiftDR)]
+    second_shifts = [op for op in second_ops if isinstance(op, ShiftDR)]
+    assert len(first_shifts) == 2  # cold start: 1 phase-1 round (open mux_a) + 1 phase-2
+    assert len(second_shifts) == 1  # mux_a already open: phase-2 only, no redundant round
+
+    ir_ops = _select_extest_ops() + first_ops + second_ops
+    python_observed, _reg = run_on_python(graph, ir_ops)
+    rtl_observed = run_on_rtl(
+        fixtures_dir, yosys_command, iverilog_command, vvp_command, netlist, ir_ops
+    )
     assert rtl_observed == python_observed
