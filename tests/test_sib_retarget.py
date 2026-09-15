@@ -210,3 +210,92 @@ def test_stage_open_sequence_nested_mux_target_needs_one_round_per_depth():
         {"mux_a": 0},
         {"mux_a": 0, "sib_inner": 1},
     ]
+
+
+# --- currently_open: reusing an already-open ancestor prefix (retargeting shift-length
+# optimization plan) -----------------------------------------------------------------------
+
+
+def _nested_pair_graph() -> PhysicalGraph:
+    """A > B > {sib_x, sib_y} -- the plan's own motivating shared-ancestor example."""
+    inner = SibNode("B", instrument=None, nested=(
+        SibNode("sib_x", _instrument("x")),
+        SibNode("sib_y", _instrument("y")),
+    ))
+    outer = SibNode("A", instrument=None, nested=(inner,))
+    return PhysicalGraph(chain=(outer,))
+
+
+def test_stage_open_sequence_default_currently_open_is_byte_identical_to_before():
+    """Regression proof: every pre-existing caller (which passes nothing) must see exactly
+    today's output, unchanged -- an empty currently_open can never match anything, so
+    first_new_depth always resolves to 1."""
+    graph = _nested_pair_graph()
+    target = {"A": 1, "B": 1, "sib_x": 1}
+    assert stage_open_sequence(graph, target) == stage_open_sequence(
+        graph, target, currently_open=frozenset()
+    )
+    assert stage_open_sequence(graph, target) == [
+        {"A": 1}, {"A": 1, "B": 1}, {"A": 1, "B": 1, "sib_x": 1},
+    ]
+
+
+def test_stage_open_sequence_fully_satisfied_target_needs_zero_rounds():
+    """Retargeting to the exact same already-open target needs no rounds at all -- this is
+    also what fixes the WRITE-instrument clobber footgun (pdl_interpreter.iApply's own
+    docstring): no redundant Update-DR means nothing to zero-fill and commit."""
+    graph = _nested_pair_graph()
+    target = {"A": 1, "B": 1, "sib_x": 1}
+    assert stage_open_sequence(graph, target, currently_open=target) == []
+
+
+def test_stage_open_sequence_reuses_a_shared_ancestor_prefix():
+    """The plan's own headline case: y after x, sharing A and B -- only sib_y's own round is
+    needed, not a full 3-round cold-start sequence."""
+    graph = _nested_pair_graph()
+    prior = {"A": 1, "B": 1, "sib_x": 1}
+    target_y = {"A": 1, "B": 1, "sib_y": 1}
+    assert stage_open_sequence(graph, target_y, currently_open=prior) == [
+        {"A": 1, "B": 1, "sib_y": 1},
+    ]
+
+
+def test_stage_open_sequence_multi_branch_reuse_only_trims_the_satisfied_branch():
+    """Two independent branches (P, Q), each with their own depth-2 child -- P is already
+    fully open, Q is brand new. Stress-tests first_new_depth as a min() over EVERY
+    mismatching entry, not just one path: Q's own depth-1 entry must force a full 2-round
+    sequence for Q, even though P's entries at those same two depths already match."""
+    p_branch = SibNode("P", instrument=None, nested=(SibNode("P1", _instrument("p1")),))
+    q_branch = SibNode("Q", instrument=None, nested=(SibNode("Q1", _instrument("q1")),))
+    graph = PhysicalGraph(chain=(p_branch, q_branch))
+    prior = {"P": 1, "P1": 1}
+    target = {"P": 1, "P1": 1, "Q": 1, "Q1": 1}
+    assert stage_open_sequence(graph, target, currently_open=prior) == [
+        {"P": 1, "Q": 1},
+        {"P": 1, "P1": 1, "Q": 1, "Q1": 1},
+    ]
+
+
+def test_stage_open_sequence_mux_ancestor_matching_by_name_but_not_value_is_not_trimmed():
+    """A mux ancestor whose NAME already appears in currently_open but with a different
+    VALUE (switching arms) must still force a full round at that depth -- name-only matching
+    would incorrectly treat an arm switch as already-satisfied."""
+    graph = _mux_graph()
+    assert stage_open_sequence(graph, {"mux_a": 2}, currently_open={"mux_a": 1}) == [
+        {"mux_a": 2},
+    ]
+
+
+def test_stage_open_sequence_leftover_state_when_fully_satisfied_target_names_only_an_outer_node():
+    """Documents a real, deliberate consequence (see the function's own docstring): a
+    cold-start call's last round always equals target_open exactly, explicitly closing
+    anything not named. When currently_open already fully satisfies the target and stage_
+    open_sequence returns [], nothing is explicitly addressed either way -- so sib_inner
+    here, though not named by this call's own target_open, is never explicitly closed. This
+    is intentional (no caller today exercises this combination), not a bug -- locked in here
+    so a future change can't silently alter it."""
+    inner = SibNode("sib_inner", _instrument("deep"))
+    outer = SibNode("sib_outer", instrument=None, nested=(inner,))
+    graph = PhysicalGraph(chain=(outer,))
+    prior = {"sib_outer": 1, "sib_inner": 1}
+    assert stage_open_sequence(graph, {"sib_outer": 1}, currently_open=prior) == []

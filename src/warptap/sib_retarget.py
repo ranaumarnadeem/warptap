@@ -153,24 +153,56 @@ def path_to_sib_name(
 
 
 def stage_open_sequence(
-    graph: PhysicalGraph, target_open: Union[frozenset, dict]
+    graph: PhysicalGraph,
+    target_open: Union[frozenset, dict],
+    *,
+    currently_open: Union[frozenset, dict] = frozenset(),
 ) -> list[dict[str, int]]:
     """Splits an arbitrary (possibly multi-branch, arbitrary-depth) target open-map into the
     ordered sequence of ``open_after`` states needed to physically reach it -- one entry per
     required Shift-DR/Update-DR round. Accepts either shape -- see :func:`_normalize_open` --
     a plain ``frozenset[str]`` of names (implicit value ``1`` each) or a ``dict[str, int]``
-    naming a specific arm value for any mux entries.
+    naming a specific arm value for any mux entries. Same for ``currently_open``.
 
     A closed SIB's nested content isn't physically part of the live scan chain yet (confirmed
     against real RTL, ``tests/test_sib_cell_nested_cross_sim.py``), so a node at tree-depth
-    ``d`` can be newly opened no earlier than round ``d`` -- its own ancestors must already be
-    physically open/matched. Round ``r``'s ``open_after`` is exactly every required node
-    (every name in ``target_open`` plus every one of its own ancestors, each with its own
-    resolved value) at depth ``<= r``.
+    ``d`` can be newly opened no earlier than round ``d`` *from a closed baseline* -- its own
+    ancestors must already be physically open/matched. Round ``r``'s ``open_after`` is exactly
+    every required node (every name in ``target_open`` plus every one of its own ancestors,
+    each with its own resolved value) at depth ``<= r``.
+
+    ``currently_open`` (default: nothing open, reproducing every pre-existing caller's exact
+    behavior byte-for-byte) lets a caller skip staged-opening rounds for whatever prefix of
+    the target's own ancestor path is *already* open and unchanged -- a real, measurable
+    shift-length optimization for consecutive retargeting calls that share an already-open
+    ancestor (confirmed empirically: two sibling instruments 2 levels deep under a shared
+    hierarchy, targeted back to back, cost 4+4 ShiftDR rounds without this, 4+2 with it).
+    Computed as ``first_new_depth`` -- the smallest depth at which *any* required entry
+    (checked across every branch, not just one path -- the correct generalization for a
+    genuinely multi-branch ``target_open``) doesn't match ``currently_open`` by name AND
+    value; rounds are cumulative by construction (round ``r``'s dict is always every entry at
+    depth ``<= r``), so once any entry at depth ``d`` mismatches, every round ``r >= d`` is
+    non-redundant regardless of what else matches at that same depth. Only rounds ``r >=
+    first_new_depth`` are returned; if every required entry already matches, ``[]`` is
+    returned -- zero rounds needed.
+
+    **A real, deliberate consequence, not a silent gap**: a cold-start call's own *last* round
+    always equals ``target_open``'s fully-resolved map exactly, which implicitly closes
+    everything else -- e.g. ``stage_open_sequence(graph, {"sib_outer"})`` from a state where
+    ``sib_inner`` (nested inside ``sib_outer``) also happens to be open still returns a final
+    round of just ``{"sib_outer": 1}``, explicitly closing ``sib_inner``. When ``currently_
+    open`` already satisfies the whole target (``[]`` returned), nothing is ever explicitly
+    addressed either way, so anything else that happened to be open (like ``sib_inner`` here)
+    silently stays open rather than being reset. No existing caller passes a non-default
+    ``currently_open`` to a ``target_open`` that names a hierarchy node with open descendants
+    it doesn't also name (confirmed by grep), so nothing today depends on the old
+    reset-everything-not-named behavior; this is accepted here rather than adding machinery no
+    caller yet needs, mirroring this function's own existing precedent for the same kind of
+    choice (the mux-ancestor-conflict case two paragraphs below).
 
     Also correct for closing: a currently-open slot that isn't in the final required set is
     simply never included at any round (closing has no physical-existence constraint, unlike
-    opening), so it's closed/bypassed as early as round 1.
+    opening), so it's closed/bypassed as early as whatever round is actually returned first.
 
     If two different ``target_open`` entries share a common mux ancestor and (inconsistently)
     imply different values for it, the last one processed silently wins -- not detected or
@@ -178,9 +210,11 @@ def stage_open_sequence(
     trigger there, since every ancestor was always value ``1``); a real conflict-detection
     pass is not yet needed by any caller.
 
-    Returns ``[{}]`` (a single all-closed round) for an empty ``target_open``. The caller
-    pairs round ``i``'s ``open_now`` with round ``i - 1``'s result (or the real currently-open
-    state for round 0) when calling ``layout_bit_length``/``compose_bits``."""
+    Returns ``[{}]`` (a single all-closed round), unconditionally, for an empty
+    ``target_open`` -- never subject to trimming regardless of ``currently_open`` (no existing
+    caller passes both together; kept as the simple, already-correct case it is today). The
+    caller pairs round ``i``'s ``open_now`` with round ``i - 1``'s result (or the real
+    currently-open state for round 0) when calling ``layout_bit_length``/``compose_bits``."""
     open_map = _normalize_open(target_open)
     if not open_map:
         return [{}]
@@ -193,7 +227,16 @@ def stage_open_sequence(
         for depth, step in enumerate(path, start=1):
             depth_and_value_of[step.name] = (depth, step.value)
     max_depth = max(depth for depth, _value in depth_and_value_of.values())
+
+    current_map = _normalize_open(currently_open)
+    mismatched_depths = [
+        depth for name, (depth, value) in depth_and_value_of.items()
+        if current_map.get(name) != value
+    ]
+    if not mismatched_depths:
+        return []
+    first_new_depth = min(mismatched_depths)
     return [
         {name: value for name, (depth, value) in depth_and_value_of.items() if depth <= r}
-        for r in range(1, max_depth + 1)
+        for r in range(first_new_depth, max_depth + 1)
     ]
