@@ -121,6 +121,35 @@ entry per implementation stage.
   vendored checker with `build_register_model=False`, required because this construct is
   scan-free by construction and the checker's default crashes unconditionally for that shape),
   plus a full emit→import round trip.
+- **Retargeting shift-length optimization.** `sib_retarget.stage_open_sequence` never looked at
+  what's already open — every `PDLInterpreter.iApply` call recomputed a full cold-start staged-
+  opening sequence sized to the new target's own tree depth, even when a prefix of that path was
+  already open from the previous call. Confirmed empirically: two sibling instruments 2 levels
+  deep under a shared hierarchy, targeted back to back, used to cost 4+4 total `ShiftDR` rounds —
+  now 4+2, since the shared ancestor prefix is reused. Adds a keyword-only `currently_open`
+  parameter, defaulting to reproduce every existing caller's exact output; wired into both real
+  callers (`PDLInterpreter.iApply` and `sib_overshift.build_overshift_ops`). As a direct, proven
+  side effect, also fixes a previously-documented v1 footgun: retargeting to the exact same
+  still-open WRITE instrument twice in a row (no intervening different target) used to clobber
+  the value via a redundant round's own zero-fill commit — confirmed as a real bug on real RTL
+  before this fix, now a permanent passing regression test. An earlier memory entry had
+  mischaracterized this gap as needing "Keim's ring-by-ring hierarchical search" — that
+  technique (real primary source: Dr. Martin Keim, Nordic Test Forum 2017) is for fault
+  localization in an *unknown*-structure network, already correctly ruled out as inapplicable by
+  this project's own earlier `sib_overshift.py` research; not chased here.
+
+### Known issues (found, not yet fixed)
+
+- **A `WRITE`-direction instrument gated by a `ScanMuxNode` arm does not correctly round-trip
+  its own value on readback.** Found as a side effect of strengthening a previously-weak test
+  assertion (it only ever checked shift-op *count*, never the actual value, despite a comment
+  falsely claiming otherwise). Confirmed on real RTL, not just the Python model, and present
+  even in the already-`"safe"` switch-away-and-back pattern `test_sib_insert_scan_mux_cross_
+  sim.py`'s own `test_written_value_survives_switching_away_and_back_on_real_rtl` claims is
+  proven (that test only ever checked RTL-vs-Python-model *agreement*, never the value itself).
+  The plain-`SibNode` case is unaffected — proven correct via `check_reads()` on real RTL. Root
+  cause not yet identified; likely in `sib_model.py`'s `ScanMuxNode`-arm capture/update logic
+  specifically, not a general WRITE-instrument issue.
 
 ### Explicitly out of scope
 
