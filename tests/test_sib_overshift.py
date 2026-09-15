@@ -357,3 +357,54 @@ def test_nested_target_named_without_its_ancestor_still_probes_correctly():
     ops = build_overshift_ops(graph, target_open, margin=2)
     probe = _shift_ops(ops)[-1]
     assert probe.bits == 2 + layout_bit_length(graph, frozenset({"sib_outer", "sib_inner"}))
+
+
+# --- currently_open reuse (retargeting shift-length optimization plan, Phase 3): the first
+# time this parameter actually affects round count here, not just phase-1 bit-length sizing.
+
+
+def test_currently_open_fully_satisfying_the_target_skips_phase1_entirely():
+    """The strongest case: currently_open already matches target_open exactly -- phase 1
+    contributes zero rounds, leaving only the tail probe shift."""
+    graph = _nested_graph()
+    target_open = {"sib_outer": 1, "sib_inner": 1}
+    ops = build_overshift_ops(graph, target_open, currently_open=target_open, margin=0)
+    shifts = _shift_ops(ops)
+    assert len(shifts) == 1  # no phase-1 rounds at all, just the probe
+    probe = shifts[0]
+    assert probe.bits == layout_bit_length(graph, {"sib_outer": 1, "sib_inner": 1})
+
+
+def test_currently_open_partial_prefix_match_skips_only_the_satisfied_rounds():
+    """sib_outer already open, sib_inner not -- only sib_inner's own round is needed, not the
+    full 2-round cold-start sequence test_nested_target_phase1_needs_one_round_per_depth uses
+    for the same target from an empty currently_open."""
+    graph = _nested_graph()
+    prior = {"sib_outer": 1}
+    target_open = {"sib_outer": 1, "sib_inner": 1}
+    ops = build_overshift_ops(graph, target_open, currently_open=prior, margin=0)
+    shifts = _shift_ops(ops)
+    assert len(shifts) == 2  # 1 phase-1 round (sib_inner) + 1 probe, not 2 + 1
+
+    round1, probe = shifts
+    assert round1.bits == layout_bit_length(graph, prior)
+    assert probe.bits == layout_bit_length(graph, target_open)
+
+
+def test_currently_open_leftover_state_when_target_names_only_an_outer_node():
+    """Documents the same real, deliberate consequence test_sib_retarget.py's own equivalent
+    test locks in for stage_open_sequence directly: when currently_open already fully
+    satisfies a target that names only an outer hierarchy node, sib_inner (open but not named)
+    is never explicitly addressed by this call either way, so it silently stays open rather
+    than being reset the way a cold-start call always resets everything not named."""
+    graph = _nested_graph()
+    prior = {"sib_outer": 1, "sib_inner": 1}
+    target_open = {"sib_outer": 1}
+    ops = build_overshift_ops(graph, target_open, currently_open=prior, margin=0)
+    shifts = _shift_ops(ops)
+    assert len(shifts) == 1  # no phase-1 rounds -- sib_outer alone is already satisfied
+    probe = shifts[0]
+    # The tail probe's own target_open is stage_open_sequence's completed prior_open (see
+    # build_overshift_ops's own docstring), which -- since phase 1 never ran -- stays exactly
+    # currently_open, sib_inner included, not the caller's narrower target_open.
+    assert probe.bits == layout_bit_length(graph, prior)

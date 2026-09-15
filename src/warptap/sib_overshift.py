@@ -82,7 +82,11 @@ def build_overshift_ops(
     ``target_open`` here may span multiple independent branches (not just one instrument's
     own ancestor path), so this needs the same depth-staged opening any nested target does: a
     closed SIB's nested content isn't physically part of the live scan chain yet, so a node at
-    tree-depth ``d`` can be newly opened no earlier than round ``d``.
+    tree-depth ``d`` can be newly opened no earlier than round ``d``. ``currently_open`` is now
+    also threaded into ``stage_open_sequence`` itself (retargeting shift-length optimization
+    plan), so a prefix of ``target_open`` already satisfied by ``currently_open`` skips its own
+    redundant round entirely, exactly mirroring ``iApply``'s own reuse -- was previously only
+    used here for phase-1's own bit-length sizing (via ``prior_open``), never for round count.
 
     The per-round shift construction itself (not the staging) is duplicated from
     ``PDLInterpreter.iApply`` rather than imported -- this check has none of ``iApply``'s
@@ -125,7 +129,7 @@ def build_overshift_ops(
     ops: list[Union[ShiftDR, GotoState]] = []
 
     prior_open = currently_open
-    for open_after in stage_open_sequence(graph, target_open):
+    for open_after in stage_open_sequence(graph, target_open, currently_open=currently_open):
         len1 = layout_bit_length(graph, prior_open)
         bits1 = compose_bits(graph, prior_open, open_after, target_sib=None, payload_value=0)
         ops.append(GotoState(TapState.SHIFT_DR))
