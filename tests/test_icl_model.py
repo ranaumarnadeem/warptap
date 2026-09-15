@@ -11,12 +11,16 @@ from warptap.icl_model import (
     ICLModelError,
     InstrumentNode,
     ModuleInstance,
+    OneHotDataGroup,
+    OneHotDataGroupError,
+    OneHotDataRegister,
     PhysicalGraph,
     ScanArm,
     ScanMuxNode,
     SibNode,
     resolve_dotted_address,
     slot_name,
+    validate_one_hot_data_group,
     validate_physical_graph,
 )
 
@@ -198,3 +202,77 @@ def test_slot_name_reads_the_right_field_for_each_kind():
     sib = SibNode("sib_a", _instrument("a"))
     assert slot_name(mux) == "mux_a"
     assert slot_name(sib) == "sib_a"
+
+
+def _reg(name: str, address: int, width: int = 8, *, writable=True, readable=True) -> OneHotDataRegister:
+    return OneHotDataRegister(
+        name=name, address=address, width=width, writable=writable, readable=readable,
+    )
+
+
+def test_validate_one_hot_data_group_accepts_a_minimal_group():
+    group = OneHotDataGroup("REGFILE", address_width=2, data_width=8, registers=(_reg("REG0", 0),))
+    validate_one_hot_data_group(group)  # must not raise
+
+
+def test_validate_one_hot_data_group_accepts_mixed_register_widths():
+    """Deliberately NOT rejected -- confirmed real: the vendored checker accepts a register
+    narrower than the shared bus (multi-arm ScanMux plan's own OneHotDataGroup Phase 0,
+    sub-step 5)."""
+    group = OneHotDataGroup(
+        "REGFILE", address_width=2, data_width=8,
+        registers=(_reg("REG0", 0, width=8), _reg("REG1", 1, width=4)),
+    )
+    validate_one_hot_data_group(group)  # must not raise
+
+
+def test_validate_one_hot_data_group_rejects_zero_registers():
+    group = OneHotDataGroup("REGFILE", address_width=2, data_width=8, registers=())
+    with pytest.raises(OneHotDataGroupError, match="no registers"):
+        validate_one_hot_data_group(group)
+
+
+def test_validate_one_hot_data_group_rejects_a_duplicate_register_name():
+    group = OneHotDataGroup(
+        "REGFILE", address_width=2, data_width=8,
+        registers=(_reg("REG0", 0), _reg("REG0", 1)),
+    )
+    with pytest.raises(OneHotDataGroupError, match="REG0"):
+        validate_one_hot_data_group(group)
+
+
+def test_validate_one_hot_data_group_rejects_two_registers_sharing_an_address():
+    """A real safety net this project adds on top of the vendored checker, not redundant --
+    confirmed the real checker has no cross-register address-uniqueness check at all (Phase 0
+    sub-step 7)."""
+    group = OneHotDataGroup(
+        "REGFILE", address_width=2, data_width=8,
+        registers=(_reg("REG0", 0), _reg("REG1", 0)),
+    )
+    with pytest.raises(OneHotDataGroupError, match="address 0"):
+        validate_one_hot_data_group(group)
+
+
+def test_validate_one_hot_data_group_rejects_an_out_of_range_address():
+    group = OneHotDataGroup(
+        "REGFILE", address_width=1, data_width=8, registers=(_reg("REG0", 2),),
+    )
+    with pytest.raises(OneHotDataGroupError, match="outside the range"):
+        validate_one_hot_data_group(group)
+
+
+def test_validate_one_hot_data_group_rejects_a_register_wider_than_the_group():
+    group = OneHotDataGroup(
+        "REGFILE", address_width=2, data_width=4, registers=(_reg("REG0", 0, width=8),),
+    )
+    with pytest.raises(OneHotDataGroupError, match="wider than"):
+        validate_one_hot_data_group(group)
+
+
+def test_validate_one_hot_data_group_rejects_a_register_that_is_neither_writable_nor_readable():
+    group = OneHotDataGroup(
+        "REGFILE", address_width=2, data_width=8,
+        registers=(_reg("REG0", 0, writable=False, readable=False),),
+    )
+    with pytest.raises(OneHotDataGroupError, match="neither writable nor readable"):
+        validate_one_hot_data_group(group)

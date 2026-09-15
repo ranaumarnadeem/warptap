@@ -273,3 +273,138 @@ def resolve_dotted_address(root: ModuleInstance, dotted: str) -> ModuleInstance:
         node = match
         walked.append(segment)
     return node
+
+
+class OneHotDataGroupError(WarptapError):
+    """Raised by :func:`validate_one_hot_data_group` for a structurally invalid
+    :class:`OneHotDataGroup` -- its own class (not a reuse of :class:`ICLModelError`), since
+    the two describe entirely unrelated structures: a :class:`PhysicalGraph` is the bit-serial
+    scan-chain topology a SIB/ScanMux network shifts through; a :class:`OneHotDataGroup` is a
+    parallel, non-scan, address-decoded register-file bus (real ICL's own ``AddressPort``/
+    ``WriteEnPort``/``ReadEnPort``/``DataInPort``/``DataOutPort``/``OneHotDataGroup``
+    construct) that never touches the scan chain at all -- matches this project's own "each
+    error class named for exactly the failure mode it represents" convention
+    (:mod:`warptap.errors`'s own docstring)."""
+
+
+class OneHotDataRegister(NamedTuple):
+    """One addressable ``DataRegister`` inside a :class:`OneHotDataGroup` -- real ICL's own
+    ``DataRegister { AddressValue <n>; ... }`` shape (confirmed directly against the vendored
+    ``icl_parser``'s own grammar/checker/processor, not assumed from the grammar file alone --
+    see the multi-arm ScanMux plan's own OneHotDataGroup phase for the full research trail).
+
+    ``writable``/``readable`` are independent explicit booleans, not derived from
+    ``write_signal_bits``/``read_signal_bits`` being non-empty -- confirmed real (the vendored
+    checker's own ``IclDataRegister.check()`` sets ``is_writable()``/``is_readable()``
+    independently of each other, based purely on which port *pairs*
+    (``WriteEnPort``+``DataInPort``, ``ReadEnPort``+``DataOutPort``) a module happens to
+    declare) and deliberately decouples "does this register participate in the write/read
+    path" from "do we know what real net it corresponds to," the same reason
+    :class:`InstrumentNode` keeps ``direction`` and ``signal_bits`` as separate fields rather
+    than inferring one from the other.
+
+    ``reset_value`` is real, legal ICL (``ResetValue`` on a ``DataRegister``) but a confirmed,
+    permanent round-trip casualty of the vendored tool itself, not a warptap choice: its own
+    ANTLR listener (``icl_process.py``) parses ``ResetValue`` but never passes it into
+    ``IclDataRegister``'s own constructor, and that class stores no such field at all -- safe
+    to emit, never recoverable on import through this tool, confirmed by direct inspection
+    (not a name-based guess -- an early check for a "reset"-named accessor found one,
+    ``IclDataRegister.reset()``, that turned out to be an unrelated runtime-state-zeroing
+    method, not a ``ResetValue`` accessor at all)."""
+
+    name: str
+    address: int
+    width: int
+    writable: bool = False
+    readable: bool = False
+    reset_value: Optional[int] = None
+    write_signal_bits: tuple[SignalBinding, ...] = ()  # () or exactly `width` long
+    read_signal_bits: tuple[SignalBinding, ...] = ()  # () or exactly `width` long
+
+
+class OneHotDataGroup(NamedTuple):
+    """A parallel, non-scan, address-decoded register-file bus -- real IEEE 1687 ICL's own
+    ``OneHotDataGroup { DataRegister { AddressValue <n>; ... } ... }`` construct, sharing one
+    ``AddressPort``/``WriteEnPort``/``ReadEnPort``/``DataInPort``/``DataOutPort`` quintet
+    across every :class:`OneHotDataRegister` it contains -- like a simple memory-mapped
+    peripheral register file. Genuinely unrelated to :class:`PhysicalGraph`/:class:`ChainSlot`
+    (never part of the scan chain, never touched by ``sib_insert.py``/``pdl_interpreter.py``/
+    ``sib_model.py``) -- warptap's own scope for this construct is ICL emit/import only.
+
+    ``data_width`` deliberately collapses two quantities the real vendored checker enforces
+    *independently* (confirmed directly: the read path additionally requires the group's own
+    declared width to be ``>=`` each register's width; the write path has no equivalent
+    group-width check at all) into one field -- an accepted v1 narrowing, not an oversight.
+
+    Exactly one :class:`OneHotDataGroup` per rendered ``Module`` is a confirmed hard
+    constraint, not just a convention: the real checker resolves ``AddressPort``/etc. by
+    *type* across the whole enclosing module (not by explicit per-group association), so two
+    groups' own same-typed ports would silently concatenate into one combined signal --
+    confirmed directly, and it doesn't fail silently either: two 1-bit ``WriteEnPort``s from
+    two groups in one module produce a real, named error ("Write EN has more than one bit")
+    the instant a register tries to use either. No extra enforcement code is needed for this
+    here -- :func:`~warptap.icl_emit.render_one_hot_data_group_module` already renders exactly
+    one standalone ``Module`` per :class:`OneHotDataGroup`, the same "one module per mux" shape
+    already established for :class:`ScanMuxNode`."""
+
+    name: str
+    address_width: int
+    data_width: int
+    registers: tuple[OneHotDataRegister, ...]
+
+
+def validate_one_hot_data_group(group: OneHotDataGroup) -> None:
+    """Structural invariants only -- mirrors :func:`validate_physical_graph`'s own layering:
+    "does this register have a real host binding" is an :mod:`warptap.icl_emit`-time
+    ``IclEmitError``, not checked here, exactly matching how :class:`InstrumentNode`'s own
+    WRITE-needs-``signal_bits`` rule lives in ``icl_emit.py``, not this module.
+
+    Raises :class:`OneHotDataGroupError` for: zero registers; a duplicate register name; two
+    registers sharing one ``address`` (confirmed real: the vendored checker has no
+    cross-register address-uniqueness check anywhere, so two registers silently claiming the
+    same address would both "work" as far as it's concerned -- a real, necessary warptap-side
+    safety net, not redundant belt-and-suspenders, with the exact same precedent as
+    :class:`ScanMuxNode`'s own arm-value-uniqueness check); an ``address`` outside
+    ``[0, 2**address_width)``; a register wider than ``data_width``; a register that's
+    neither ``writable`` nor ``readable``. Mixed register widths within one group are
+    deliberately *not* rejected -- confirmed real (the vendored checker accepts a register
+    narrower than the shared bus)."""
+    if not group.registers:
+        raise OneHotDataGroupError(
+            f"OneHotDataGroup {group.name!r} has no registers -- a bus with nothing on it"
+        )
+
+    seen_names: dict[str, int] = {}
+    seen_addresses: dict[int, str] = {}
+    address_limit = 1 << group.address_width
+    for reg in group.registers:
+        if reg.name in seen_names:
+            raise OneHotDataGroupError(
+                f"OneHotDataGroup {group.name!r} has two registers named {reg.name!r}"
+            )
+        seen_names[reg.name] = 1
+
+        if not (0 <= reg.address < address_limit):
+            raise OneHotDataGroupError(
+                f"OneHotDataGroup {group.name!r} register {reg.name!r} has address "
+                f"{reg.address}, outside the range its {group.address_width}-bit address "
+                f"port can represent (0..{address_limit - 1})"
+            )
+        if reg.address in seen_addresses:
+            raise OneHotDataGroupError(
+                f"OneHotDataGroup {group.name!r} registers {seen_addresses[reg.address]!r} "
+                f"and {reg.name!r} both claim address {reg.address} -- every register's "
+                "address must be unique within one group"
+            )
+        seen_addresses[reg.address] = reg.name
+
+        if reg.width > group.data_width:
+            raise OneHotDataGroupError(
+                f"OneHotDataGroup {group.name!r} register {reg.name!r} has width {reg.width}, "
+                f"wider than the group's own shared bus width {group.data_width}"
+            )
+        if not (reg.writable or reg.readable):
+            raise OneHotDataGroupError(
+                f"OneHotDataGroup {group.name!r} register {reg.name!r} is neither writable "
+                "nor readable -- a register that does nothing"
+            )
