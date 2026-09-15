@@ -26,6 +26,7 @@ from warptap.icl_model import (
 )
 from warptap.netlist import Netlist
 from warptap.pdl_emit import PdlEmitError, to_pdl
+from warptap.pdl_import import PdlImportError, import_pdl
 from warptap.pdl_interpreter import PDLError, PDLInterpreter
 from warptap.pdl_verify import PDLVerifyError, ReadCheckResult, check_reads, correlate_observed
 from warptap.pipeline import insert_test_access
@@ -57,6 +58,7 @@ __all__ = [
     "IclImportError",
     "ICLAddressError",
     "PdlEmitError",
+    "PdlImportError",
     "PDLError",
     "PDLVerifyError",
     "SibInsertError",
@@ -85,6 +87,7 @@ __all__ = [
     # PDL
     "PDLInterpreter",
     "to_pdl",
+    "import_pdl",
     "check_reads",
     "correlate_observed",
     "ReadCheckResult",

@@ -93,9 +93,21 @@ entry per implementation stage.
   and are unaffected. This also resolved the retargeting-graph crash a since-questioned
   upstream PR had been working around — confirmed the crash never happens for genuinely
   standard-shaped ICL, only for the non-standard wide-port shape this fix removes.
+- **PDL import.** `to_pdl()`'s own natural companion, the "other direction" `icl_import.py`
+  already plays for ICL — but procedural, not declarative: replays real PDL text against a
+  live `PDLInterpreter`'s own public `iTarget`/`iWrite`/`iRead`/`iApply`/`iRunLoop` methods, in
+  order, rather than reconstructing a new object. `iTarget` is hand-recognized (the compiled
+  PDL0 grammar has no such construct at all, see "PDL grammar validation" above); every other
+  supported statement is genuinely grammar-parsed, walking the real ANTLR parse tree. v1 scope
+  is the 5 statement kinds `to_pdl()` actually emits — everything else the real grammar
+  recognizes (`iProc`/`iCall`, `iScan`, `iState`, etc.) is rejected with a specific, named
+  `PdlImportError`, matching `icl_import.py`'s own discipline. Round-trips real, multi-
+  statement histories (write, settle via both `-tck` and `-sck`, read, write again; alias-
+  addressed fields) cleanly on the first pass.
 
 ### Explicitly out of scope
 
-Dynamic `existPr`-conditional PDL reachability, PDL import (a real PDL grammar now exists to
-build a parser from — see "PDL grammar validation" above — but nothing consumes it into
-warptap's own model yet), any conformance claim against a specific IEEE standard edition.
+Dynamic `existPr`-conditional PDL reachability, any conformance claim against a specific IEEE
+standard edition, and PDL import for anything beyond `to_pdl()`'s own output shape (arbitrary
+hand-authored `.pdl` files — multiple statements per line, statements spanning lines, real
+`iProc` definitions — see `pdl_import.py`'s own module docstring for the exact boundary).

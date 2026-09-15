@@ -243,6 +243,32 @@ def pdl_parser_module(icl_parser_dir: Path):
 
 
 @pytest.fixture(scope="session")
+def pdl_lexer_parser_classes(icl_parser_dir: Path):
+    """The compiled PDL grammar's own raw ``(pdlLexer, pdlParser)`` classes -- distinct from
+    ``pdl_parser_module`` above, which wraps them into a validation-only ``parse_pdl(text) ->
+    list[str]`` callable with no way to walk the resulting parse tree.
+    ``warptap.pdl_import.import_pdl`` needs the real tree (to dispatch on which ``command``
+    alternative matched and pull out each statement's own operands), so it takes these two
+    classes as injected dependencies directly, the same way ``import_icl`` takes
+    ``icl_parser_module`` -- this fixture is what a test supplies them from. Same skip-if-not-
+    importable discipline as every other external-tool fixture in this file (not a hard
+    failure when the submodule isn't checked out or ``antlr4-python3-runtime`` isn't
+    installed)."""
+    src_dir = str(icl_parser_dir / "src" / "pdl_parser")
+    if src_dir not in sys.path:
+        sys.path.insert(0, src_dir)
+    try:
+        from pdlLexer import pdlLexer
+        from pdlParser import pdlParser
+    except ImportError as exc:
+        pytest.skip(
+            f"pdl parser not importable from {src_dir}: {exc} -- run `git submodule update "
+            "--init third_party/icl_parser` and `pip install antlr4-python3-runtime==4.7.2`"
+        )
+    return pdlLexer, pdlParser
+
+
+@pytest.fixture(scope="session")
 def semiate_stil_parser():
     """``STILParser`` (``Semi-ATE-STIL``'s own public API class, pip-installable unlike
     ``icl_parser`` -- implementation_plan.md §7 Stage 13) -- a real, independent, Lark-based
