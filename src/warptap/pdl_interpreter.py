@@ -23,7 +23,14 @@ from __future__ import annotations
 from typing import Optional, Union
 
 from warptap.errors import WarptapError
-from warptap.icl_model import ModuleInstance, PhysicalGraph, ScanMuxNode, resolve_dotted_address
+from warptap.icl_model import (
+    InstrumentDirection,
+    InstrumentNode,
+    ModuleInstance,
+    PhysicalGraph,
+    ScanMuxNode,
+    resolve_dotted_address,
+)
 from warptap.pdl_history import (
     PdlApplyStmt,
     PdlReadStmt,
@@ -167,10 +174,50 @@ def _instrument_for(graph: PhysicalGraph, instrument_name: str):
     or ``None`` if absent -- ``iApply`` already discovers this indirectly via
     ``sib_retarget.open_path_to``; this direct lookup exists for ``iWrite``/``iRead``'s own
     named-sub-field resolution (Stage 15), which needs the instrument's declared ``aliases``
-    before ``iApply`` ever runs."""
+    before ``iApply`` ever runs.
+
+    **A real, confirmed, currently-unexercised gap, not fixed here**: this only ever walks
+    ``graph.chain``'s own top level -- for a nested (``SibNode.nested``) or mux-gated
+    (:class:`~warptap.icl_model.ScanMuxNode`) instrument it silently returns ``None`` (a
+    hierarchy SIB has no ``.instrument`` of its own), and for a bare ``ScanMuxNode`` sitting
+    anywhere in ``graph.chain`` at all it raises a bare ``AttributeError`` (``ScanMuxNode`` has
+    no ``.instrument`` attribute whatsoever), not a clean error -- confirmed by direct reading,
+    not assumed. No existing test combines ``field=`` with a nested/mux-gated instrument. Left
+    alone, out of scope for the write-instrument-payload-defaulting fix this module's own
+    :func:`_find_instrument` exists for -- that one *is* properly recursive, reuse it instead
+    of extending this one, to avoid conflating two separate fixes."""
     for node in graph.chain:
         if node.instrument is not None and node.instrument.name == instrument_name:
             return node.instrument
+    return None
+
+
+def _find_instrument(chain: tuple, instrument_name: str) -> Optional[InstrumentNode]:
+    """The :class:`~warptap.icl_model.InstrumentNode` named ``instrument_name`` anywhere in
+    ``chain``, recursing into a nested ``SibNode.nested`` sub-chain or a
+    :class:`~warptap.icl_model.ScanMuxNode`'s own arms (nested or leaf) -- unlike
+    :func:`_instrument_for` (top-level only, a real, separate, pre-existing gap documented on
+    its own docstring), this one is properly recursive, mirroring
+    :func:`~warptap.icl_emit._collect_instruments`'s own established traversal shape
+    (single-target/early-return here instead of collecting every instrument into a ``seen``
+    dict). ``iApply``'s own write-instrument-payload-defaulting fix needs a target's real
+    ``direction`` regardless of nesting depth or mux-gating."""
+    for node in chain:
+        if isinstance(node, ScanMuxNode):
+            for arm in node.arms:
+                if arm.instrument is not None and arm.instrument.name == instrument_name:
+                    return arm.instrument
+                if arm.nested:
+                    found = _find_instrument(arm.nested, instrument_name)
+                    if found is not None:
+                        return found
+        else:
+            if node.instrument is not None and node.instrument.name == instrument_name:
+                return node.instrument
+            if node.nested:
+                found = _find_instrument(node.nested, instrument_name)
+                if found is not None:
+                    return found
     return None
 
 
@@ -210,6 +257,13 @@ class PDLInterpreter:
         self._root = root
         self._scope: Optional[ModuleInstance] = None
         self._pending_writes: dict[str, int] = {}
+        # Last-known committed value per WRITE-direction instrument, across separate iApply
+        # calls -- empty here matches real hardware's own guaranteed post-reset-to-0 state
+        # (instrument_write.v's own `po <= 1'b0` on trst_n), recovered via .get(name, 0). See
+        # iApply's own phase-2 payload selection and iWrite's own sub-field merge, both of
+        # which fall back to this instead of a bare 0 (a real, confirmed bug fix -- see
+        # iApply's own docstring for the full mechanism).
+        self._committed_writes: dict[str, int] = {}
         # (expected, low_bit, high_bit) -- (low_bit, high_bit) = (None, None) means "whole
         # instrument," resolved against the target's real width in iApply itself.
         self._pending_reads: dict[str, tuple[int, Optional[int], Optional[int]]] = {}
@@ -245,13 +299,26 @@ class PDLInterpreter:
         whatever else is already queued for this instrument -- real PDL's named sub-field
         addressing (``TDR_bit``/``UCreg``/ICL ``Alias``, confirmed real by independent
         research sources), closing what was previously a documented, stated gap rather than a
-        silent one. Raises :class:`PDLError` for an unknown ``field``."""
+        silent one.
+
+        ``current`` (the sub-field merge's own starting point) prefers whatever's *already
+        pending* for this instrument in the current, not-yet-applied batch (an earlier
+        ``iWrite`` call since the last ``iApply``, matching the field-merge precedent this
+        docstring already describes) -- falling back to ``self._committed_writes``, the
+        instrument's own last-known-committed value from a *previous* ``iApply``, only when
+        nothing is pending yet this batch. A real, confirmed bug fix: without this fallback, a
+        sub-field write in a fresh apply cycle (no other field of the same instrument also
+        queued this batch) silently clobbered every *other* field to ``0`` instead of
+        preserving its own real last-committed value -- see :func:`PDLInterpreter.iApply`'s
+        own docstring for the full mechanism, shared with a closely related phase-2 payload
+        bug this same ``self._committed_writes`` fixes. Raises :class:`PDLError` for an
+        unknown ``field``."""
         scope = self._require_scope("iWrite")
         if field is None:
             self._pending_writes[scope.name] = value
         else:
             low, high = _resolve_field(self._graph, scope.name, field)
-            current = self._pending_writes.get(scope.name, 0)
+            current = self._pending_writes.get(scope.name, self._committed_writes.get(scope.name, 0))
             self._pending_writes[scope.name] = _set_bit_range(current, low, high, value)
         self.history.append(PdlWriteStmt(field if field is not None else scope.name, value))
 
@@ -360,6 +427,26 @@ class PDLInterpreter:
         exactly the same separation a hierarchy SIB's own open-then-descend already needed, not
         a new mechanism. Confirmed by :mod:`tests.test_pdl_interpreter_scan_mux`, which drives
         this exact method (not a hand-built ``compose_bits`` sequence) through an arm switch.
+
+        **A real, confirmed bug, fixed by ``self._committed_writes``**: phase 2's own
+        ``compose_bits`` call always re-asserts the identical ``opened``/``opened`` state
+        before and after, so ``stays_matched``/``stays_open`` always holds for the target
+        across that edge -- phase 2 *always* commits its own payload, regardless of whether a
+        fresh ``iWrite`` was queued this apply. Before this fix, no fresh ``iWrite`` meant
+        ``payload`` silently defaulted to ``0``, which still committed -- a read-only ``iApply``
+        of an already-open WRITE instrument (no fresh write, ``iRead`` only) correctly observed
+        its own real value (self-captured at Capture-DR, *before* that same round's own
+        zero-fill Update-DR), but silently zeroed it out for any *later* touch. Confirmed as a
+        real bug on real RTL (not just the Python model), for both a plain SIB and a
+        :class:`~warptap.icl_model.ScanMuxNode` arm, before this fix landed -- and unrelated to
+        the phase-1 fix two paragraphs up (that one only ever protected the *first* reapply;
+        this covers every later one too, and every plain read-only touch in between). Now,
+        absent a fresh ``iWrite``, phase 2's own payload falls back to
+        ``self._committed_writes``, the target's own last-known committed value, instead of a
+        bare ``0`` -- re-asserting what's already there is a real, physically correct no-op
+        commit, not a fresh clobber. See ``tests/test_sib_insert_write_instrument_cross_
+        sim.py``/``tests/test_sib_insert_scan_mux_cross_sim.py`` for the permanent real-RTL
+        regression tests proving this.
         """
         scope = self._require_scope("iApply")
         self.history.append(PdlApplyStmt())
@@ -391,7 +478,20 @@ class PDLInterpreter:
 
         # Phase 2: shift the real payload, re-asserting the same (now-physical) select
         # state, with the target's own instrument segment now spliced into the chain.
-        payload = self._pending_writes.pop(instrument_name, 0)
+        target_instrument = _find_instrument(self._graph.chain, instrument_name)
+        is_write_target = (
+            target_instrument is not None
+            and target_instrument.direction is InstrumentDirection.WRITE
+        )
+        payload = self._pending_writes.pop(instrument_name, None)
+        if payload is None:
+            payload = self._committed_writes.get(instrument_name, 0) if is_write_target else 0
+        if is_write_target:
+            # Phase 2 always commits (see this method's own docstring) -- record it now,
+            # whether payload came from a fresh iWrite or the fallback above (re-storing the
+            # same value is a harmless no-op), so a LATER apply has a real value to fall back
+            # to instead of a bare 0.
+            self._committed_writes[instrument_name] = payload
         pending_read = self._pending_reads.pop(instrument_name, None)
         len2 = layout_bit_length(self._graph, opened)
         bits2 = compose_bits(

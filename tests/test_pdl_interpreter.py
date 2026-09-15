@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import pytest
 
-from warptap.icl_model import Alias, ICLAddressError
+from warptap.icl_model import Alias, ICLAddressError, InstrumentDirection
 from warptap.pdl_interpreter import PDLError, PDLInterpreter
 from warptap.sib_layout import layout_bit_length
 from warptap.sib_plan import HierarchySpec, InstrumentSpec, build_sib_plan
@@ -33,6 +33,26 @@ def _interpreter_with_aliases() -> PDLInterpreter:
             "status_reg",
             width=4,
             capture_value=0,
+            aliases=(Alias("lo", 0, 1), Alias("hi", 2, 3)),
+        )
+    ]
+    graph, root = build_sib_plan(specs)
+    return PDLInterpreter(graph, root)
+
+
+def _interpreter_with_write_aliases() -> PDLInterpreter:
+    """Same shape as :func:`_interpreter_with_aliases`, but WRITE-direction -- needed for the
+    committed-writes fallback tests below, which are specifically about a WRITE instrument's
+    own update latch (a READ instrument has none at all, so the fallback doesn't apply to it;
+    using a READ instrument here would test something else entirely, a mistake this project's
+    own investigation into the bug this fixes caught and corrected before trusting its own
+    first results)."""
+    specs = [
+        InstrumentSpec(
+            "status_reg",
+            width=4,
+            capture_value=0,
+            direction=InstrumentDirection.WRITE,
             aliases=(Alias("lo", 0, 1), Alias("hi", 2, 3)),
         )
     ]
@@ -277,6 +297,25 @@ def test_iwrite_with_field_preserves_a_previously_queued_different_field():
     pdl.iWrite(0b01, field="lo")  # bits[1:0]
     pdl.iWrite(0b11, field="hi")  # bits[3:2] -- must not clobber lo's own bits
     assert pdl._pending_writes == {"status_reg": 0b1101}
+
+
+def test_iwrite_with_field_in_a_fresh_apply_preserves_the_last_committed_other_field():
+    """The write-instrument-payload-defaulting bug fix's own second half: unlike the test
+    above (both fields queued in the SAME batch, already correct beforehand), this writes a
+    sub-field in a FRESH apply cycle -- nothing else pending for this instrument this batch --
+    and confirms the OTHER field falls back to its own last-COMMITTED value (self._committed_
+    writes), not a bare 0. Confirmed as a real, previously-broken case: before this fix,
+    `current` only ever consulted self._pending_writes (empty this batch), silently zeroing
+    lo's own real committed value instead of preserving it."""
+    pdl = _interpreter_with_write_aliases()
+    pdl.iTarget("status_reg")
+    pdl.iWrite(0b1010)  # lo=0b10, hi=0b10
+    pdl.iApply()
+    assert pdl._committed_writes == {"status_reg": 0b1010}
+
+    pdl.iTarget("status_reg")
+    pdl.iWrite(0b11, field="hi")  # a fresh apply cycle -- nothing else pending for status_reg
+    assert pdl._pending_writes == {"status_reg": 0b1110}  # lo=0b10 preserved, hi=0b11 merged in
 
 
 def test_iwrite_unknown_field_raises_named_pdlerror():

@@ -136,3 +136,11 @@ def test_iapply_switches_arms_directly_across_separate_calls():
     # Each iApply is phase1 (1 round -- a top-level mux target, switch or not, has no
     # ancestors) + phase2 = 2 ShiftDRs; +1 IR-select; 3 iApply calls total.
     assert len(observed) == 1 + 2 + 2 + 2
+    # Not previously checked (write-instrument-payload-defaulting bug fix plan's own research
+    # pass found this gap): the third apply's own iRead(0b110) was never actually verified
+    # against the observed value, only the shift count. arm1's own value must genuinely
+    # survive being switched away from (to arm2) and back -- confirms this fix doesn't regress
+    # the already-correct switch-away-and-back case.
+    results = check_reads(ir_ops, observed)
+    assert len(results) == 1
+    assert results[0].passed
