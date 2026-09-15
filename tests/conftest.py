@@ -102,6 +102,26 @@ def openmbist_dir() -> Path:
     return candidate
 
 
+def _default_verilog_uart_dir() -> Path:
+    if os.environ.get("WARPTAP_VERILOG_UART_DIR"):
+        return Path(os.environ["WARPTAP_VERILOG_UART_DIR"])
+    # Same sibling-checkout convention as openMBIST (implementation_plan.md §7 Stage 9 §5.2):
+    # alexforencich/verilog-uart is never vendored into tapestry, only read live at test time.
+    return Path(__file__).resolve().parents[2] / "verilog-uart"
+
+
+@pytest.fixture(scope="session")
+def verilog_uart_dir() -> Path:
+    """The real alexforencich/verilog-uart checkout (MIT licensed) this project cross-
+    simulates uart_tx.v against for the second real-external-design validation -- a sibling
+    project, never vendored, mirroring openmbist_dir's own "read live from the sibling
+    checkout at test time" discipline exactly. Skips (not fails) when not found."""
+    candidate = _default_verilog_uart_dir()
+    if not candidate.is_dir():
+        pytest.skip(f"verilog-uart checkout not found at {candidate} (set WARPTAP_VERILOG_UART_DIR)")
+    return candidate
+
+
 @pytest.fixture(scope="session")
 def autombist_generator(openmbist_dir: Path):
     """``autombist.generator.generate_from_config`` imported live from the sibling openMBIST
