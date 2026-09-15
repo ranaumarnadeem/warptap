@@ -157,15 +157,22 @@ entry per implementation stage.
   with a dedicated `_mux_arm_read_chronological_bits`, confirmed on real RTL in the two tests
   that had deliberately documented-but-skipped this exact check
   (`test_sib_insert_scan_mux_cross_sim.py`). The plain-`SibNode` case was never affected.
-- **Found, not fixed here: a read-only `iApply` of an already-open `WRITE` instrument silently
-  zeroes its own stored value for any later read.** Broader than the "same instrument twice
-  with no intervening target" footgun the retargeting shift-length optimization plan fixed —
+- **Fixed: a read-only `iApply` of an already-open `WRITE` instrument silently zeroed its own
+  stored value for any later read.** Broader than the "same instrument twice with no
+  intervening target" footgun the retargeting shift-length optimization plan already fixed —
   phase 2 always delivers `payload_value` (defaulting to `0` absent a fresh `iWrite`), and
   `stays_matched`/`stays_open` naturally holds for a round that doesn't change what's selected,
-  so that `0` commits via Update-DR regardless of mux involvement or intervening targets. Not
-  mux-specific. Tracked for a dedicated follow-up (`iApply`'s own payload-selection logic would
-  need to default an unwritten `WRITE` instrument's payload to its last-known committed value,
-  not `0`) — not folded into the mux-arm-readback fix above.
+  so that `0` committed via Update-DR regardless of mux involvement or intervening targets. Not
+  mux-specific — the plain-`SibNode` case was affected too. A second, closely related bug with
+  the same root cause, found while fixing the first: `iWrite`'s own sub-field (`field=`) merge
+  had an identical gap — writing one field in a *fresh* apply cycle (no other field of the same
+  instrument also queued that batch) silently zeroed every other field instead of preserving
+  its own real last-committed value. Fixed with one new piece of state,
+  `PDLInterpreter._committed_writes`, tracking each `WRITE`-direction instrument's own
+  last-known committed value across `iApply` calls — both `iApply`'s own phase-2 payload
+  selection and `iWrite`'s own sub-field merge fall back to it instead of a bare `0`. Confirmed
+  as real bugs on real RTL before the fix (both plain-`SibNode` and `ScanMuxNode`-arm cases),
+  now permanent passing regression tests.
 
 ### Explicitly out of scope
 
