@@ -173,6 +173,33 @@ entry per implementation stage.
   selection and `iWrite`'s own sub-field merge fall back to it instead of a bare `0`. Confirmed
   as real bugs on real RTL before the fix (both plain-`SibNode` and `ScanMuxNode`-arm cases),
   now permanent passing regression tests.
+- **Second real-external-design validation: `alexforencich/verilog-uart`'s `uart_tx.v`.**
+  Closes the "only ever proven against one real external design" gap (`openMBIST`'s
+  `mem_subsystem_mbist`) with a second, unrelated, MIT-licensed real design (583-star,
+  actively maintained), read live from a sibling checkout exactly like openMBIST already is
+  (`verilog_uart_dir` fixture, mirroring `openmbist_dir`'s own convention). Unlike every
+  `mem_subsystem_mbist` test, `uart_tx.v` needs its own functional clock pulsed a real,
+  precise number of times (81 cycles for a full byte at `prescale=1`) with no useful
+  relationship to how many TCK cycles JTAG shifting happens to take — the first real use of
+  `PDLInterpreter.iRunLoop`'s `sck_port` parameter (Stage 15's own `-sck` selector) end to end,
+  rather than the lower-level `retarget_faultflow_patterns` API Stage 14's own cross-sim tests
+  used to prove the same underlying `PulsePin` primitive. One `WRITE` instrument drives
+  `s_axis_tdata`+`s_axis_tvalid` together (9 bits, one atomic `iWrite`/`iApply`); a second sets
+  `prescale`; a `READ` instrument confirms `busy` toggles 0→1→0 across a transmission — and,
+  the strong end-to-end proof, a new testbench (`tb_uart_tx.v`) traces `txd` directly every
+  functional-clock pulse, never through JTAG, letting the test decode the actual transmitted
+  byte in Python and confirm it matches what was written via JTAG. Two real findings surfaced
+  independently verifying the RTL before writing any warptap-side code (a standalone spike,
+  not trusted from a web summary): the stop-bit bit-time is 9 cycles, one longer than every
+  other bit (`bit_cnt==1`'s own branch sets `prescale_reg <= (prescale<<3)` with no `-1`), and
+  `busy` never visibly dips between back-to-back transmissions unless `s_axis_tvalid` is
+  explicitly deasserted before the frame completes (`tready` pulses for exactly one cycle at
+  frame-end with no separate same-cycle check gating a fresh start). Also confirmed, the hard
+  way (a same-session `ValueError` on real `x`-valued trace output): `uart_tx.v`'s own
+  `reg = <literal>` initial-value declarations do not survive this project's Yosys JSON
+  netlist round-trip, and its reset is synchronous-only (unlike every prior fixture's DUT
+  reset) — so the new testbench's own reset lead-in needed a real pulse row, not just a held
+  level, to commit a known state before anything is sampled.
 
 ### Explicitly out of scope
 
