@@ -20,6 +20,7 @@ from warptap.icl_model import (
     ScanMuxNode,
 )
 from warptap.pdl_interpreter import PDLInterpreter
+from warptap.pdl_verify import check_reads
 from warptap.sib_model import SibNetworkRegister
 from warptap.tap_fsm import TapState
 from warptap.tap_ir import GotoState, ShiftIR, bits_to_int
@@ -88,21 +89,22 @@ def test_iapply_writes_and_reads_back_through_a_mux_arm():
     # 1 (IR-select) + 2 (first iApply: phase1 1 round + phase2) + 1 (second iApply: phase2
     # only) = 4, not the pre-fix 5.
     assert len(observed) == 1 + 2 + 1
-    # This test verifies the SHIFT SHAPE only, not the read VALUE -- an earlier version of this
-    # comment claimed "play() itself raises on a tdo/mask mismatch," which is false (tap_ir_
-    # play.play()'s own docstring says explicitly it never compares against op.tdo/op.mask --
-    # that's pdl_verify.check_reads()'s job, never actually called here). Calling check_reads()
-    # here (confirmed directly, both before and after this plan's own fix) finds a real,
-    # separate, PRE-EXISTING bug in this exact scenario -- arm1's own written value does not
-    # round-trip correctly through a mux arm's self-capture, even in the already-"safe" switch-
-    # away-and-back pattern (tests/test_sib_insert_scan_mux_cross_sim.py's own
-    # test_written_value_survives_switching_away_and_back_on_real_rtl claims this works, but
-    # that test only checks RTL-vs-Python-model agreement, never the actual value against what
-    # was written -- same class of gap as this test had). Unrelated to this plan's own retarget-
-    # ing-round-count fix (confirmed: the exact same mismatch occurs against the pre-fix,
-    # untrimmed round sequence too) -- flagged separately rather than fixed here, since it's a
-    # genuinely different bug in sib_model.py's own mux-arm WRITE-instrument capture/update
-    # logic, not in scope for this plan.
+    # An earlier version of this test only verified the SHIFT SHAPE, not the read VALUE -- its
+    # own comment claimed "play() itself raises on a tdo/mask mismatch," which is false (tap_
+    # ir_play.play()'s own docstring says explicitly it never compares against op.tdo/op.mask
+    # -- that's pdl_verify.check_reads()'s job). Adding a real check_reads() call surfaced a
+    # real, separate bug (mux-arm-readback bug fix plan): PDLInterpreter._target_layout's own
+    # comparison-value construction assumed a matched ScanMuxNode arm's content sits wherever
+    # a uniform position-order-then-reversed layout would place it -- wrong, confirmed against
+    # real RTL (tests/test_scan_mux_write_arm_readback_cross_sim.py): the matched arm's own
+    # content actually surfaces on the round's own *first* `width` chronological cycles,
+    # MSB-first, since rtl/scan_mux_cell.v's own `so` is a combinational passthrough of the
+    # matched arm's `so` for as long as it stays matched. Now fixed
+    # (_mux_arm_read_chronological_bits) -- this assertion is the fast, RTL-free regression
+    # test for it.
+    results = check_reads(ir_ops, observed)
+    assert len(results) == 1
+    assert results[0].passed
 
 
 def test_iapply_switches_arms_directly_across_separate_calls():

@@ -44,8 +44,10 @@ class PDLError(WarptapError):
     instrument) -- e.g. ``iWrite``/``iRead``/``iApply`` called before any ``iTarget``."""
 
 
-def _target_layout(graph: PhysicalGraph, opened: dict[str, int], target_sib: str) -> tuple[int, int]:
-    """(offset, width) of ``target_sib``'s own instrument-content bits within
+def _target_layout(
+    graph: PhysicalGraph, opened: dict[str, int], target_sib: str
+) -> tuple[int, int, bool]:
+    """(offset, width, is_mux_arm) of ``target_sib``'s own instrument-content bits within
     ``compose_bits``'s position-ordered output for the ``opened`` configuration -- offset
     counts from index 0 (nearest TDI), the same convention ``compose_bits`` itself uses.
     Recurses into an open hierarchy slot's own nested sub-chain, matching sib_layout.py's
@@ -61,16 +63,24 @@ def _target_layout(graph: PhysicalGraph, opened: dict[str, int], target_sib: str
     ``open_path_to``-derived ``target_sib`` only ever equals a mux's name when that mux's own
     matched arm directly gates the target instrument, never a bare hierarchy node -- the same
     invariant that already lets the plain-SIB branch below assume ``node.instrument`` is set
-    whenever ``node.sib_name == target_sib``)."""
+    whenever ``node.sib_name == target_sib``).
 
-    def _walk(chain: tuple, base_offset: int) -> Optional[tuple[int, int]]:
+    ``is_mux_arm`` is ``True`` exactly for that ``ScanMuxNode`` case -- ``iApply``'s own pending-
+    read block needs it to pick :func:`_mux_arm_read_chronological_bits` over
+    :func:`_read_mask_bits`'s usual position-order-then-reverse construction, which is wrong
+    for a matched mux arm's own content (see :func:`_mux_arm_read_chronological_bits`'s own
+    docstring, and the mux-arm-readback bug fix plan's own Context, for why ``offset`` itself
+    is never meaningful for that case -- it's returned anyway, unused by that caller, only to
+    keep this function's own return shape uniform)."""
+
+    def _walk(chain: tuple, base_offset: int) -> Optional[tuple[int, int, bool]]:
         offset = base_offset
         for node in chain:
             if isinstance(node, ScanMuxNode):
                 value = opened.get(node.mux_name)
                 arm = next((a for a in node.arms if value in a.values), None) if value is not None else None
                 if node.mux_name == target_sib:
-                    return offset, arm.instrument.width
+                    return offset, arm.instrument.width, True
                 if arm is not None:
                     if arm.nested:
                         found = _walk(arm.nested, offset)
@@ -82,7 +92,7 @@ def _target_layout(graph: PhysicalGraph, opened: dict[str, int], target_sib: str
                 offset += node.select_width
             else:
                 if node.sib_name == target_sib:
-                    return offset, node.instrument.width
+                    return offset, node.instrument.width, False
                 if node.sib_name in opened:
                     if node.nested:
                         found = _walk(node.nested, offset)
@@ -111,6 +121,45 @@ def _read_mask_bits(total_bits: int, offset: int, low: int, high: int) -> list[i
     for k in range(low, high + 1):
         bits[offset + k] = 1
     return bits
+
+
+def _mux_arm_read_chronological_bits(
+    total_bits: int, width: int, low: int, high: int, payload_value: int
+) -> tuple[int, int]:
+    """``(tdo, mask)`` ints for an ``iRead`` resolved to a :class:`~warptap.icl_model.
+    ScanMuxNode`'s own currently-matched arm -- real, RTL-confirmed (``tests/test_scan_mux_
+    write_arm_readback_cross_sim.py``, mux-arm-readback bug fix plan Phase 0) behavior that
+    ``_read_mask_bits``'s usual position-order-then-``reversed()`` construction gets wrong:
+    the matched arm's own content occupies the *first* ``width`` chronological cycles of the
+    round, MSB-first (chronological cycle 0 = content bit ``width - 1``, ..., cycle
+    ``width - 1`` = content bit 0) -- **not** wherever its own position-ordered ``offset``
+    would place it after a uniform reversal.
+
+    Root cause (confirmed against ``rtl/scan_mux_cell.v`` directly, not assumed): while an arm
+    stays matched -- true for a round's *entire* duration once true, since ``matched_old_c`` is
+    based on the OLD, pre-edge ``po`` and can't change until this round's own Update-DR --
+    ``assign so = matched_old_c ? relay_so_c : shift_ff[0];`` makes the mux's own external
+    ``so`` a *combinational passthrough* of the matched arm's own ``so``, never the mux's own
+    ``select_width``-bit internal register (which, while matched, is just silently mirroring
+    the arm's own ``so`` into itself each cycle, purely so it holds a sensible value if a later
+    round switches away). ``compose_bits``/``_read_mask_bits`` reused for a comparison-value
+    prediction assume a single uniform linear cascade through the whole ``width +
+    select_width`` layout -- correct for constructing the *real* payload (which ``sib_model.
+    py``'s own redirect-aware simulator processes correctly regardless of this function's own
+    assumptions, confirmed separately), wrong for *predicting* what chronological cycle a given
+    content bit surfaces on.
+
+    ``low``/``high``/``payload_value`` match ``iApply``'s own existing convention exactly
+    (``payload_value`` is the caller's already-``<< low``-shifted expected value, the same
+    value already passed to ``compose_bits`` for the non-mux-arm case) -- this function only
+    differs in *where* it places bits, not in the value/sub-field semantics themselves."""
+    tdo_bits = [0] * total_bits
+    mask_bits = [0] * total_bits
+    for k in range(low, high + 1):
+        chronological = (width - 1) - k
+        tdo_bits[chronological] = (payload_value >> k) & 1
+        mask_bits[chronological] = 1
+    return bits_to_int(tdo_bits), bits_to_int(mask_bits)
 
 
 def _instrument_for(graph: PhysicalGraph, instrument_name: str):
@@ -351,15 +400,21 @@ class PDLInterpreter:
         tdo = mask = None
         if pending_read is not None:
             expected, low, high = pending_read
-            offset, width = _target_layout(self._graph, opened, target_sib)
+            offset, width, is_mux_arm = _target_layout(self._graph, opened, target_sib)
             if low is None:  # whole-instrument iRead (no field given) -- Stage 5's original case
                 low, high = 0, width - 1
-            expected_bits = compose_bits(
-                self._graph, opened, opened, target_sib=target_sib, payload_value=expected << low
-            )
-            mask_bits = _read_mask_bits(len(expected_bits), offset, low, high)
-            tdo = bits_to_int(list(reversed(expected_bits)))
-            mask = bits_to_int(list(reversed(mask_bits)))
+            if is_mux_arm:
+                # Real, RTL-confirmed exception (mux-arm-readback bug fix plan) -- a matched
+                # ScanMuxNode arm's own content surfaces on different chronological cycles
+                # than a uniform position-order-then-reversed layout would predict.
+                tdo, mask = _mux_arm_read_chronological_bits(len2, width, low, high, expected << low)
+            else:
+                expected_bits = compose_bits(
+                    self._graph, opened, opened, target_sib=target_sib, payload_value=expected << low
+                )
+                mask_bits = _read_mask_bits(len(expected_bits), offset, low, high)
+                tdo = bits_to_int(list(reversed(expected_bits)))
+                mask = bits_to_int(list(reversed(mask_bits)))
         ops.append(GotoState(TapState.SHIFT_DR))
         ops.append(ShiftDR(len2, tdi=bits_to_int(list(reversed(bits2))), tdo=tdo, mask=mask))
         ops.append(GotoState(TapState.RUN_TEST_IDLE))
