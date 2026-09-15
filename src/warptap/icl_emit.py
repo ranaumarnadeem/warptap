@@ -275,11 +275,16 @@ def render_scan_mux_module(node: ScanMuxNode) -> str:
             f"    ScanInterface host{k} {{ Port fromArm{k}; Port toSI; Port toSEL{k}; }}"
         )
 
+    # SO's own single-bit source: rtl/scan_mux_cell.v's own `assign so = matched_old_c ?
+    # relay_so_c : shift_ff[0];` uses bit 0 -- NOT the MSB (see _scan_port_bit_ref's own
+    # docstring: this is a different real RTL structure from an instrument's own chained
+    # per-bit cells, and genuinely uses a different bit).
+    so_source = _scan_port_bit_ref("SELREG", width, 0)
     return (
         f"Module {module_name} {{\n"
         "    ScanInPort SI;\n"
         "    SelectPort SEL;\n"
-        f"    ScanOutPort SO{width_suffix} {{ Source SELREG{width_suffix}; }}\n"
+        f"    ScanOutPort SO {{ Source {so_source}; }}\n"
         "    ScanInterface client { Port SI; Port SEL; Port SO; }\n"
         "\n"
         + "\n".join(from_arm_lines) + "\n"
@@ -297,6 +302,42 @@ def render_scan_mux_module(node: ScanMuxNode) -> str:
         f"    ScanMux MUX SelectedBy SELREG{width_suffix} {{ " + "; ".join(mux_arm_clauses) + "; }\n"
         "}"
     )
+
+
+def _scan_port_bit_ref(register_name: str, width: int, bit: int) -> str:
+    """The single-bit reference a scalar ``ScanOutPort``/``ScanInSource`` must use when
+    connecting to an N-bit register's own physical shift-chain entry/exit point.
+
+    **A real, confirmed convention this project got wrong for its entire history until now**:
+    every ``ScanRegister``-sourced ``ScanOutPort``/``ScanInSource`` in the vendored
+    ``icl_parser``'s own real fixture corpus indexes exactly one bit, regardless of the
+    register's own declared width (e.g. a real fixture's own 32-bit ``ScanRegister
+    IDCODE[31:0]`` fed by a bare, 1-bit ``ScanInSource tdi_i;``) -- a ``ScanOutPort``/
+    ``ScanInPort`` represents one physical, bit-serial wire, always 1 bit, no matter how wide
+    the register behind it is; the register's own internal shift chain is what moves other
+    bits into position. This was found via a real upstream maintainer's own review of a
+    generated example (``Honza255/icl_parser`` PR #1), not derived from the grammar file --
+    this emitter used to widen ``SO``/``SI``/``ScanInSource`` to match the register's own
+    width instead, which happens to satisfy the vendored tool's own (too-permissive)
+    ``port_size == source_size`` check but isn't standard ICL. ``CaptureSource``/
+    ``WriteDataSource``/``DataOutPort`` are unaffected by this -- confirmed separately against
+    the same corpus (e.g. ``CaptureSource CONF_A;``, a bare whole-register reference with no
+    bit index at all) -- those describe parallel, functional-level connections, not the
+    bit-serial scan path, and correctly stay whole-width.
+
+    ``bit`` is never assumed -- it must be confirmed against this specific register's own real
+    RTL wiring, not guessed by convention (a real, second mistake this function's own history
+    already made once): an instrument's own last chained per-bit cell (``sib_insert.
+    _insert_leaf_instrument_bits``'s own ``return prev_inst_so`` after its ``k == width - 1``
+    iteration) is bit ``width - 1`` (the MSB), but ``rtl/scan_mux_cell.v``'s own ``assign so =
+    matched_old_c ? relay_so_c : shift_ff[0];`` uses bit ``0`` instead -- two different real
+    RTL structures, two different answers; callers pass their own confirmed bit index rather
+    than this function assuming one.
+
+    Bare (no index at all) when ``width == 1``, matching :func:`render_sib_module_type`'s own
+    always-1-bit ``SR`` reference -- indexing a definitely-1-bit register would be redundant,
+    not wrong, but every existing 1-bit reference in this file is already bare."""
+    return register_name if width == 1 else f"{register_name}[{bit}]"
 
 
 def _render_aliases(aliases, register_name: str) -> list:
@@ -366,15 +407,20 @@ def render_instrument_module(instrument: InstrumentNode) -> str:
         )
         alias_lines = _render_aliases(instrument.aliases, "SR")
         alias_block = ("\n" + "\n".join(alias_lines) + "\n") if alias_lines else ""
+        # SO's own single-bit source: sib_insert._insert_leaf_instrument_bits's own per-bit
+        # chain returns its LAST iteration's so (k == width - 1) as the module's own external
+        # SO -- that cell handles value bit width-1, the MSB. See _scan_port_bit_ref's own
+        # docstring for why this bit index is confirmed per-construct, never assumed.
+        so_source = _scan_port_bit_ref("SR", width, width - 1)
         return (
             f"Module {module_name} {{\n"
             f"{drive_comment}"
             f"    DataOutPort DO{bits} {{ Source DR{bits}; }}\n"
-            f"    ScanInPort SI{bits};\n"
-            f"    ScanOutPort SO{bits} {{ Source SR{bits}; }}\n"
+            "    ScanInPort SI;\n"
+            f"    ScanOutPort SO {{ Source {so_source}; }}\n"
             "\n"
             f"    ScanRegister SR{bits} {{\n"
-            f"        ScanInSource SI{bits};\n"
+            "        ScanInSource SI;\n"
             f"        CaptureSource SR{bits};  // self-capture: mirrors instrument_write.v's\n"
             "                                   // own shift_ff <= po read-back-what-was-\n"
             "                                   // last-committed behavior\n"
@@ -407,14 +453,18 @@ def render_instrument_module(instrument: InstrumentNode) -> str:
             "    // source, so none is fabricated here (see module docstring).\n"
         )
 
+    # SO's own single-bit source: same real RTL fact as the WRITE case above (bc1_shift_only's
+    # own per-bit chain, via the same _insert_leaf_instrument_bits, puts value bit width-1 --
+    # the MSB -- in the last chained cell, whose so becomes this module's own external SO).
+    so_source = _scan_port_bit_ref("DR", width, width - 1)
     lines = [
         f"Module {module_name} {{",
-        f"    ScanInPort SI[{width - 1}:0];",
-        f"    ScanOutPort SO[{width - 1}:0] {{ Source DR[{width - 1}:0]; }}",
+        "    ScanInPort SI;",
+        f"    ScanOutPort SO {{ Source {so_source}; }}",
         "",
         binding_comment.rstrip("\n"),
         f"    ScanRegister DR[{width - 1}:0] {{",
-        f"        ScanInSource SI[{width - 1}:0];",
+        "        ScanInSource SI;",
     ]
     if capture_source is not None:
         lines.append(f"        CaptureSource {capture_source};")
@@ -626,23 +676,14 @@ def to_icl(
     instance_lines = render_sib_instances(graph)
     first_slot = _slot_instance_name(graph.chain[0]) if graph.chain else None
     last_so = f"{_slot_instance_name(graph.chain[-1])}.SO" if graph.chain else TDI
-    # A SibNode's own SO is always 1 bit (render_sib_module_type's SR), but a ScanMuxNode's
-    # own SO carries its select_width (render_scan_mux_module's SO/SELREG pairing) -- tdo's
-    # own declared width must match whatever it's bound to, the same same-module port_size==
-    # source_size rule that forced render_scan_mux_module's own SO fix (see that function's
-    # docstring), confirmed here by live-validating a mux sitting directly at the chain's tail
-    # with no SIB wrapper (every other existing test only ever had a 1-bit SibNode there).
-    last_so_width = (
-        graph.chain[-1].select_width
-        if graph.chain and isinstance(graph.chain[-1], ScanMuxNode)
-        else 1
-    )
-    tdo_bits = f"[{last_so_width - 1}:0]" if last_so_width > 1 else ""
-
+    # Both a SibNode's own SO (render_sib_module_type's SR) and a ScanMuxNode's own SO
+    # (render_scan_mux_module's SO/SELREG pairing, now correctly scalar per
+    # _scan_port_bit_ref's own docstring) are always exactly 1 bit -- tdo, the real physical
+    # TDO pin, stays scalar unconditionally, matching every other top-level TAP pin here.
     top_lines = [
         f"Module {root.name} {{",
         f"    ScanInPort {TDI};",
-        f"    ScanOutPort {TDO}{tdo_bits} {{ Source {last_so if graph.chain else TDI}; }}",
+        f"    ScanOutPort {TDO} {{ Source {last_so if graph.chain else TDI}; }}",
         f"    TCKPort {TCK};",
         f"    TMSPort {TMS};",
         f"    TRSTPort {TRST_N};",

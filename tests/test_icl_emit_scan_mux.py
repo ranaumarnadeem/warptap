@@ -56,13 +56,18 @@ def test_has_classifiable_select_ports():
     assert "ToSelectPort toSEL1" in block
 
 
-def test_scan_out_port_width_matches_selreg_width():
-    """Regression test for a real bug caught by live-validating against the vendored
-    icl_parser: SO's own declared width must match its Source (SELREG)'s width, or the
-    real tool's source_check() raises a bare AssertionError (port_size == source_size)."""
+def test_scan_out_port_stays_scalar_sourcing_bit_zero_of_selreg():
+    """SO must stay a scalar (1-bit) port at any select_width, sourcing exactly bit 0 of
+    SELREG -- confirmed real ICL convention (a ScanRegister-sourced ScanOutPort/ScanInSource
+    always indexes exactly one bit, regardless of the register's own width; see
+    _scan_port_bit_ref's own docstring) and confirmed real RTL fact (rtl/scan_mux_cell.v's own
+    `assign so = matched_old_c ? relay_so_c : shift_ff[0];` uses bit 0, not the MSB). An
+    earlier version of this function widened SO to match SELREG's own width instead -- that
+    satisfied the vendored icl_parser's own permissive port_size==source_size check but wasn't
+    standard ICL, caught by a real upstream maintainer's review, not by that checker."""
     block = render_scan_mux_module(_mux(select_width=3))
-    assert "ScanOutPort SO[2:0] { Source SELREG[2:0]; }" in block
-    assert "ScanOutPort SO {" not in block  # must NOT be left unbracketed at width>1
+    assert "ScanOutPort SO { Source SELREG[0]; }" in block
+    assert "ScanOutPort SO[" not in block  # must never be bracketed, at any select_width
 
 
 def test_scan_out_port_unbracketed_at_select_width_one():

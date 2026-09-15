@@ -53,7 +53,22 @@ register), which the tool's own hand-written test fixtures never exercise (they 
 a single explicit bit, e.g. ``ScanInSource TDI[0];``). Fixed in
 ``get_element_driver``/``get_scanin_named_index`` to resolve a scan port's driver at its own
 natural width and treat a whole-port ``ScanInSource`` reference's bit 0 as the register's MSB
-entry point. A separate, independent performance bug in the same construction path --
+entry point.
+
+**A real, important correction to the paragraph above, found via a real upstream maintainer's
+own review** (``Honza255/icl_parser`` PR #1): the crash's actual trigger was narrower than
+first diagnosed. Confirmed directly (checked out the vendored tool's own pre-fix commit and
+tested both shapes against it): a width>1 *register* alone never crashes the retargeting-graph
+build, as long as the ``ScanOutPort``/``ScanInPort`` touching it stays scalar (1 bit), which
+is what every real ICL fixture in the tool's own corpus already does -- only warptap's own
+*emitter*, at the time, additionally widened those scan ports to match the register's own
+width (``icl_emit.py``'s own module docstring covers the fix), which is what actually
+triggered the crash. So this fix's own value is now genuinely in question: it may never be
+needed for any ICL this project emits going forward, now that :func:`~warptap.icl_emit.
+render_instrument_module` no longer produces the non-standard shape that required it. Left
+here, not rewritten, as an honest record of the original (over-broad) diagnosis -- see the
+vendored fork's own PR #1 thread for how this played out with its maintainer. A separate,
+independent performance bug in the same construction path --
 ``icl_process.py`` computing ``inspect.stack()[0][3]`` (a full stack capture with per-frame
 source-file resolution) purely to log each parse handler's own already-known name -- made any
 network large enough to be interesting impractically slow; replaced with the equivalent but

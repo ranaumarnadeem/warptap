@@ -75,6 +75,24 @@ entry per implementation stage.
   retargeting-*semantics* correctness (confirmed separately that the vendored parser's own
   retargeting engine doesn't support the register kind a WRITE instrument uses, so it can't
   serve as an oracle for that either).
+- **Fixed: width>1 instrument/ScanMux emission used a non-standard scan-port convention.**
+  `render_instrument_module()` (since Stage 10) and `render_scan_mux_module()` (this session's
+  own ScanMux work) both widened their own `ScanInPort`/`ScanOutPort`/`ScanInSource` to match
+  their underlying register's width. Confirmed real (checked every `ScanRegister`-sourced
+  `ScanOutPort`/`ScanInSource` in the vendored `icl_parser`'s own fixture corpus, 5-for-5 plus
+  all 29 `ScanInSource` clauses, zero exceptions — including a 32-bit `IDCODE` register fed by
+  a 1-bit source): real ICL keeps these ports scalar always, letting the register's own
+  internal shift chain move other bits into position — a real upstream maintainer's own PR
+  review caught this, not this project's own live-validation (the vendored checker's own
+  `port_size == source_size` assertion is too permissive to catch it). Fixed to source exactly
+  one bit each, confirmed against each construct's own real RTL wiring rather than assumed by
+  convention (the instrument case sources the MSB, matching `sib_insert.py`'s own last-chained-
+  cell; the ScanMux case sources bit 0, matching `scan_mux_cell.v`'s own `shift_ff[0]` — two
+  different real answers, not one rule). `CaptureSource`/`WriteDataSource`/`DataOutPort`
+  (parallel, functional-level connections, not the bit-serial scan path) were already correct
+  and are unaffected. This also resolved the retargeting-graph crash a since-questioned
+  upstream PR had been working around — confirmed the crash never happens for genuinely
+  standard-shaped ICL, only for the non-standard wide-port shape this fix removes.
 
 ### Explicitly out of scope
 
