@@ -36,12 +36,14 @@ from __future__ import annotations
 import tempfile
 from pathlib import Path
 
-from warptap.icl_emit import to_icl
+from warptap.icl_emit import render_one_hot_data_group_module, to_icl
 from warptap.icl_model import (
     Alias,
     InstrumentDirection,
     InstrumentNode,
     ModuleInstance,
+    OneHotDataGroup,
+    OneHotDataRegister,
     PhysicalGraph,
     ScanArm,
     ScanMuxNode,
@@ -259,6 +261,78 @@ def test_scan_mux_gated_by_hierarchy_sib_is_structurally_valid_and_retargets_ful
         path = _write_icl(icl_text, Path(tmpdir))
         ij = icl_parser_module("chip", [str(path)])  # must NOT raise at all
     assert ij is not None
+
+
+def _one_hot_reg(name, address, width=8, reset_value=None, writable=False, readable=False):
+    return OneHotDataRegister(
+        name=name,
+        address=address,
+        width=width,
+        reset_value=reset_value,
+        write_signal_bits=tuple(SignalBinding(f"{name}_in", i) for i in range(width)) if writable else (),
+        read_signal_bits=tuple(SignalBinding(f"{name}_out", i) for i in range(width)) if readable else (),
+    )
+
+
+def _assert_one_hot_group_valid(group: OneHotDataGroup, icl_parser_module) -> None:
+    """OneHotDataGroup is scan-free by construction (Phase 0 finding #6: no ScanInPort/
+    ScanOutPort at all), so build_register_model=True -- icl_parser_module's own default --
+    crashes unconditionally (Phase 0 sub-step 0's own confirmed finding, AssertionError from
+    icl_retargeting.py's own _add_one_hot_and_ir_chain: `len(self.one_hot_scan_interfaces) >
+    0`). build_register_model=False is therefore required here, not just a performance choice
+    the way it is for import_icl."""
+    icl_text = render_one_hot_data_group_module(group)
+    module_name = f"warptap_one_hot_group_{group.name}"
+    with tempfile.TemporaryDirectory(prefix="warptap-icl-parser-") as tmpdir:
+        path = _write_icl(icl_text, Path(tmpdir))
+        ij = icl_parser_module(module_name, [str(path)], build_register_model=False)
+    assert ij is not None
+
+
+def test_one_hot_data_group_write_only_is_structurally_valid(icl_parser_module):
+    group = OneHotDataGroup(
+        name="ctrl", address_width=1, data_width=8,
+        registers=(_one_hot_reg("cfg0", 0, writable=True),),
+        writable=True, readable=False,
+    )
+    _assert_one_hot_group_valid(group, icl_parser_module)
+
+
+def test_one_hot_data_group_read_only_is_structurally_valid(icl_parser_module):
+    group = OneHotDataGroup(
+        name="stat", address_width=1, data_width=8,
+        registers=(_one_hot_reg("status0", 0, readable=True),),
+        writable=False, readable=True,
+    )
+    _assert_one_hot_group_valid(group, icl_parser_module)
+
+
+def test_one_hot_data_group_write_and_read_is_structurally_valid(icl_parser_module):
+    group = OneHotDataGroup(
+        name="regfile", address_width=1, data_width=8,
+        registers=(_one_hot_reg("cfg0", 0, writable=True, readable=True),),
+        writable=True, readable=True,
+    )
+    _assert_one_hot_group_valid(group, icl_parser_module)
+
+
+def test_one_hot_data_group_multiple_registers_at_distinct_addresses_is_structurally_valid(
+    icl_parser_module,
+):
+    """Isolates the real, distinguishing shape of this construct: several individually
+    addressed DataRegisters sharing one AddressPort/WriteEnPort/DataInPort quintet, mixed
+    widths included (Phase 0 sub-step 5: the vendored checker accepts a register narrower
+    than the shared bus)."""
+    group = OneHotDataGroup(
+        name="regfile", address_width=2, data_width=8,
+        registers=(
+            _one_hot_reg("cfg0", 0, width=8, reset_value=0xAB, writable=True, readable=True),
+            _one_hot_reg("cfg1", 1, width=8, writable=True, readable=True),
+            _one_hot_reg("status0", 2, width=4, writable=True, readable=True),
+        ),
+        writable=True, readable=True,
+    )
+    _assert_one_hot_group_valid(group, icl_parser_module)
 
 
 def test_scan_mux_arm_gating_a_nested_hierarchy_sib_is_structurally_valid_and_retargets_fully(
