@@ -22,6 +22,7 @@ from warptap.icl_model import (
 )
 from warptap.netlist import Netlist
 from warptap.pdl_interpreter import PDLInterpreter
+from warptap.pdl_verify import check_reads
 from warptap.sib_insert import insert_sib_network
 from warptap.sib_model import SibNetworkRegister
 from warptap.sim_io import run_verilog_testbench
@@ -166,17 +167,20 @@ def test_written_value_survives_switching_away_and_back_on_real_rtl(
     on real hardware, not just the Python oracle (already covered by Phase 3's sib_model
     tests and Phase 4's PDLInterpreter tests, neither of which touches real RTL).
 
-    **Caveat, found during the retargeting shift-length optimization plan, NOT fixed by it**:
-    this test only ever asserted rtl_observed == python_observed (RTL agrees with the Python
-    model) -- it never checked the observed value against what was actually written. Adding a
-    real pdl_verify.check_reads() call here (confirmed both on this real RTL fixture and in
-    the Python model alone) finds arm1's own value does NOT actually round-trip correctly
-    through a mux arm's own self-capture, even in this exact "safe" pattern -- a real,
-    separate, pre-existing bug in sib_model.py's ScanMuxNode-arm handling, confirmed to predate
-    and be unrelated to this plan (reproduced identically against the pre-fix retargeting
-    code). Deliberately NOT asserted here -- see the plain-SIB case in
-    test_sib_insert_write_instrument_cross_sim.py, which IS proven correct via check_reads(),
-    for contrast. Flagged separately for its own investigation."""
+    **A real, separate bug found via this exact scenario during the retargeting shift-length
+    optimization plan, now fixed by the mux-arm-readback bug fix plan**: this test used to only
+    assert `rtl_observed == python_observed` (RTL agrees with the Python model) -- it never
+    checked the observed value against what was actually written. Adding a real
+    `pdl_verify.check_reads()` call here used to fail (confirmed both on this real RTL fixture
+    and in the Python model alone): `PDLInterpreter._target_layout`'s own comparison-value
+    construction assumed a matched `ScanMuxNode` arm's content sits wherever a uniform
+    position-order-then-reversed layout would place it -- wrong, confirmed against real RTL
+    (`tests/test_scan_mux_write_arm_readback_cross_sim.py`): the matched arm's own content
+    surfaces on the round's own *first* `width` chronological cycles, MSB-first, since
+    `rtl/scan_mux_cell.v`'s own `so` is a combinational passthrough of the matched arm's `so`
+    for as long as it stays matched -- not `sib_model.py`, which was the (wrong) initial
+    suspect. Now fixed (`_mux_arm_read_chronological_bits`); this assertion is the permanent
+    real-RTL regression test for it."""
     netlist, graph, root = _build_and_insert(fixtures_dir, yosys_command)
     pdl = PDLInterpreter(graph, root)
     pdl.iTarget("ctrl_write")
@@ -197,6 +201,9 @@ def test_written_value_survives_switching_away_and_back_on_real_rtl(
     )
 
     assert rtl_observed == python_observed
+    results = check_reads(ir_ops, rtl_observed)
+    assert len(results) == 1
+    assert results[0].passed
 
 
 def test_same_arm_retargeted_twice_needs_no_redundant_round_on_real_rtl(
@@ -210,11 +217,9 @@ def test_same_arm_retargeted_twice_needs_no_redundant_round_on_real_rtl(
     cleanly, matching test_pdl_interpreter_scan_mux.py's own Python-model-only confirmation of
     the same round-count reduction.
 
-    Deliberately does NOT assert check_reads() here -- see test_written_value_survives_
-    switching_away_and_back_on_real_rtl's own docstring above: a mux arm's own WRITE value
-    does not correctly round-trip through self-capture at all, a separate, pre-existing bug
-    unrelated to this plan. What this test proves is narrower and still real: the retargeting
-    orchestration itself (round count, RTL/Python-model agreement) is correct for this shape."""
+    Now also asserts check_reads() (mux-arm-readback bug fix plan) -- see test_written_value_
+    survives_switching_away_and_back_on_real_rtl's own docstring above for the real bug this
+    used to hit and how it's fixed."""
     netlist, graph, root = _build_and_insert(fixtures_dir, yosys_command)
     pdl = PDLInterpreter(graph, root)
     pdl.iTarget("ctrl_write")
@@ -236,3 +241,6 @@ def test_same_arm_retargeted_twice_needs_no_redundant_round_on_real_rtl(
         fixtures_dir, yosys_command, iverilog_command, vvp_command, netlist, ir_ops
     )
     assert rtl_observed == python_observed
+    results = check_reads(ir_ops, rtl_observed)
+    assert len(results) == 1
+    assert results[0].passed
