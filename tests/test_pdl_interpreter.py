@@ -10,7 +10,7 @@ import pytest
 from warptap.icl_model import Alias, ICLAddressError
 from warptap.pdl_interpreter import PDLError, PDLInterpreter
 from warptap.sib_layout import layout_bit_length
-from warptap.sib_plan import InstrumentSpec, build_sib_plan
+from warptap.sib_plan import HierarchySpec, InstrumentSpec, build_sib_plan
 from warptap.tap_fsm import TapState
 from warptap.tap_ir import GotoState, PulsePin, Runtest, ShiftDR, bits_from_int
 
@@ -139,6 +139,37 @@ def test_sequential_iapply_to_different_instruments_second_phase1_reflects_first
     # multi-arm ScanMux plan's Phase 2; _currently_open's own type formally generalizes in
     # that plan's Phase 4, but already receives whatever stage_open_sequence itself returns.)
     assert pdl._currently_open == {"sib_sensor_b": 1}
+
+
+def test_sequential_iapply_reuses_a_shared_open_ancestor_prefix():
+    """Retargeting shift-length optimization plan's own headline claim, at the iApply level:
+    x and y are siblings 2 levels deep under a shared A > B hierarchy -- targeting y right
+    after x must NOT re-open A and B from scratch (they're already physically open), only
+    sib_y itself. Without the fix this second call costs 3 phase-1 rounds (A, then A+B, then
+    A+B+sib_y) + 1 phase-2 = 4 ShiftDR ops, same as the first (cold-start) call; with it, just
+    1 phase-1 round (sib_y alone) + 1 phase-2 = 2, half as many."""
+    specs = [
+        HierarchySpec("A", children=[
+            HierarchySpec("B", children=[
+                InstrumentSpec("x", width=1, capture_value=0),
+                InstrumentSpec("y", width=1, capture_value=0),
+            ]),
+        ]),
+    ]
+    graph, root = build_sib_plan(specs)
+    pdl = PDLInterpreter(graph, root)
+
+    pdl.iTarget("x")
+    first_ops = pdl.iApply()
+    first_shifts = [op for op in first_ops if isinstance(op, ShiftDR)]
+    assert len(first_shifts) == 4  # cold start: 3 phase-1 rounds (A, B, sib_x) + 1 phase-2
+
+    pdl.iTarget("y")
+    second_ops = pdl.iApply()
+    second_shifts = [op for op in second_ops if isinstance(op, ShiftDR)]
+    assert len(second_shifts) == 2  # A, B already open: 1 phase-1 round (sib_y) + 1 phase-2
+
+    assert pdl._currently_open == {"sib_A": 1, "sib_B": 1, "sib_y": 1}
 
 
 def test_iwrite_payload_reaches_phase2_tdi():

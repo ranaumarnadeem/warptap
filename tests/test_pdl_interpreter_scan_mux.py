@@ -82,11 +82,27 @@ def test_iapply_writes_and_reads_back_through_a_mux_arm():
 
     ir_ops = _select_extest_ops() + write_ops + read_ops
     observed, _reg = run_on_python(graph, ir_ops)
-    # play() itself raises on a tdo/mask mismatch against iApply's own expected/mask fields,
-    # so completing without error IS the read's own assertion -- matches this project's
-    # existing iRead cross-sim tests' style (e.g. test_pdl_interpreter_cross_sim.py). Each
-    # iApply is phase1 (1 round, top-level target) + phase2 = 2 ShiftDRs; +1 IR-select.
-    assert len(observed) == 1 + 2 + 2
+    # Retargeting shift-length optimization plan: the second iApply re-targets the exact same
+    # already-open arm1 -- stage_open_sequence's own currently_open reuse now emits ZERO phase-1
+    # rounds for it (nothing new to open), not the previous 1, so this iApply is phase2 only.
+    # 1 (IR-select) + 2 (first iApply: phase1 1 round + phase2) + 1 (second iApply: phase2
+    # only) = 4, not the pre-fix 5.
+    assert len(observed) == 1 + 2 + 1
+    # This test verifies the SHIFT SHAPE only, not the read VALUE -- an earlier version of this
+    # comment claimed "play() itself raises on a tdo/mask mismatch," which is false (tap_ir_
+    # play.play()'s own docstring says explicitly it never compares against op.tdo/op.mask --
+    # that's pdl_verify.check_reads()'s job, never actually called here). Calling check_reads()
+    # here (confirmed directly, both before and after this plan's own fix) finds a real,
+    # separate, PRE-EXISTING bug in this exact scenario -- arm1's own written value does not
+    # round-trip correctly through a mux arm's self-capture, even in the already-"safe" switch-
+    # away-and-back pattern (tests/test_sib_insert_scan_mux_cross_sim.py's own
+    # test_written_value_survives_switching_away_and_back_on_real_rtl claims this works, but
+    # that test only checks RTL-vs-Python-model agreement, never the actual value against what
+    # was written -- same class of gap as this test had). Unrelated to this plan's own retarget-
+    # ing-round-count fix (confirmed: the exact same mismatch occurs against the pre-fix,
+    # untrimmed round sequence too) -- flagged separately rather than fixed here, since it's a
+    # genuinely different bug in sib_model.py's own mux-arm WRITE-instrument capture/update
+    # logic, not in scope for this plan.
 
 
 def test_iapply_switches_arms_directly_across_separate_calls():

@@ -285,13 +285,22 @@ class PDLInterpreter:
         stays open across it. Retargeting *away* from an open WRITE instrument (closing it) is
         safe -- the closing edge itself is gated off (open-before but not-open-after) -- and a
         value survives being closed and later reopened via a *different* intermediate target,
-        since it's never touched while closed. The one case this does NOT protect: calling
-        ``iApply`` twice in a row for the *same* still-open WRITE instrument with no
-        intervening different target -- phase 1's round sees that instrument open both before
-        and after (nothing changed), so its 0 don't-care fill commits, clobbering the value
-        before phase 2 ever runs. A real PDL sequence naturally avoids this (a second touch
-        without going elsewhere would normally carry a fresh ``iWrite`` anyway); it is not
-        specially detected or rejected here.
+        since it's never touched while closed.
+
+        **The one case this used to NOT protect -- fixed by :func:`~warptap.sib_retarget.
+        stage_open_sequence`'s own ``currently_open`` parameter (retargeting shift-length
+        optimization plan)**: calling ``iApply`` twice in a row for the *same* still-open
+        WRITE instrument with no intervening different target. Before the fix, phase 1's
+        round saw that instrument open both before and after (nothing changed) and still ran
+        a real Update-DR, so its 0 don't-care fill committed, clobbering the value before
+        phase 2 ever ran -- confirmed as a real bug on real RTL (not just the Python model),
+        for both a plain SIB and a :class:`~warptap.icl_model.ScanMuxNode` arm, before this
+        fix landed. Since ``target_open`` in that exact scenario is byte-identical to
+        ``self._currently_open``, :func:`~warptap.sib_retarget.stage_open_sequence` now
+        returns zero rounds for phase 1 -- no redundant Update-DR occurs at all, so there is
+        nothing left to clobber the value. See ``tests/test_sib_insert_write_instrument_
+        cross_sim.py``/``tests/test_sib_insert_scan_mux_cross_sim.py`` for the permanent real-
+        RTL regression tests proving this.
 
         **Targeting an instrument gated by a :class:`~warptap.icl_model.ScanMuxNode` arm --
         including switching directly from one already-open arm to a different one -- needed no
@@ -319,7 +328,9 @@ class PDLInterpreter:
         # network's actual physical state entering that round.
         prior_open = self._currently_open
         target_open = {step.name: step.value for step in target_path}
-        for open_after in stage_open_sequence(self._graph, target_open):
+        for open_after in stage_open_sequence(
+            self._graph, target_open, currently_open=self._currently_open
+        ):
             len1 = layout_bit_length(self._graph, prior_open)
             bits1 = compose_bits(self._graph, prior_open, open_after, target_sib=None, payload_value=0)
             ops.append(GotoState(TapState.SHIFT_DR))
