@@ -244,3 +244,41 @@ def test_same_arm_retargeted_twice_needs_no_redundant_round_on_real_rtl(
     results = check_reads(ir_ops, rtl_observed)
     assert len(results) == 1
     assert results[0].passed
+
+
+def test_same_arm_two_consecutive_read_only_touches_both_persist_on_real_rtl(
+    fixtures_dir, yosys_command, iverilog_command, vvp_command
+):
+    """Write-instrument-payload-defaulting bug fix plan, mux-arm counterpart to
+    test_sib_insert_write_instrument_cross_sim.py's own test_write_then_two_consecutive_read_
+    only_touches_both_persist_on_real_rtl: the test above only ever proves the *first*
+    read-only reapply of arm1 observes the correct value (satisfied by Capture-DR before that
+    same round's own Update-DR could clobber anything) -- a *second* consecutive read-only
+    touch is what actually exercises the bug this plan fixes, confirmed broken on this exact
+    real RTL fixture before landing the fix, now proving PDLInterpreter._committed_writes
+    composes correctly with the (already-fixed) mux-arm readback positional fix -- both bugs
+    independent but live in the same code path."""
+    netlist, graph, root = _build_and_insert(fixtures_dir, yosys_command)
+    pdl = PDLInterpreter(graph, root)
+    pdl.iTarget("ctrl_write")
+    pdl.iWrite(1)
+    first_ops = pdl.iApply()  # bypass -> arm1, write 1
+
+    pdl.iTarget("ctrl_write")
+    pdl.iRead(1)
+    second_ops = pdl.iApply()  # read-only touch #1 -- already proven correct above
+
+    pdl.iTarget("ctrl_write")
+    pdl.iRead(1)
+    third_ops = pdl.iApply()  # read-only touch #2 -- the scenario this fix targets
+
+    ir_ops = _select_extest_ops() + first_ops + second_ops + third_ops
+    python_observed, _reg = run_on_python(graph, ir_ops)
+    rtl_observed = run_on_rtl(
+        fixtures_dir, yosys_command, iverilog_command, vvp_command, netlist, ir_ops
+    )
+    assert rtl_observed == python_observed
+    results = check_reads(ir_ops, rtl_observed)
+    assert len(results) == 2
+    assert results[0].passed
+    assert results[1].passed

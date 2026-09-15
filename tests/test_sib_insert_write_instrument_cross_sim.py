@@ -215,6 +215,46 @@ def test_write_then_reapply_same_instrument_now_persists_on_real_rtl(
     assert results[0].passed
 
 
+def test_write_then_two_consecutive_read_only_touches_both_persist_on_real_rtl(
+    fixtures_dir, yosys_command, iverilog_command, vvp_command
+):
+    """Write-instrument-payload-defaulting bug fix plan: the test above only ever proved the
+    *first* read-only reapply observes the correct value -- it's satisfied by Capture-DR at
+    the very start of that same phase-2 round, before that round's own (previously 0-defaulted)
+    Update-DR could clobber anything. A *second* consecutive read-only touch (this test) is
+    what actually exercises the bug: before this fix, the first touch's own phase-2 payload
+    defaulted to 0 (no fresh iWrite queued) and committed anyway (phase 2 always re-asserts the
+    same open/matched state before and after, so it always commits), silently zeroing the value
+    out from under the second touch -- confirmed as a real bug on this exact real RTL fixture
+    before landing the fix. Now PDLInterpreter._committed_writes gives phase 2 something real
+    to fall back to instead of a bare 0, so re-asserting an unwritten value is a genuine no-op
+    commit, not a fresh clobber."""
+    netlist, graph, root = _build_and_insert(fixtures_dir, yosys_command)
+    pdl = PDLInterpreter(graph, root)
+    pdl.iTarget("ctrl_write")
+    pdl.iWrite(1)
+    first_ops = pdl.iApply()
+
+    pdl.iTarget("ctrl_write")
+    pdl.iRead(1)
+    second_ops = pdl.iApply()  # read-only touch #1 -- already proven correct above
+
+    pdl.iTarget("ctrl_write")
+    pdl.iRead(1)
+    third_ops = pdl.iApply()  # read-only touch #2 -- the scenario this fix targets
+
+    ir_ops = _select_extest_ops() + first_ops + second_ops + third_ops
+    python_observed, _reg = run_on_python(graph, ir_ops)
+    rtl_observed = run_on_rtl(
+        fixtures_dir, yosys_command, iverilog_command, vvp_command, netlist, ir_ops
+    )
+    assert rtl_observed == python_observed
+    results = check_reads(ir_ops, rtl_observed)
+    assert len(results) == 2
+    assert results[0].passed
+    assert results[1].passed
+
+
 def test_ctrl_in_old_port_bits_are_undriven_and_unread_after_detach(
     fixtures_dir, yosys_command
 ):
