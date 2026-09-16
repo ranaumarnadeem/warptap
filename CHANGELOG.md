@@ -5,6 +5,29 @@ implementation stage.
 
 ## [Unreleased]
 
+### Added
+
+- **Stage 24 — faultflow compression/compaction-aware pattern retargeting.** Closes a gap
+  `faultflow_retarget.py`'s (Stage 14) naive `chain_to_instrument` model couldn't express: a
+  faultflow design with `[compression]` and/or `[compaction]` enabled has its raw `scan_in_N`/
+  `scan_out_N` chain ports become internal wires on the composed netlist, with the real
+  external pins becoming a K-wide `tdi`/`tdo` channel bus feeding a Galois-form LFSR ring
+  generator (load side) or a registerless XOR-tree (unload side). New modules
+  `faultflow_compression.py`/`faultflow_compaction.py` add
+  `retarget_compressed_faultflow_patterns`/`retarget_compacted_faultflow_patterns`, each
+  replacing only the side its own transform actually touches (the other side still goes
+  through the existing per-chain `chain_to_instrument` mechanism unchanged). Compression's own
+  GF(2) math (`care_bit_rows`, the Gauss-Jordan `solve_xor_broadcast`, the curated LFSR
+  polynomial table) is natively ported from real faultflow source, per this project's own
+  "port understanding, not code" boundary with that project -- never imported or called.
+  `Module.rename_port` (`netlist.py`) plus a new `port_renames` parameter on
+  `insert_test_access` (`pipeline.py`) fix a real naming collision: warptap's own hardcoded
+  `tdi`/`tdo` TAP pin names would otherwise crash against a compression/compaction composed
+  netlist's own channel ports of the same name. Unit-tested (hand-derived GF(2) traces, op
+  sequence assertions) plus a skip-if-absent cross-check against faultflow's own real
+  polynomial table; a real cross-sim tier against a real `insert_compression`/
+  `insert_compaction`-produced netlist is tracked as follow-up, not yet built.
+
 ## [0.0.2] - 2026-09-16
 
 ### Added
