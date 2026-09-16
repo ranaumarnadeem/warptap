@@ -25,8 +25,16 @@ implementation stage.
   `tdi`/`tdo` TAP pin names would otherwise crash against a compression/compaction composed
   netlist's own channel ports of the same name. Unit-tested (hand-derived GF(2) traces, op
   sequence assertions) plus a skip-if-absent cross-check against faultflow's own real
-  polynomial table; a real cross-sim tier against a real `insert_compression`/
-  `insert_compaction`-produced netlist is tracked as follow-up, not yet built.
+  polynomial table, PLUS a real cross-sim tier: both retargeting functions driven through real
+  Icarus Verilog against a real `insert_compression`/`insert_compaction`-produced, warptap-SIB-
+  inserted netlist, sky130 gates and all. Caught two real gaps in the test fixtures themselves
+  (not the retargeting code) along the way: the real sky130 behavioral models need `` `define
+  FUNCTIONAL`` to bypass their own `specify`/timing-check blocks under a crude bit-banged
+  testbench (mirrors `faultflow/verify/gate.py`'s own `-DFUNCTIONAL`), and a scan chain's FF
+  needs genuine scan-enable-gated hold behavior (a plain `dfxtp` re-samples the ring
+  generator's still-evolving output on the retargeting function's own capture edge and silently
+  clobbers the just-loaded value) -- both fixed in the fixtures, zero changes needed to
+  `faultflow_compression.py`/`faultflow_compaction.py` themselves.
 
 ## [0.0.2] - 2026-09-16
 
