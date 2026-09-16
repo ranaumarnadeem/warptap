@@ -12,6 +12,7 @@ hand-building a compose_bits sequence the way tests/test_sib_model_scan_mux.py's
 from __future__ import annotations
 
 from warptap.icl_model import (
+    Alias,
     InstrumentDirection,
     InstrumentNode,
     ModuleInstance,
@@ -51,6 +52,29 @@ def _write_mux_graph_and_root() -> tuple[PhysicalGraph, ModuleInstance]:
         "mux_a", select_width=2,
         arms=(
             ScanArm(values=(1,), instrument=_instrument("arm1", 3, direction=InstrumentDirection.WRITE)),
+            ScanArm(values=(2,), instrument=_instrument("arm2", 2, direction=InstrumentDirection.WRITE)),
+        ),
+    )
+    graph = PhysicalGraph(chain=(mux,))
+    root = ModuleInstance("top", children=(ModuleInstance("arm1"), ModuleInstance("arm2")))
+    return graph, root
+
+
+def _mux_graph_with_aliased_arm_and_root() -> tuple[PhysicalGraph, ModuleInstance]:
+    """Same shape as _write_mux_graph_and_root, but arm1's own instrument declares a field
+    alias -- for the field= resolution bug fix (see
+    test_iwrite_with_field_resolves_through_a_scan_mux_arm)."""
+    mux = ScanMuxNode(
+        "mux_a", select_width=2,
+        arms=(
+            ScanArm(
+                values=(1,),
+                instrument=InstrumentNode(
+                    name="arm1", width=4, capture_value=0,
+                    direction=InstrumentDirection.WRITE,
+                    aliases=(Alias("lo", 0, 1), Alias("hi", 2, 3)),
+                ),
+            ),
             ScanArm(values=(2,), instrument=_instrument("arm2", 2, direction=InstrumentDirection.WRITE)),
         ),
     )
@@ -144,3 +168,17 @@ def test_iapply_switches_arms_directly_across_separate_calls():
     results = check_reads(ir_ops, observed)
     assert len(results) == 1
     assert results[0].passed
+
+
+def test_iwrite_with_field_resolves_through_a_scan_mux_arm():
+    """field= resolution bug fix: _resolve_field used to call the top-level-only
+    _instrument_for, which raised a bare AttributeError the instant graph.chain held a
+    ScanMuxNode anywhere at all (unconditional node.instrument access -- ScanMuxNode has no
+    such attribute), regardless of whether the mux itself gated the target. Now resolves
+    correctly via the properly recursive _find_instrument, which recurses into each arm's own
+    instrument."""
+    graph, root = _mux_graph_with_aliased_arm_and_root()
+    pdl = PDLInterpreter(graph, root)
+    pdl.iTarget("arm1")
+    pdl.iWrite(0b11, field="hi")  # bits[3:2]
+    assert pdl._pending_writes == {"arm1": 0b1100}

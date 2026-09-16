@@ -60,6 +60,31 @@ def _interpreter_with_write_aliases() -> PDLInterpreter:
     return PDLInterpreter(graph, root)
 
 
+def _interpreter_with_nested_alias() -> PDLInterpreter:
+    """Same aliased 4-bit instrument as _interpreter_with_aliases, but gated by a HierarchySpec
+    one level deep -- for the field= resolution bug fix (see
+    test_iread_with_field_resolves_through_a_nested_hierarchy): _resolve_field used to call the
+    top-level-only _instrument_for, which silently returned None for any nested instrument (a
+    hierarchy SibNode's own .instrument is legitimately None), misreporting a real field= lookup
+    as PDLError("no instrument named ... in this network") even though it genuinely exists,
+    just nested."""
+    specs = [
+        HierarchySpec(
+            "wrapper",
+            children=(
+                InstrumentSpec(
+                    "status_reg",
+                    width=4,
+                    capture_value=0,
+                    aliases=(Alias("lo", 0, 1), Alias("hi", 2, 3)),
+                ),
+            ),
+        )
+    ]
+    graph, root = build_sib_plan(specs)
+    return PDLInterpreter(graph, root)
+
+
 def test_itarget_resolves_and_scopes_iwrite():
     pdl = _interpreter()
     pdl.iTarget("sensor_a")
@@ -372,6 +397,18 @@ def test_iread_with_no_field_still_masks_the_whole_instrument():
     fed_mask_bits = bits_from_int(phase2.mask, phase2.bits)
     position_mask = list(reversed(fed_mask_bits))
     assert position_mask == [1, 1, 1, 1, 0]  # all 4 content bits masked in, select bit is not
+
+
+def test_iread_with_field_resolves_through_a_nested_hierarchy():
+    """field= resolution bug fix: _resolve_field used to call the top-level-only
+    _instrument_for, which silently returned None for a nested instrument (a hierarchy
+    SibNode's own .instrument is legitimately None), misreporting a real field= lookup as
+    PDLError("no instrument named ... in this network") even though status_reg genuinely
+    exists, just nested. Now resolves correctly via the properly recursive _find_instrument."""
+    pdl = _interpreter_with_nested_alias()
+    pdl.iTarget("status_reg")
+    pdl.iRead(0b11, field="hi")  # bits[3:2]
+    assert pdl._pending_reads == {"status_reg": (0b11, 2, 3)}
 
 
 # --- Stage 15: iRunLoop's -sck clock selector -----------------------------------------------

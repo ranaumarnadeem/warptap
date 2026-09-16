@@ -169,39 +169,21 @@ def _mux_arm_read_chronological_bits(
     return bits_to_int(tdo_bits), bits_to_int(mask_bits)
 
 
-def _instrument_for(graph: PhysicalGraph, instrument_name: str):
-    """The :class:`~warptap.icl_model.InstrumentNode` named ``instrument_name`` in ``graph``,
-    or ``None`` if absent -- ``iApply`` already discovers this indirectly via
-    ``sib_retarget.open_path_to``; this direct lookup exists for ``iWrite``/``iRead``'s own
-    named-sub-field resolution (Stage 15), which needs the instrument's declared ``aliases``
-    before ``iApply`` ever runs.
-
-    **A real, confirmed, currently-unexercised gap, not fixed here**: this only ever walks
-    ``graph.chain``'s own top level -- for a nested (``SibNode.nested``) or mux-gated
-    (:class:`~warptap.icl_model.ScanMuxNode`) instrument it silently returns ``None`` (a
-    hierarchy SIB has no ``.instrument`` of its own), and for a bare ``ScanMuxNode`` sitting
-    anywhere in ``graph.chain`` at all it raises a bare ``AttributeError`` (``ScanMuxNode`` has
-    no ``.instrument`` attribute whatsoever), not a clean error -- confirmed by direct reading,
-    not assumed. No existing test combines ``field=`` with a nested/mux-gated instrument. Left
-    alone, out of scope for the write-instrument-payload-defaulting fix this module's own
-    :func:`_find_instrument` exists for -- that one *is* properly recursive, reuse it instead
-    of extending this one, to avoid conflating two separate fixes."""
-    for node in graph.chain:
-        if node.instrument is not None and node.instrument.name == instrument_name:
-            return node.instrument
-    return None
-
-
 def _find_instrument(chain: tuple, instrument_name: str) -> Optional[InstrumentNode]:
     """The :class:`~warptap.icl_model.InstrumentNode` named ``instrument_name`` anywhere in
     ``chain``, recursing into a nested ``SibNode.nested`` sub-chain or a
-    :class:`~warptap.icl_model.ScanMuxNode`'s own arms (nested or leaf) -- unlike
-    :func:`_instrument_for` (top-level only, a real, separate, pre-existing gap documented on
-    its own docstring), this one is properly recursive, mirroring
-    :func:`~warptap.icl_emit._collect_instruments`'s own established traversal shape
+    :class:`~warptap.icl_model.ScanMuxNode`'s own arms (nested or leaf) -- properly recursive,
+    mirroring :func:`~warptap.icl_emit._collect_instruments`'s own established traversal shape
     (single-target/early-return here instead of collecting every instrument into a ``seen``
-    dict). ``iApply``'s own write-instrument-payload-defaulting fix needs a target's real
-    ``direction`` regardless of nesting depth or mux-gating."""
+    dict). Two real callers need this: ``iApply``'s own write-instrument-payload-defaulting fix
+    needs a target's real ``direction`` regardless of nesting depth or mux-gating, and
+    ``_resolve_field`` needs a target's declared ``aliases`` for ``iWrite``/``iRead``'s own
+    named-sub-field resolution (Stage 15) -- the latter used to go through a since-deleted,
+    top-level-only ``_instrument_for``, which silently returned ``None`` for a nested instrument
+    (a hierarchy SIB's own ``.instrument`` is legitimately ``None``) and raised a bare
+    ``AttributeError`` for any graph containing a ``ScanMuxNode`` at all (it unconditionally
+    accessed ``node.instrument``, which ``ScanMuxNode`` has no such attribute for) -- fixed by
+    routing both callers through this one, already-correct traversal instead."""
     for node in chain:
         if isinstance(node, ScanMuxNode):
             for arm in node.arms:
@@ -223,10 +205,13 @@ def _find_instrument(chain: tuple, instrument_name: str) -> Optional[InstrumentN
 
 def _resolve_field(graph: PhysicalGraph, instrument_name: str, field: str) -> tuple[int, int]:
     """``(low_bit, high_bit)`` for ``field`` -- a declared :class:`~warptap.icl_model.Alias`
-    name -- on ``instrument_name``'s own instrument. Raises :class:`PDLError` naming the bad
-    instrument/field rather than a bare ``KeyError``, matching this project's own "name the
-    exact bad input" convention (``ICLAddressError``, ``SibRetargetError``)."""
-    instrument = _instrument_for(graph, instrument_name)
+    name -- on ``instrument_name``'s own instrument. ``instrument_name`` is resolved via
+    :func:`_find_instrument`, so a nested (``SibNode.nested``) or
+    :class:`~warptap.icl_model.ScanMuxNode`-arm-gated instrument resolves correctly too, not
+    just a top-level one. Raises :class:`PDLError` naming the bad instrument/field rather than
+    a bare ``KeyError``, matching this project's own "name the exact bad input" convention
+    (``ICLAddressError``, ``SibRetargetError``)."""
+    instrument = _find_instrument(graph.chain, instrument_name)
     if instrument is None:
         raise PDLError(f"no instrument named {instrument_name!r} in this network")
     for alias in instrument.aliases:
