@@ -30,6 +30,7 @@ dependencies = []
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "yowasp-yosys"]
+docs = ["mkdocs>=1.6", "mkdocs-material>=9.5", "mkdocstrings[python]>=1.0"]
 
 [project.urls]
 Homepage = "https://github.com/ranaumarnadeem/warptap"

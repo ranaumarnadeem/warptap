@@ -1,0 +1,85 @@
+site_name: warptap
+site_description: >-
+  Insert IEEE 1149.1 (JTAG/TAP) and IEEE 1687 (IJTAG/ICL+PDL) test-access infrastructure
+  into RTL designs, pre-synthesis, via Yosys JSON netlist surgery.
+site_url: https://ranaumarnadeem.github.io/warptap/
+repo_url: https://github.com/ranaumarnadeem/warptap
+repo_name: ranaumarnadeem/warptap
+edit_uri: edit/main/docs/
+copyright: Copyright &copy; ranaumarnadeem
+
+theme:
+  name: material
+  icon:
+    repo: fontawesome/brands/github
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: cyan
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: cyan
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.top
+    - content.code.copy
+    - content.action.edit
+
+nav:
+  - Home: index.md
+  - Quickstart: quickstart.md
+  - Guide:
+      - Nested SIB networks: guide/nested-sib-networks.md
+      - Multi-arm ScanMux: guide/scan-mux.md
+      - Named sub-field addressing: guide/field-addressing.md
+      - ICL / PDL import: guide/icl-pdl-import.md
+      - System-clock pulsing (-sck): guide/sck-clock-pulsing.md
+      - Faultflow pattern retargeting: guide/faultflow-retargeting.md
+  - API Reference:
+      - Overview: reference/index.md
+      - Netlist & Ingest: reference/netlist.md
+      - Network Model: reference/network-model.md
+      - Insertion: reference/insertion.md
+      - PDL: reference/pdl.md
+      - ICL: reference/icl.md
+      - Pattern Export: reference/pattern-export.md
+      - Faultflow: reference/faultflow.md
+  - Changelog: changelog.md
+
+markdown_extensions:
+  - attr_list
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.highlight
+  - pymdownx.inlinehilite
+  - pymdownx.snippets:
+      base_path: ["."]
+      check_paths: true
+  - toc:
+      permalink: true
+
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          paths: [src]
+          options:
+            docstring_style: sphinx
+            show_source: false
+            show_root_heading: true
+            separate_signature: true
+            show_signature_annotations: true
+
+exclude_docs: |
+  internal/

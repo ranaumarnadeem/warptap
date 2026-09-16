@@ -5,6 +5,7 @@ __pycache__/
 *.egg-info/
 build/
 dist/
+site/
 
 # Working notes, not meant for the public repo.
 tapestry_handoff.md
