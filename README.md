@@ -1,69 +1,21 @@
 # tapestry
 
-[WIP] A python package to add JTAG, IJTAG and TAP in DFT-inserted circuitry and do ICL and
-PDL — package/CLI name is `warptap`.
+Python library to insert IEEE 1149.1 (JTAG/TAP) and IEEE 1687 (IJTAG/ICL+PDL) test access into
+RTL designs, pre-synthesis, via Yosys netlist surgery. Package/CLI name is `warptap`.
 
-## Usage
+Supports nested SIB networks, multi-arm ScanMux, named sub-field addressing, ICL/PDL
+emit+import, SVF/STAPL/STIL pattern export, and faultflow pattern retargeting.
 
-warptap is a library, not (yet) a CLI tool: `pip install warptap`, then call its functions
-from your own build/generation pipeline — there's no daemon or service, each call does one
-piece of work and returns. The core pipeline is: insert a JTAG/IJTAG test-access network into
-your design, then either drive it (`PDLInterpreter`) and emit a real ATE pattern file, or hand
-the inserted netlist on to your own normal synthesis flow.
+## Install
 
-The example below mirrors a real integration shape: a generator (e.g. an MBIST wrapper
-generator) produces RTL with real control/status ports, then warptap wraps a subset of them
-with JTAG/IJTAG access before synthesis.
-
-```python
-from warptap import (
-    InstrumentSpec, InstrumentDirection, SignalBinding,
-    insert_test_access, PDLInterpreter, to_svf,
-)
-
-# One instrument per real signal you want write/read access to -- mix WRITE (control) and
-# READ (status) freely in one network.
-specs = [
-    InstrumentSpec(
-        "self_repair_start", width=1, capture_value=0,
-        direction=InstrumentDirection.WRITE,
-        signal_bits=(SignalBinding("self_repair_start"),),
-    ),
-    InstrumentSpec(
-        "self_repair_busy", width=1, capture_value=0,
-        direction=InstrumentDirection.READ,
-        signal_bits=(SignalBinding("self_repair_busy"),),
-    ),
-]
-
-# Ingest your generated/hand-written RTL, insert the TAP + IJTAG network, get back
-# synthesizable Verilog plus everything needed to drive it. From here, feed the returned
-# Verilog into your own normal synthesis flow instead of the original sources.
-inserted_verilog, graph, root = insert_test_access(
-    ["mem_subsystem_mbist.sv"], "mem_subsystem_mbist", specs,
-)
-
-# Drive it: write self_repair_start, wait for it to settle, read self_repair_busy.
-pdl = PDLInterpreter(graph, root)
-pdl.iTarget("self_repair_start")
-pdl.iWrite(1)
-pdl.iApply()
-pdl.iRunLoop(10)
-pdl.iTarget("self_repair_busy")
-pdl.iRead(1)
-pdl.iApply()
-
-# Emit a real ATE pattern file from the same ops.
-print(to_svf(pdl.program))
+```bash
+pip install warptap
 ```
 
-`to_stapl`/`to_stil` render the identical `pdl.program` as STAPL/STIL instead; `to_icl`
-describes the inserted network's own topology as real ICL text; `retarget_faultflow_patterns`
-remaps a faultflow `--export-patterns` JSON export through the same network. Every exception
-this library raises subclasses `WarptapError`.
+Needs a real `yosys` on `PATH` (shelled out to, never bundled).
 
-Nested SIB networks, multi-arm ScanMux, named sub-field addressing, and ICL/PDL import are also
-supported — see [the docs](https://ranaumarnadeem.github.io/warptap/) for the full API.
+Docs: https://ranaumarnadeem.github.io/warptap/
+Source: https://github.com/ranaumarnadeem/warptap
 
 ## Development
 
