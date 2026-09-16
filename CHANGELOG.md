@@ -200,6 +200,26 @@ entry per implementation stage.
   netlist round-trip, and its reset is synchronous-only (unlike every prior fixture's DUT
   reset) — so the new testbench's own reset lead-in needed a real pulse row, not just a held
   level, to commit a known state before anything is sampled.
+- **Fixed: `iWrite`/`iRead`'s own `field=` (named sub-field / `Alias`) resolution crashed or
+  silently misresolved for any instrument not gated by a plain top-level `SibNode`.**
+  `_resolve_field` (`pdl_interpreter.py`) resolved `instrument_name` via `_instrument_for`, a
+  shallow, top-level-only walk of `graph.chain` that unconditionally accessed `node.instrument`
+  on every entry — a real `ScanMuxNode` has no such attribute at all, so a `field=` lookup
+  against any graph containing one anywhere raised a bare, unhelpful `AttributeError:
+  'ScanMuxNode' object has no attribute 'instrument'`, regardless of whether the mux itself
+  gated the target. For a nested (`HierarchySpec`/`SibNode.nested`) instrument, the same
+  top-level-only walk instead silently returned `None`, misreporting a real, existing
+  instrument as `PDLError("no instrument named ... in this network")`. A real, previously
+  documented gap — `_instrument_for`'s own docstring (added alongside the write-instrument-
+  payload-defaulting fix) explicitly named both failure modes and deliberately deferred fixing
+  them, pre-identifying the fix as routing through the module's own already-correct, properly
+  recursive `_find_instrument` instead (added that same session, previously used only by
+  `iApply`) rather than conflating two unrelated fixes. Confirmed no existing test combined
+  `field=` with either a mux-gated or nested instrument. Fixed exactly as pre-identified:
+  `_instrument_for` deleted outright (zero other callers), `_resolve_field` now calls
+  `_find_instrument`. New pure-Python regression tests confirm `field=` now resolves correctly
+  through both a `ScanMuxNode` arm (`tests/test_pdl_interpreter_scan_mux.py`) and a nested
+  `HierarchySpec` instrument (`tests/test_pdl_interpreter.py`).
 
 ### Explicitly out of scope
 
