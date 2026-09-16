@@ -15,11 +15,14 @@ from warptap.faultflow_retarget import FaultflowRetargetError, retarget_faultflo
 from warptap.icl_emit import IclEmitError, to_icl
 from warptap.icl_import import IclImportError, import_icl
 from warptap.icl_model import (
+    Alias,
     ICLAddressError,
     InstrumentDirection,
     InstrumentNode,
     ModuleInstance,
     PhysicalGraph,
+    ScanArm,
+    ScanMuxNode,
     SibNode,
     SignalBinding,
     resolve_dotted_address,
@@ -31,7 +34,7 @@ from warptap.pdl_interpreter import PDLError, PDLInterpreter
 from warptap.pdl_verify import PDLVerifyError, ReadCheckResult, check_reads, correlate_observed
 from warptap.pipeline import insert_test_access
 from warptap.sib_insert import SibInsertError, insert_sib_network
-from warptap.sib_plan import InstrumentSpec, build_sib_plan
+from warptap.sib_plan import HierarchySpec, InstrumentSpec, build_sib_plan
 from warptap.tap_ir import (
     GotoState,
     PulsePin,
@@ -71,14 +74,18 @@ __all__ = [
     "ingest",
     "write_verilog_from_json",
     # network model
+    "Alias",
     "InstrumentDirection",
     "InstrumentNode",
     "ModuleInstance",
     "PhysicalGraph",
+    "ScanArm",
+    "ScanMuxNode",
     "SibNode",
     "SignalBinding",
     "resolve_dotted_address",
     # insertion
+    "HierarchySpec",
     "InstrumentSpec",
     "build_sib_plan",
     "insert_bsr",

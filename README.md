@@ -62,6 +62,16 @@ describes the inserted network's own topology as real ICL text; `retarget_faultf
 remaps a faultflow `--export-patterns` JSON export through the same network. Every exception
 this library raises subclasses `WarptapError`.
 
+Beyond one flat chain of instruments: `HierarchySpec` gates a nested sub-network instead of a
+single instrument, composing with `InstrumentSpec` in the same `specs` list `build_sib_plan`
+takes, at any depth. `ScanMuxNode`/`ScanArm` model a real IEEE 1687 multi-arm mux, built
+directly as part of a `PhysicalGraph`'s own `chain` (`build_sib_plan` doesn't construct these
+yet — see `icl_model.py`). A declared `Alias` on an instrument lets `iWrite`/`iRead` address a
+named bit-range (`field="hi"`) instead of the whole register. `import_icl`/`import_pdl` read
+real `.icl`/`.pdl` text back into this library's own model — warptap's own canonical network
+shape and `to_pdl()`'s own output shape respectively, not arbitrary hand-authored files; see
+`CHANGELOG.md` for the exact boundary of each.
+
 ## Development
 
 Requires a real `yosys` on `PATH` (this project shells out to it, same as faultflow does for
