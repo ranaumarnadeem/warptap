@@ -30,6 +30,7 @@ def insert_test_access(
     *,
     yosys_command: str | None = None,
     use_sv: bool = False,
+    port_renames: dict[str, str] | None = None,
 ) -> Tuple[str, PhysicalGraph, ModuleInstance]:
     """Ingest ``sources``, build a flat SIB/instrument network from ``specs``, insert it into
     ``top_module``, and return the synthesizable inserted Verilog text plus the
@@ -41,10 +42,25 @@ def insert_test_access(
     straight into ``PDLInterpreter(graph, root)`` -- no separate bookkeeping needed to keep
     the module-instantiation tree in sync with the physical network, since both come from this
     one call.
+
+    ``port_renames`` (``{old_name: new_name}``) is applied to ``top_module`` via
+    :meth:`~warptap.netlist.Module.rename_port`, right after ingest and BEFORE
+    ``insert_sib_network`` claims its own hardcoded top-level JTAG pin names
+    (``tap_ports.TDI``/``TDO``/etc.) -- needed when the design being wrapped already has a
+    top-level port under one of those names (e.g. a faultflow compression/compaction composed
+    netlist's own ``tdi``/``tdo`` channel bus). Every ``InstrumentSpec.signal_bits`` referencing
+    a renamed port must use the NEW (post-rename) name -- this function doesn't rewrite
+    ``specs`` for the caller.
     """
     raw = ingest(sources, top_module, yosys_command=yosys_command, use_sv=use_sv)
     netlist = Netlist.from_json(raw)
+    if port_renames:
+        top_mod = netlist.module(top_module)
+        for old_name, new_name in port_renames.items():
+            top_mod.rename_port(old_name, new_name)
     graph, root = build_sib_plan(specs, top_name=top_module)
     insert_sib_network(netlist, top_module, graph, yosys_command=yosys_command)
-    inserted_verilog = write_verilog_from_json(netlist.to_json(), yosys_command=yosys_command)
+    inserted_verilog = write_verilog_from_json(
+        netlist.to_json(), yosys_command=yosys_command
+    )
     return inserted_verilog, graph, root

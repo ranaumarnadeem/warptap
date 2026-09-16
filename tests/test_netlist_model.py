@@ -175,6 +175,42 @@ def test_detach_port_does_not_disturb_other_references_to_old_bits():
     assert mod.data["cells"]["c0"]["connections"]["A"] == [5]
 
 
+def test_rename_port_moves_bits_direction_and_key():
+    mod = _module_with_bits()
+    mod.rename_port("clk", "sysclk")
+    assert "clk" not in mod.data["ports"]
+    assert mod.data["ports"]["sysclk"] == {"direction": "input", "bits": [2]}
+
+
+def test_rename_port_does_not_reallocate_bits():
+    """Unlike detach_port, a rename must leave every internal driver/reader of the port's
+    bits completely untouched -- only the ports dict's own key changes."""
+    mod = _module_with_bits(extra_connection_bits=[5])  # c0.A references y's bit
+    mod.rename_port("y", "tdo")
+    assert mod.data["ports"]["tdo"]["bits"] == [5]
+    assert mod.data["cells"]["c0"]["connections"]["A"] == [5]
+
+
+def test_rename_port_resyncs_an_existing_same_named_netname():
+    mod = _module_with_bits()
+    mod.data["netnames"]["y"] = {"hide_name": 0, "bits": [5], "attributes": {}}
+    mod.rename_port("y", "tdo")
+    assert "y" not in mod.data["netnames"]
+    assert mod.data["netnames"]["tdo"]["bits"] == [5]
+
+
+def test_rename_port_missing_old_name_raises():
+    mod = _module_with_bits()
+    with pytest.raises(ValueError, match="does not exist"):
+        mod.rename_port("nope", "tdo")
+
+
+def test_rename_port_colliding_new_name_raises():
+    mod = _module_with_bits()
+    with pytest.raises(ValueError, match="already exists"):
+        mod.rename_port("clk", "y")
+
+
 def test_set_module_attribute():
     mod = _module_with_bits()
     mod.set_module_attribute("keep_hierarchy")

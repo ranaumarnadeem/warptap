@@ -96,7 +96,9 @@ class Module:
         or constant strings."""
         cells = self.data.setdefault("cells", {})
         if cell_name in cells:
-            raise ValueError(f"cell {cell_name!r} already exists in module {self.name!r}")
+            raise ValueError(
+                f"cell {cell_name!r} already exists in module {self.name!r}"
+            )
         cell: dict[str, Any] = {
             "hide_name": 0,
             "type": cell_type,
@@ -112,7 +114,9 @@ class Module:
         """(Re)wire one port of an existing cell to the given bit-vector."""
         self.data["cells"][cell_name]["connections"][port] = list(bits)
 
-    def set_keep(self, *, wire_name: str | None = None, cell_name: str | None = None) -> None:
+    def set_keep(
+        self, *, wire_name: str | None = None, cell_name: str | None = None
+    ) -> None:
         """Tag a wire (by netname) or cell with Yosys's ``keep`` attribute (plan
         §4.3) — the documented idiom for a checkpoint that survives ABC technology
         mapping. Exactly one of ``wire_name``/``cell_name`` should be given."""
@@ -183,6 +187,32 @@ class Module:
             netnames[name]["bits"] = new_bits
         return old_bits
 
+    def rename_port(self, old: str, new: str) -> None:
+        """Rename an existing top-level port from ``old`` to ``new`` in place -- the bits,
+        direction, and every internal driver/reader of them are completely unaffected (unlike
+        ``detach_port``, this never reallocates bits); only the ``ports`` dict's own key
+        changes. Needed before ``add_port`` would otherwise collide: ``add_port`` raises
+        ``ValueError`` on a name already present, with no rename path of its own -- e.g. a
+        faultflow compression/compaction composed netlist's own ``tdi``/``tdo`` channel bus
+        colliding with warptap's own hardcoded TAP pin names (``sib_insert.py``'s ``TDI``/
+        ``TDO`` constants).
+
+        Raises ``ValueError`` if ``old`` doesn't exist or ``new`` already does (mirrors
+        ``add_port``'s own collision check, in both directions). Also renames a same-named
+        ``netnames`` entry, if one exists, to keep it in sync with the port's own key -- the
+        same "port and its netname must agree" reasoning ``detach_port``'s own docstring
+        already gives for its ``f"{name}_pre_bsr"``/original-name handling, applied here to a
+        plain rename instead of a bit reallocation."""
+        ports = self.data.setdefault("ports", {})
+        if old not in ports:
+            raise ValueError(f"port {old!r} does not exist on module {self.name!r}")
+        if new in ports:
+            raise ValueError(f"port {new!r} already exists on module {self.name!r}")
+        ports[new] = ports.pop(old)
+        netnames = self.data.get("netnames", {})
+        if old in netnames:
+            netnames[new] = netnames.pop(old)
+
     def set_module_attribute(self, key: str, value: Any = 1) -> None:
         """Tag this module's own top-level ``attributes`` dict (distinct from
         ``set_keep``'s wire/cell targets) — used for ``keep``/``keep_hierarchy`` on
@@ -197,7 +227,8 @@ class Netlist:
     def __init__(self, data: dict[str, Any]):
         self.data = data
         self._modules: dict[str, Module] = {
-            name: Module(name, mod_data) for name, mod_data in data.get("modules", {}).items()
+            name: Module(name, mod_data)
+            for name, mod_data in data.get("modules", {}).items()
         }
 
     @classmethod
