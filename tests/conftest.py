@@ -98,7 +98,32 @@ def openmbist_dir() -> Path:
     "optional external dependency" discipline."""
     candidate = _default_openmbist_dir()
     if not candidate.is_dir():
-        pytest.skip(f"openMBIST checkout not found at {candidate} (set WARPTAP_OPENMBIST_DIR)")
+        pytest.skip(
+            f"openMBIST checkout not found at {candidate} (set WARPTAP_OPENMBIST_DIR)"
+        )
+    return candidate
+
+
+def _default_faultflow_dir() -> Path:
+    if os.environ.get("WARPTAP_FAULTFLOW_DIR"):
+        return Path(os.environ["WARPTAP_FAULTFLOW_DIR"])
+    # Same sibling-checkout convention as openMBIST/verilog-uart: faultflow is never vendored
+    # into tapestry, only read live at test time (this session's own established "port
+    # understanding, not code" boundary -- see faultflow_compression.py's module docstring).
+    return Path(__file__).resolve().parents[2] / "faultflow"
+
+
+@pytest.fixture(scope="session")
+def faultflow_dir() -> Path:
+    """The real faultflow checkout this project cross-checks its own ported
+    compression/compaction GF(2) math and RTL-timing assumptions against -- a sibling project,
+    never vendored, mirroring openmbist_dir's own "read live from the sibling checkout at test
+    time" discipline exactly. Skips (not fails) when not found."""
+    candidate = _default_faultflow_dir()
+    if not candidate.is_dir():
+        pytest.skip(
+            f"faultflow checkout not found at {candidate} (set WARPTAP_FAULTFLOW_DIR)"
+        )
     return candidate
 
 
@@ -118,7 +143,9 @@ def verilog_uart_dir() -> Path:
     checkout at test time" discipline exactly. Skips (not fails) when not found."""
     candidate = _default_verilog_uart_dir()
     if not candidate.is_dir():
-        pytest.skip(f"verilog-uart checkout not found at {candidate} (set WARPTAP_VERILOG_UART_DIR)")
+        pytest.skip(
+            f"verilog-uart checkout not found at {candidate} (set WARPTAP_VERILOG_UART_DIR)"
+        )
     return candidate
 
 
@@ -127,7 +154,8 @@ def autombist_generator(openmbist_dir: Path):
     """``autombist.generator.generate_from_config`` imported live from the sibling openMBIST
     checkout's own ``src/`` tree (confirmed pure Python + Jinja2, no subprocess/WSL/cocotb
     needed) -- same skip-if-not-importable guard as ``openmbist_dir``, not a hard failure,
-    since a missing/incompatible sibling checkout is an environment gap, not a warptap bug."""
+    since a missing/incompatible sibling checkout is an environment gap, not a warptap bug.
+    """
     src_dir = str(openmbist_dir / "src")
     if src_dir not in sys.path:
         sys.path.insert(0, src_dir)
@@ -225,7 +253,8 @@ def pdl_parser_module(icl_parser_dir: Path):
     letting ANTLR print to stderr, matching this project's other external-tool fixtures'
     "return something a test can assert on directly" convention. Requires
     ``antlr4-python3-runtime==4.7.2`` (the same dependency ``icl_parser_module`` already needs)
-    -- skips (not fails) when the submodule isn't checked out or that package isn't importable."""
+    -- skips (not fails) when the submodule isn't checked out or that package isn't importable.
+    """
     src_dir = str(icl_parser_dir / "src" / "pdl_parser")
     if src_dir not in sys.path:
         sys.path.insert(0, src_dir)
