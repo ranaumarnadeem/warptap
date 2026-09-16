@@ -12,20 +12,24 @@ from __future__ import annotations
 from warptap.bsr_insert import BsrInsertError, insert_bsr
 from warptap.errors import WarptapError
 from warptap.faultflow_retarget import FaultflowRetargetError, retarget_faultflow_patterns
-from warptap.icl_emit import IclEmitError, to_icl
-from warptap.icl_import import IclImportError, import_icl
+from warptap.icl_emit import IclEmitError, render_one_hot_data_group_module, to_icl
+from warptap.icl_import import IclImportError, import_icl, import_one_hot_data_group
 from warptap.icl_model import (
     Alias,
     ICLAddressError,
     InstrumentDirection,
     InstrumentNode,
     ModuleInstance,
+    OneHotDataGroup,
+    OneHotDataGroupError,
+    OneHotDataRegister,
     PhysicalGraph,
     ScanArm,
     ScanMuxNode,
     SibNode,
     SignalBinding,
     resolve_dotted_address,
+    validate_one_hot_data_group,
 )
 from warptap.netlist import Netlist
 from warptap.pdl_emit import PdlEmitError, to_pdl
@@ -60,6 +64,7 @@ __all__ = [
     "IclEmitError",
     "IclImportError",
     "ICLAddressError",
+    "OneHotDataGroupError",
     "PdlEmitError",
     "PdlImportError",
     "PDLError",
@@ -101,6 +106,12 @@ __all__ = [
     # ICL
     "to_icl",
     "import_icl",
+    # OneHotDataGroup (ICL emit/import only -- never touches the scan chain)
+    "OneHotDataGroup",
+    "OneHotDataRegister",
+    "validate_one_hot_data_group",
+    "render_one_hot_data_group_module",
+    "import_one_hot_data_group",
     # tap_ir / pattern export
     "GotoState",
     "PulsePin",
