@@ -34,7 +34,14 @@ implementation stage.
   needs genuine scan-enable-gated hold behavior (a plain `dfxtp` re-samples the ring
   generator's still-evolving output on the retargeting function's own capture edge and silently
   clobbers the just-loaded value) -- both fixed in the fixtures, zero changes needed to
-  `faultflow_compression.py`/`faultflow_compaction.py` themselves.
+  `faultflow_compression.py`/`faultflow_compaction.py` themselves. A later faultflow change
+  (commit `26e1f96`, branch `compress`) closed the curated-polynomial-table drift risk directly:
+  `manifest["compression"]["polynomial"]` now serializes the campaign's real LFSR polynomial, so
+  `faultflow_compression.py`'s new `polynomial_from_manifest` reads it straight from the manifest
+  instead of guessing via the curated table, which now survives only as a fallback for a
+  manifest captured before that field existed; extended
+  `test_faultflow_compression_polynomial_table.py` covers the new path with a hand-built
+  manifest, independent of whether a faultflow checkout is present.
 
 ## [0.0.2] - 2026-09-16
 
