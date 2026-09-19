@@ -16,11 +16,18 @@ Ported, verbatim in structure, from real faultflow source (re-verified directly 
 checkout at ``C:\\Users\\Potato\\Desktop\\faultflow`` this session, not from memory):
 
 - ``PRIMITIVE_POLYNOMIALS``/``LfsrPolynomial``/``lookup_polynomial``/``_step``/``care_bit_rows``
-  -- ``faultflow/scan/ring_generator.py``. This table is NOT itself present in
-  ``manifest["compression"]`` (confirmed: that section carries ``num_channels``,
-  ``phase_shifter_taps``, but not the LFSR's own feedback taps) -- an external tool needs its
-  own copy to reconstruct ``care_bit_rows``. See this module's own "Open risk" note below on
-  the resulting drift exposure.
+  -- ``faultflow/scan/ring_generator.py``. As of faultflow commit ``26e1f96`` (branch
+  ``compress``, ``faultflow/runner/runner.py``'s ``scan_compress()``),
+  ``manifest["compression"]["polynomial"]`` now serializes the campaign's real polynomial
+  directly as ``{"width": int, "taps": [int, ...]}`` (straight from the real
+  ``CompressionMap.polynomial``, an ``LfsrPolynomial``) -- see :func:`polynomial_from_manifest`,
+  the preferred way to obtain ``poly``, for a manifest that carries this field. The curated
+  ``PRIMITIVE_POLYNOMIALS`` table and ``lookup_polynomial`` remain only as a FALLBACK, for a
+  manifest captured before this field existed (no ``"polynomial"`` key present); a dedicated
+  test (``test_faultflow_compression_polynomial_table.py``) still cross-checks that curated copy
+  against faultflow's own real table whenever a faultflow checkout is available, and separately
+  covers the manifest-driven path with a hand-built manifest so that coverage doesn't depend on
+  a checkout being present.
 - The GF(2) Gauss-Jordan solve -- ``src/core/scan/compression.cpp``'s ``solve_xor_broadcast``
   (a pure algorithm over plain ``vector<bool>`` rows, no faultflow/C++ dependency of any kind;
   confirmed reimplementable in pure Python, exactly what :func:`solve_xor_broadcast` here does).
@@ -94,10 +101,12 @@ class LfsrPolynomial:
 
 # Curated maximal-length LFSR feedback polynomials -- ported verbatim from
 # faultflow/scan/ring_generator.py::PRIMITIVE_POLYNOMIALS (decades-old, public-domain,
-# never-patented tap sets; see that module's own docstring for the literature citations). A
-# dedicated cross-check test (test_faultflow_compression_polynomial_table.py) asserts this copy
-# matches faultflow's own real table at every available width, when a faultflow checkout is
-# present -- see this module's own docstring for why the two can otherwise drift.
+# never-patented tap sets; see that module's own docstring for the literature citations). Used
+# only as a FALLBACK now, via lookup_polynomial, for a manifest captured before faultflow started
+# serializing the real polynomial into manifest["compression"]["polynomial"] -- see
+# polynomial_from_manifest and this module's own docstring. A dedicated cross-check test
+# (test_faultflow_compression_polynomial_table.py) asserts this copy matches faultflow's own real
+# table at every available width, when a faultflow checkout is present.
 PRIMITIVE_POLYNOMIALS: dict[int, LfsrPolynomial] = {
     8: LfsrPolynomial(8, frozenset({4, 5, 6})),
     16: LfsrPolynomial(16, frozenset({4, 13, 15})),
@@ -116,6 +125,22 @@ def lookup_polynomial(width: int) -> LfsrPolynomial:
             f"supported widths: {sorted(PRIMITIVE_POLYNOMIALS)}"
         )
     return PRIMITIVE_POLYNOMIALS[width]
+
+
+def polynomial_from_manifest(compression: dict) -> LfsrPolynomial:
+    """Build the campaign's real :class:`LfsrPolynomial` from ``manifest["compression"]`` --
+    the preferred way to obtain ``poly``, ahead of :func:`lookup_polynomial`. As of faultflow
+    commit ``26e1f96`` (branch ``compress``, ``faultflow/runner/runner.py``'s
+    ``scan_compress()``), ``compression["polynomial"]`` carries ``{"width": int, "taps": [int,
+    ...]}`` straight from the real ``CompressionMap.polynomial`` (see this module's own
+    docstring) -- when present, that's used directly, with no curated-table lookup or drift risk
+    of any kind. Falls back to :func:`lookup_polynomial` on ``compression["num_channels"]`` for a
+    manifest captured before faultflow started serializing this field (no ``"polynomial"`` key
+    present)."""
+    polynomial = compression.get("polynomial")
+    if polynomial is None:
+        return lookup_polynomial(compression["num_channels"])
+    return LfsrPolynomial(polynomial["width"], frozenset(polynomial["taps"]))
 
 
 def _step(rows: list[int], poly: LfsrPolynomial) -> list[int]:
@@ -262,8 +287,10 @@ def retarget_compressed_faultflow_patterns(
 
     ``poly``/``phase_shifter_taps``/``max_chain_length`` come from
     ``manifest["compression"]`` (``phase_shifter_taps`` directly; ``poly`` via this module's own
-    :func:`lookup_polynomial` applied to ``manifest["compression"]["num_channels"]`` --
-    faultflow's manifest doesn't serialize the polynomial itself, see this module's docstring).
+    :func:`polynomial_from_manifest`, which reads the real
+    ``manifest["compression"]["polynomial"]`` field faultflow now serializes -- or falls back to
+    :func:`lookup_polynomial` on ``manifest["compression"]["num_channels"]`` for a manifest
+    captured before that field existed; see this module's docstring).
     ``clock_port``/``scan_enable_port`` must match ``manifest["compression"]["clock_port"]``/
     ``["scan_enable_port"]``.
 
@@ -329,6 +356,7 @@ __all__ = [
     "LfsrPolynomial",
     "PRIMITIVE_POLYNOMIALS",
     "lookup_polynomial",
+    "polynomial_from_manifest",
     "care_bit_rows",
     "solve_xor_broadcast",
     "solve_pattern_seed",
