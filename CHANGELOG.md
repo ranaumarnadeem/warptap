@@ -35,6 +35,22 @@ implementation stage.
   generator's still-evolving output on the retargeting function's own capture edge and silently
   clobbers the just-loaded value) -- both fixed in the fixtures, zero changes needed to
   `faultflow_compression.py`/`faultflow_compaction.py` themselves.
+- **Stage 25 — `insert_test_access()` accepts `HierarchySpec`.** Its `specs` parameter was typed
+  `List[InstrumentSpec]` since the Library-quality pass (0.0.1), predating this project's own
+  nested-SIB/ScanMux work (Stage 4's `SibNode.nested`, and the mux-arm generalization that
+  followed) -- purely stale, not a deliberate restriction: the function's own body already
+  forwarded `specs` straight to `build_sib_plan()` unchanged, which has accepted a
+  `HierarchySpec` in the mix since that same nested-network work landed. Widened to a new public
+  `TestAccessSpec = Union[InstrumentSpec, HierarchySpec]` alias (re-exported from
+  `warptap/__init__.py` alongside `insert_test_access`), docstring corrected to stop calling the
+  built network "flat", and a new test
+  (`tests/test_pipeline.py::test_insert_test_access_accepts_a_hierarchy_spec`) proves the
+  *pipeline* entry point specifically -- not just `build_sib_plan`/`insert_sib_network` directly,
+  which is all the existing nested-SIB test suite had ever exercised -- correctly threads a
+  nested `HierarchySpec` end to end (structure, flat sibling addressing, and a working
+  `PDLInterpreter.iApply()` against the nested leaf). No RTL or behavioral change: this closes a
+  gap in what the convenience wrapper's own type/docs *claimed* it could do, not in what the
+  underlying insertion machinery could already do.
 
 ## [0.0.2] - 2026-09-16
 
