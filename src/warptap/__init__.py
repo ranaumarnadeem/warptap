@@ -36,7 +36,7 @@ from warptap.pdl_emit import PdlEmitError, to_pdl
 from warptap.pdl_import import PdlImportError, import_pdl
 from warptap.pdl_interpreter import PDLError, PDLInterpreter
 from warptap.pdl_verify import PDLVerifyError, ReadCheckResult, check_reads, correlate_observed
-from warptap.pipeline import insert_test_access
+from warptap.pipeline import TestAccessSpec, insert_test_access
 from warptap.sib_insert import SibInsertError, insert_sib_network
 from warptap.sib_plan import HierarchySpec, InstrumentSpec, build_sib_plan
 from warptap.tap_ir import (
@@ -96,6 +96,7 @@ __all__ = [
     "insert_bsr",
     "insert_sib_network",
     "insert_test_access",
+    "TestAccessSpec",
     # PDL
     "PDLInterpreter",
     "to_pdl",
