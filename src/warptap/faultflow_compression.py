@@ -44,21 +44,31 @@ exactly one reseed (the first of those edges) followed by ``max_chain_length - 1
 natural LFSR feedback stepping -- matching ``care_bit_rows``'s own ``state(0) == seed``
 convention precisely.
 
-**A genuine, flagged limitation of** :func:`solve_pattern_seed`: it treats EVERY specified
-position of a pattern's ``load_seqs`` as a hard constraint on the joint GF(2) solve, not just
-the subset faultflow's own ATPG-time check (``detection_pipeline.py``'s
-``_check_compression_satisfiable``, via ``faultflow/scan/care_bits.py``'s
-``extract_scan_care_bits``) proved necessary for fault detection. Confirmed directly against
-``care_bits.py``: faultflow's own extraction is a flip/re-simulate don't-care search requiring a
-live fault-detection oracle this module has no access to (and shouldn't attempt to rebuild --
-that's real ATPG machinery, out of scope for a pattern-translation layer). Solving against every
-specified position is therefore a conservative, ALWAYS-CORRECT-WHEN-IT-SUCCEEDS approach (any
-seed it finds exactly reproduces the pattern), but it can, in principle, report a pattern
-unsatisfiable that ATPG's own reduced care-bit solve would have accepted, if a don't-care
-position's arbitrary filled value happens not to lie on the same LFSR trajectory as the seed
-that satisfies the real care bits. Not resolved here -- would need either faultflow additionally
-exporting which positions were don't-care, or a live detection oracle, neither available to a
-pure pattern-translation module.
+**A limitation of** :func:`solve_pattern_seed`, **closed for a manifest that supplies**
+``load_care``: as of faultflow commit ``9b670df`` (branch ``compress``,
+``faultflow/scan/protocol.py``/``faultflow/scan/detection_pipeline.py``/
+``faultflow/scan/pattern_export.py``), an exported pattern dict may carry
+``"load_care": [[chain_id, cycle], ...] | None``. Present (a list), for a SAT-ATPG-accepted,
+compression-enabled candidate, it names exactly the ``(chain_id, cycle)`` positions
+``detection_pipeline.py``'s ``_check_compression_satisfiable`` (via
+``faultflow/scan/care_bits.py``'s ``extract_scan_care_bits``) proved necessary for the fault(s)
+that pattern detects -- every other specified ``load_seqs`` position is a genuine don't-care.
+:func:`solve_pattern_seed` takes this as its own ``load_care`` argument and, when given, builds
+the joint GF(2) system using ONLY those positions, so a don't-care position's arbitrary fill
+value can no longer cause a false "unsatisfiable" result.
+
+``load_care`` is ``null``/absent -- and :func:`solve_pattern_seed` falls back to its original,
+more conservative behavior of treating EVERY specified ``load_seqs`` position as a hard
+constraint -- for a manifest exported by an older faultflow version that predates this field, a
+random-fill pattern (not SAT-targeted, so ``extract_scan_care_bits`` never ran for it), or a
+non-compression campaign. Confirmed directly against ``care_bits.py``: faultflow's own
+extraction is a flip/re-simulate don't-care search requiring a live fault-detection oracle this
+module has no access to (and shouldn't attempt to rebuild -- that's real ATPG machinery, out of
+scope for a pattern-translation layer), so this fallback remains a conservative,
+ALWAYS-CORRECT-WHEN-IT-SUCCEEDS approach (any seed it finds exactly reproduces the pattern), but
+it can, in principle, report a pattern unsatisfiable that ATPG's own reduced care-bit solve
+would have accepted, if a don't-care position's arbitrary filled value happens not to lie on the
+same LFSR trajectory as the seed that satisfies the real care bits.
 """
 
 from __future__ import annotations
@@ -223,22 +233,31 @@ def solve_xor_broadcast(rows: List[int], rhs: List[bool], width: int) -> "int | 
 
 
 def solve_pattern_seed(
-    load_seqs: dict, rows: List[List[int]], width: int, pattern_index: int
+    load_seqs: dict,
+    rows: List[List[int]],
+    width: int,
+    pattern_index: int,
+    load_care: "set[tuple[int, int]] | None" = None,
 ) -> int:
-    """Build ONE joint GF(2) system across every chain/cycle a pattern's ``load_seqs``
-    specifies and solve once for a single ``width``-bit seed -- compression's load side is a
-    joint, all-or-nothing constraint (one shared LFSR state feeds every chain from one seed;
-    confirmed via ``detection_pipeline.py``'s own ``_check_compression_satisfiable``
-    docstring), never a per-chain-independent transform.
+    """Build ONE joint GF(2) system and solve once for a single ``width``-bit seed --
+    compression's load side is a joint, all-or-nothing constraint (one shared LFSR state feeds
+    every chain from one seed; confirmed via ``detection_pipeline.py``'s own
+    ``_check_compression_satisfiable`` docstring), never a per-chain-independent transform.
+
+    ``load_care``, when not ``None``, restricts the system to exactly the ``(chain_id, cycle)``
+    positions it names -- faultflow's own ATPG-proved care-bit subset (``ScanPattern.load_care``,
+    see this module's own docstring); every other specified ``load_seqs`` position is then a
+    genuine don't-care, left out of the solve entirely rather than treated as a hard constraint.
+    When ``None`` (a manifest exported before ``load_care`` existed, or a random-fill pattern),
+    every specified position is used, this function's original, more conservative behavior.
 
     Confirmed directly against ``faultflow/scan/care_bits.py::extract_scan_care_bits``: a
     compression-enabled campaign's ``load_seqs[chain_id]`` is indexed DIRECTLY by cycle
     (``range(max_chain_length)``, no front-padding-to-instrument-width stripping needed or
     applicable here, unlike :mod:`warptap.faultflow_retarget`'s raw-chain case) -- so
     ``rows[cycle][chain_id]`` (this module's own :func:`care_bit_rows` output) lines up 1:1 with
-    ``load_seqs[str(chain_id)][cycle]`` with no offset math. See this module's own docstring for
-    the real, flagged limitation of using every specified position as a hard constraint rather
-    than just the extracted care subset."""
+    ``load_seqs[str(chain_id)][cycle]`` with no offset math, and equally with ``load_care``'s own
+    ``(chain_id, cycle)`` pairs."""
     solver_rows: List[int] = []
     rhs: List[bool] = []
     for chain_key, bits in load_seqs.items():
@@ -250,10 +269,20 @@ def solve_pattern_seed(
                 "compression-enabled campaign"
             )
         for cycle, value in enumerate(bits):
+            if load_care is not None and (chain_id, cycle) not in load_care:
+                continue
             solver_rows.append(rows[cycle][chain_id])
             rhs.append(bool(value))
     seed = solve_xor_broadcast(solver_rows, rhs, width)
     if seed is None:
+        if load_care is not None:
+            raise FaultflowCompressionError(
+                f"pattern {pattern_index}: no {width}-bit seed jointly satisfies its "
+                "extracted load_care positions through this compression decompressor -- "
+                "faultflow's own ATPG already proved this exact care-bit subset satisfiable, "
+                "so this points at a data or polynomial/phase-shifter mismatch, not the "
+                "don't-care-position limitation"
+            )
         raise FaultflowCompressionError(
             f"pattern {pattern_index}: no {width}-bit seed jointly satisfies every "
             "specified load_seqs position through this compression decompressor -- see "
@@ -304,9 +333,17 @@ def retarget_compressed_faultflow_patterns(
         load_seqs: dict = pattern.get("load_seqs", {})
         expected_unload: dict = pattern.get("expected_unload", {})
         capture_pi_values: dict = pattern.get("capture_pi_values", {})
+        load_care_raw = pattern.get("load_care")
+        load_care = (
+            {(int(chain), int(cycle)) for chain, cycle in load_care_raw}
+            if load_care_raw is not None
+            else None
+        )
 
         if load_seqs:
-            seed = solve_pattern_seed(load_seqs, rows, poly.width, pattern_index)
+            seed = solve_pattern_seed(
+                load_seqs, rows, poly.width, pattern_index, load_care
+            )
             pdl.iTarget(compression_channel_instrument)
             pdl.iWrite(seed)
             pdl.iApply()
