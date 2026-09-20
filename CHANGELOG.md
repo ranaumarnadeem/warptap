@@ -41,7 +41,14 @@ implementation stage.
   instead of guessing via the curated table, which now survives only as a fallback for a
   manifest captured before that field existed; extended
   `test_faultflow_compression_polynomial_table.py` covers the new path with a hand-built
-  manifest, independent of whether a faultflow checkout is present.
+  manifest, independent of whether a faultflow checkout is present. A second later faultflow
+  change (commit `9b670df`, branch `compress`) closed this module's other flagged limitation:
+  an exported pattern now carries `load_care` (the exact `(chain_id, cycle)` positions ATPG
+  proved necessary for detection), so `solve_pattern_seed`'s new optional `load_care` parameter
+  solves against only those positions instead of every specified `load_seqs` position, letting a
+  genuine don't-care position's arbitrary fill value stop causing false "unsatisfiable" results;
+  falls back to the original every-position behavior when a manifest has no `load_care` (older
+  faultflow, random-fill patterns, non-compression campaigns).
 
 ## [0.0.2] - 2026-09-16
 
