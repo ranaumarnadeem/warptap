@@ -57,6 +57,9 @@ inserted_verilog, graph, root = insert_test_access(
 )
 ```
 
+The TAP's IDCODE defaults to a placeholder; pass `idcode_value=` (32 bits, bit 0 set) to use
+your own, and give [`to_bsdl`](reference/bsdl.md) the same value.
+
 ### 3. Drive it
 
 `PDLInterpreter` is a small state machine over four commands: `iTarget` selects which
