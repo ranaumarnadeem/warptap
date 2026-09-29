@@ -39,8 +39,9 @@ overridability -- instantiating it with ANY parameter override afterward fails t
 (``iverilog`` reports "parameter ... not found"), regardless of whether that parameter affects
 a port width or not. ``scan_mux_cell`` is the first template here that genuinely needs
 different parameter values per instance (every other one is either unparameterized or, like
-``tap_core``, always instantiated with its own defaults), so this gap was never exposed
-before. :func:`_import_scan_mux_template` instead calls
+``tap_core``, instantiated with its own defaults), so this gap was never exposed before.
+``tap_core`` gets the same ``chparam`` treatment when :func:`insert_sib_network` is given a
+non-default ``idcode_value`` (:func:`_import_tap_core`). :func:`_import_scan_mux_template` instead calls
 :func:`~warptap.yosys_io.ingest_with_params` per mux node, baking ``ARMS``/``SEL_WIDTH``/
 ``ARM_VALUES`` in via Yosys's own ``chparam`` (a plain-decimal value syntax, a different
 layer/format from JSON cell parameters) *before* ``hierarchy`` runs, under a module name
@@ -62,6 +63,7 @@ from pathlib import Path
 from warptap.errors import WarptapError
 from warptap.icl_model import ChainSlot, InstrumentDirection, PhysicalGraph, ScanMuxNode, SibNode
 from warptap.netlist import Bit, Module, Netlist
+from warptap.tap_model import IDCODE_VALUE, idcode_value_error
 from warptap.tap_ports import TCK, TDI, TDO, TMS, TRST_N
 from warptap.yosys_io import ingest, ingest_with_params
 
@@ -73,9 +75,10 @@ _SIB_CELL = "sib_cell"
 _INSTRUMENT_WRITE = "instrument_write"
 _SCAN_MUX_CELL = "scan_mux_cell"
 
-# Must match rtl/tap_core.v's own parameter defaults: v1 never overrides them on the
-# hierarchical instance (same reasoning as bsr_insert.py's DEFAULT_IR_WIDTH), so these are
-# the actual values in effect, not just a convenient default to relax later.
+# Must match rtl/tap_core.v's own parameter defaults: its IR width and opcodes are never
+# overridden on the hierarchical instance (same reasoning as bsr_insert.py's
+# DEFAULT_IR_WIDTH), so these are the actual values in effect. Only IDCODE_VALUE is ever
+# overridden (insert_sib_network's idcode_value).
 DEFAULT_IR_WIDTH = 4
 DEFAULT_OPCODE_EXTEST = 0b0000
 
@@ -127,6 +130,27 @@ def _import_scan_mux_template(
     mod.set_module_attribute("keep_hierarchy", 1)
     mod.set_module_attribute("keep", 1)
     return module_type
+
+
+def _import_tap_core(netlist: Netlist, *, idcode_value: int, yosys_command: str | None) -> None:
+    """Import ``rtl/tap_core.v`` with ``idcode_value`` baked into its ``IDCODE_VALUE``. The
+    default value keeps the plain :func:`_import_template` path: re-importing through
+    ``chparam`` changes Yosys's output (an added ``hdlname`` attribute, renumbered internal
+    cells) even when the value is unchanged, and default output must stay byte-identical. The
+    module keeps the name ``tap_core``; a design has exactly one."""
+    if idcode_value == IDCODE_VALUE:
+        _import_template(netlist, _TAP_CORE, yosys_command=yosys_command)
+        return
+    raw = ingest_with_params(
+        [_RTL_DIR / f"{_TAP_CORE}.v"],
+        _TAP_CORE,
+        {"IDCODE_VALUE": idcode_value},
+        yosys_command=yosys_command,
+    )
+    mod = netlist.add_module(_TAP_CORE, raw["modules"][_TAP_CORE])
+    mod.data.get("attributes", {}).pop("top", None)
+    mod.set_module_attribute("keep_hierarchy", 1)
+    mod.set_module_attribute("keep", 1)
 
 
 def _insert_leaf_instrument_bits(
@@ -519,6 +543,7 @@ def insert_sib_network(
     *,
     ir_width: int = DEFAULT_IR_WIDTH,
     opcode_extest: int = DEFAULT_OPCODE_EXTEST,
+    idcode_value: int = IDCODE_VALUE,
     yosys_command: str | None = None,
 ) -> None:
     """Insert a TAP + SIB network into ``netlist``'s ``top`` module, matching ``graph``
@@ -558,7 +583,14 @@ def insert_sib_network(
     ``ir_width``/``opcode_extest`` must match ``rtl/tap_core.v``'s actual compiled
     parameters (its own defaults, currently) since this function never overrides them on
     the instance.
+
+    ``idcode_value`` is baked into the inserted ``tap_core``'s ``IDCODE_VALUE`` (default:
+    :data:`warptap.tap_model.IDCODE_VALUE`, a placeholder). It must be a 32-bit value with bit 0
+    set, as IEEE 1149.1 requires, else :class:`SibInsertError`. Pass the same value to
+    :func:`warptap.bsdl_emit.to_bsdl` and to ``TapModel``/``TapConfig`` when modelling this TAP.
     """
+    if problem := idcode_value_error(idcode_value):
+        raise SibInsertError(problem)
     top_mod = netlist.module(top)
     # Snapshot before any detach_port() calls below -- mirrors bsr_insert.py's own
     # "read top_mod.ports() before mutating any of them" precaution. A READ instrument
@@ -567,7 +599,7 @@ def insert_sib_network(
     # (see _insert_chain).
     port_bits_by_name: dict[str, list[Bit]] = {p.name: p.bits for p in top_mod.ports()}
 
-    _import_template(netlist, _TAP_CORE, yosys_command=yosys_command)
+    _import_tap_core(netlist, idcode_value=idcode_value, yosys_command=yosys_command)
     _import_template(netlist, _BC1_SHIFT_ONLY, yosys_command=yosys_command)
     _import_template(netlist, _SIB_CELL, yosys_command=yosys_command)
     _import_template(netlist, _INSTRUMENT_WRITE, yosys_command=yosys_command)
