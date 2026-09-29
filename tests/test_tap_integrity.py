@@ -29,6 +29,7 @@ from warptap.tap_integrity import (
     check_integrity,
     select_instruction,
 )
+from warptap.tap_fsm import TapState, next_state
 from warptap.tap_ir import bits_from_int
 from warptap.tap_model import CAPTURE_IR_PATTERN, IDCODE_VALUE, OPCODE_EXTEST
 
@@ -63,15 +64,49 @@ def _sentinel(bits: int) -> list[int]:
     return bits_from_int(default_sentinel_pattern(bits), bits)
 
 
+_TAP_PATHS = [
+    "dr_paths", "ir_paths", "ir_capture_update", "select_ir_reset",
+    "idcode_hold", "bypass_hold", "ir_hold", "idcode_capture", "bypass_capture",
+]
+
+
 def test_tests_run_in_order():
     names = [t.name for t in _program().tests]
     assert names[:3] == ["reset_instruction", "instruction_register", "bypass"]
     assert names[3:15] == [f"opcode_{op:04b}" for op in range(16) if op not in (0, 1, 2, 15)]
     assert names[15:] == [
+        "idcode", *_TAP_PATHS, "network_closed",
+        "open_sib_ctrl", "open_sib_status", "open_sib_stub", "open_all",
+        "sample_preload", "network_hold",
+        "write_readback_ctrl", "tms_reset",
+    ]
+
+
+def test_tap_paths_and_network_hold_can_be_left_out():
+    names = [t.name for t in _program(tap_paths=False, network_hold=False).tests]
+    assert names[15:] == [
         "idcode", "network_closed",
         "open_sib_ctrl", "open_sib_status", "open_sib_stub", "open_all",
         "write_readback_ctrl", "tms_reset",
     ]
+
+
+def test_every_tap_state_transition_is_taken():
+    """All 16 states, each left with TMS=0 and with TMS=1."""
+    state, taken = TapState.TEST_LOGIC_RESET, set()
+    for c in _program().cycles:
+        if not c.trst_n:
+            state = TapState.TEST_LOGIC_RESET
+            continue
+        taken.add((state, c.tms))
+        state = next_state(state, c.tms)
+    assert taken == {(s, tms) for s in TapState for tms in (0, 1)}
+
+
+def test_without_idcode_the_tap_paths_use_bypass():
+    names = [t.name for t in _program(tap=TapConfig(has_idcode=False)).tests]
+    assert {"dr_paths", "bypass_hold", "ir_hold", "bypass_capture"} <= set(names)
+    assert not {"idcode_hold", "idcode_capture"} & set(names)
 
 
 def test_program_starts_with_trst_and_resets_by_tms_at_the_end():
@@ -124,11 +159,16 @@ def test_opcodes_follow_the_ir_width():
 
 def test_a_live_instrument_is_masked_where_it_reaches_tdo():
     """status's captured bit reaches TDO only through its open SIB: its own probe and
-    open_all's, and the close-all scans right after them (opening the next target)."""
+    open_all's, the close-all scans right after them (opening the next target), and
+    network_hold's capture, which closes every SIB after it."""
     program = _program()
     probe = [c for c in program.cycles if c.test == "open_sib_status" and c.shift]
     assert sum(not c.care for c in probe) == 1
     masked_tests = {c.test for c in program.cycles if c.shift and not c.care}
+    assert masked_tests == {"open_sib_status", "open_sib_stub", "open_all", "network_hold"}
+    masked_tests = {
+        c.test for c in _program(network_hold=False).cycles if c.shift and not c.care
+    }
     assert masked_tests == {
         "open_sib_status", "open_sib_stub", "open_all", "write_readback_ctrl"
     }
@@ -172,6 +212,57 @@ def test_write_readback_reads_each_value_back():
     assert [bin(op.mask).count("1") for op in reads] == [2, 2, 2]
     values = [masked(op) for op in reads]
     assert sorted(values[:2]) == [[0, 1], [1, 0]] and values[2] == [0, 0]
+
+
+def _alternating(width: int) -> list[int]:
+    return [1 - k % 2 for k in range(width)]  # 1, 0, 1, 0, ...: bit 0 set
+
+
+def test_registers_are_held_in_pause_at_0_and_at_1():
+    """Each hold test's register comes out of Pause with what it went in with: an
+    alternating pattern P, then ~P, each pushed out by the next (after the IR's own
+    capture pattern, which the instruction load shifts out first)."""
+    program = _program()
+    capture_ir = bits_from_int(CAPTURE_IR_PATTERN, 4)
+    p32 = _alternating(32)
+    bits = _shifted(program, "idcode_hold")
+    assert bits == capture_ir + bits_from_int(IDCODE_VALUE, 32) + p32 + [
+        1 - b for b in p32
+    ] + _sentinel(32 + MARGIN)[:MARGIN]
+    # BYPASS: captured 0, then the 1 fed before the first pause, the 0 before the second.
+    assert _shifted(program, "bypass_hold") == capture_ir + [0, 1, 0, 0, 1]
+    p4 = _alternating(4)
+    assert _shifted(program, "ir_hold") == capture_ir + p4 + [1 - b for b in p4] + [1] * MARGIN
+
+
+def test_captures_overwrite_a_register_holding_the_complement():
+    program = _program()
+    idcode = bits_from_int(IDCODE_VALUE, 32)
+    bits = _shifted(program, "idcode_capture")[4:]  # after the IR load
+    # The first scan feeds ~IDCODE; the second captures IDCODE over it.
+    assert bits == idcode + idcode + _sentinel(32 + MARGIN)[:MARGIN]
+    bits = _shifted(program, "bypass_capture")[4:]
+    assert bits == [0, 1] + [0] + _sentinel(1 + MARGIN)[:MARGIN]
+
+
+def test_sample_preload_shows_the_network_tail_without_moving_it():
+    """open_all left the last SIB (stub's) open, so its bit, 1, is on TDO for the whole
+    scan; the network isn't selected, so network_hold then captures it unchanged."""
+    program = _program()
+    bits = _shifted(program, "sample_preload")[4:]
+    assert bits == [1] * (3 + MARGIN)
+
+
+def test_network_hold_pauses_the_whole_open_network():
+    """Captured content, then P, then ~P, one full network length each. (write_readback
+    builds after it only because its reads, checked against the model, find every SIB
+    closed.)"""
+    program = _program()
+    bits = _shifted(program, "network_hold")[4:]
+    length = len(bits) // 3
+    assert length == 3 + 2 + 1 + 3  # every SIB bit, ctrl, status, stub
+    p = _alternating(length)
+    assert bits[length:] == p + [1 - b for b in p]
 
 
 def test_program_is_deterministic_and_round_trips_through_json():

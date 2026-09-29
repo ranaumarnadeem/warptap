@@ -149,7 +149,9 @@ def test_a_program_for_another_network_fails_in_the_network_tests(
     )
 
     assert not result.passed
-    network_tests = ("network_closed", "open_", "write_readback_")
+    network_tests = (
+        "network_closed", "open_", "sample_preload", "network_hold", "write_readback_"
+    )
     assert all(f.test.startswith(network_tests) for f in result.failures)
 
 

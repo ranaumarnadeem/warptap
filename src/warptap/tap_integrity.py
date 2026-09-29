@@ -12,28 +12,51 @@ here runs, in order:
 3. ``bypass``: BYPASS's captured 0 and one-bit delay;
 4. ``opcode_<bits>``: every unimplemented opcode behaving as BYPASS (``exhaustive_opcodes``);
 5. ``idcode``: an explicit IDCODE load (with IDCODE);
-6. ``network_closed``: EXTEST with every SIB closed -- the network's length and continuity,
+6. the TAP's own state machine and registers (``tap_paths``), each a raw TCK sequence:
+   ``dr_paths`` (Run-Test/Idle held, a DR scan paused mid-register and resumed, Exit2-DR ->
+   Update-DR, Update-DR -> Select-DR, Capture-DR -> Exit1-DR without a shift, then the
+   register read whole again), ``ir_paths`` (the same for the IR, then Update-IR ->
+   Select-DR), ``ir_capture_update`` (Capture-IR -> Exit1-IR -> Update-IR loads the capture
+   pattern), ``select_ir_reset`` (Select-IR-Scan -> Test-Logic-Reset, held);
+   ``idcode_hold``/``bypass_hold``/``ir_hold`` (each register held in Pause-DR/Pause-IR at
+   0 and at 1 in every bit); ``idcode_capture``/``bypass_capture`` (each register captured
+   while it holds the complement of its capture value). With the rest of the program, every
+   one of the 32 TAP state transitions is taken;
+7. ``network_closed``: EXTEST with every SIB closed -- the network's length and continuity,
    by an over-shift probe (:mod:`warptap.sib_overshift`);
-7. ``open_<slot>``: each SIB, and each ScanMux arm, opened alone from an all-closed network
+8. ``open_<slot>``: each SIB, and each ScanMux arm, opened alone from an all-closed network
    and probed the same way; then ``open_all``, every SIB outside a mux at once;
-8. ``write_readback_<instrument>``: each WRITE instrument written with an alternating
-   pattern P and read back (Capture-DR captures what it last committed), then ~P, then 0
-   (``write_readback``);
-9. ``tms_reset``: five TMS=1 cycles (no TRST), then the reset instruction's scan again --
-   IEEE 1149.1's Test-Logic-Reset reload.
+9. the network holding still (``network_hold``): ``sample_preload`` (SAMPLE/PRELOAD puts the
+   network's tail on TDO for the whole scan without selecting the network), then
+   ``network_hold`` (one EXTEST scan through the network as the probes left it, paused
+   holding an alternating pattern and then its complement, which ends by closing every
+   SIB);
+10. ``write_readback_<instrument>``: each WRITE instrument written with an alternating
+    pattern P and read back (Capture-DR captures what it last committed), then ~P, then 0
+    (``write_readback``);
+11. ``tms_reset``: five TMS=1 cycles (no TRST), then the reset instruction's scan again --
+    IEEE 1149.1's Test-Logic-Reset reload.
 
 Every probe starts from an all-closed network: :func:`~warptap.sib_retarget.
 stage_open_sequence` leaves an already-open SIB it isn't asked about open, so each probe is
 preceded by one scan that closes whatever the last one opened.
 
 The expected TDO comes from :class:`~warptap.tap_model.TapModel` with
-:class:`~warptap.sib_model.SibNetworkRegister` registered under EXTEST, stepped through every
-TCK cycle. A READ instrument bound to a design signal (a *live* one) captures a value the
-model can't know, so two models run in lockstep, their live instruments capturing all 0s and
-all 1s; a TDO bit on which they disagree carries a live value and is don't-care
-(``care=False``). A probe's fed bits fully replace the chain's content, so a captured value
-reaches TDO but never a SIB's state, and the two models only ever disagree bit-for-bit.
-``live_values`` pins a live instrument to a known value instead.
+:class:`~warptap.sib_model.SibNetworkRegister` registered under EXTEST, and under
+SAMPLE/PRELOAD the network's tail (:meth:`~warptap.sib_model.SibNetworkRegister.tail`),
+stepped through every TCK cycle. A READ instrument bound to a design signal (a *live* one)
+captures a value the model can't know, so two models run in lockstep, their live instruments
+capturing all 0s and all 1s; a TDO bit on which they disagree carries a live value and is
+don't-care (``care=False``). A probe's fed bits fully replace the chain's content, so a
+captured value reaches TDO but never a SIB's state, and the two models only ever disagree
+bit-for-bit. ``live_values`` pins a live instrument to a known value instead.
+
+What the program can't see: whatever a TAP register does while another instruction is
+selected (every DR read starts with a capture), decodes of the opcodes Update-IR never
+latches (it normalizes every unimplemented one to BYPASS), TDO outside the shift states, and
+mostly a SIB's capture (it recaptures the state it last committed, which its shift bit
+normally already holds). A fault simulator grading the program finds those faults
+undetected.
 
 A consumer plays :attr:`IntegrityProgram.cycles` one TCK period each: TMS, TDI and TRST_N
 applied for the period, TDO sampled before its rising edge on a ``shift`` cycle, and passes
@@ -84,6 +107,48 @@ TRST_LEAD_IN: tuple[tuple[int, int, int], ...] = ((0, 0, 0), (0, 0, 0), (0, 0, 1
 TMS_RESET_LEAD_IN: tuple[tuple[int, int, int], ...] = ((1, 0, 1),) * 5 + ((0, 0, 1),)
 
 _IrOp = Union[GotoState, ShiftIR, ShiftDR, Runtest]
+
+# Raw (tms, tdi) cycles for the paths tap_ir_play doesn't navigate (Pause, Exit2, ...).
+_TO_SHIFT_DR = ((1, 0), (0, 0), (0, 0))  # Run-Test/Idle -> Select-DR -> Capture-DR -> Shift-DR
+_TO_SHIFT_IR = ((1, 0), (1, 0), (0, 0), (0, 0))  # ... -> Select-IR -> Capture-IR -> Shift-IR
+_EXIT1_TO_IDLE = ((1, 0), (0, 0))  # Exit1 -> Update -> Run-Test/Idle
+# Exit1 -> Pause, held two more cycles -> Exit2 -> Shift again (DR or IR alike).
+_PAUSE_AND_RESUME = ((0, 0), (0, 0), (0, 0), (1, 0), (0, 0))
+
+
+def _raw(pairs: Iterable[tuple[int, int]]) -> tuple[tuple[int, int, int], ...]:
+    return tuple((tms, tdi, 1) for tms, tdi in pairs)
+
+
+def _shift_cycles(bits: Sequence[int]) -> list[tuple[int, int]]:
+    """Shift-IR/Shift-DR cycles feeding ``bits``, the last one exiting to Exit1."""
+    return [(int(k == len(bits) - 1), bit) for k, bit in enumerate(bits)]
+
+
+def _ir_load(opcode: int, ir_width: int) -> list[tuple[int, int]]:
+    return [*_TO_SHIFT_IR, *_shift_cycles(bits_from_int(opcode, ir_width)), *_EXIT1_TO_IDLE]
+
+
+def _dr_scan_cycles(bits: int, tdi: int) -> list[tuple[int, int]]:
+    return [*_TO_SHIFT_DR, *_shift_cycles(bits_from_int(tdi, bits)), *_EXIT1_TO_IDLE]
+
+
+class _NetworkTail:
+    """SAMPLE/PRELOAD's data register in a SIB design: tap_core puts the network's tail on
+    TDO, and the network, not selected, neither shifts nor updates; only its instrument
+    leaves capture (:meth:`~warptap.sib_model.SibNetworkRegister.capture_unselected`)."""
+
+    def __init__(self, network: SibNetworkRegister) -> None:
+        self._network = network
+
+    def capture(self) -> None:
+        self._network.capture_unselected()
+
+    def shift(self, tdi: int) -> int:
+        return self._network.tail()
+
+    def update(self) -> None:
+        pass
 
 
 class TapIntegrityError(WarptapError):
@@ -244,6 +309,8 @@ def build_integrity_program(
     margin: int = 8,
     exhaustive_opcodes: bool = True,
     write_readback: bool = True,
+    tap_paths: bool = True,
+    network_hold: bool = True,
 ) -> IntegrityProgram:
     """The integrity program for ``graph`` (and ``root``, its dotted-address tree, for the
     write/readback tests) behind a TAP configured as ``tap``.
@@ -252,7 +319,8 @@ def build_integrity_program(
     every READ instrument bound to a design signal. ``live_values`` gives the captured value
     of some of them, which makes their bits care bits. ``margin`` is the number of sentinel
     bits fed past each register's length (at least 1: a register's length shows only when a
-    fed bit comes back out)."""
+    fed bit comes back out). ``exhaustive_opcodes``, ``write_readback``, ``tap_paths`` and
+    ``network_hold`` each include a group of tests (see the module docstring)."""
     if margin < 1:
         raise TapIntegrityError(f"margin must be >= 1, got {margin}")
     validate_physical_graph(graph)
@@ -270,7 +338,15 @@ def build_integrity_program(
     low = {n: values.get(n, 0) for n in live_names}
     high = {n: values.get(n, (1 << instruments[n].width) - 1) for n in live_names}
     tests = _integrity_tests(
-        graph, root, instruments, tap, margin, exhaustive_opcodes, write_readback
+        graph,
+        root,
+        instruments,
+        tap,
+        margin,
+        exhaustive_opcodes=exhaustive_opcodes,
+        write_readback=write_readback,
+        tap_paths=tap_paths,
+        network_hold=network_hold,
     )
     cycles = _expected_cycles(
         tests,
@@ -441,14 +517,109 @@ def _dr_scan(bits: int, tdi: int) -> list[_IrOp]:
     ]
 
 
+def _tap_path_tests(tap: TapConfig, margin: int) -> list[IntegrityTest]:
+    """The TAP's state machine and its own registers, as raw TCK sequences. The reset
+    instruction's register (IDCODE, or BYPASS without one) carries the DR paths."""
+    ir_width = tap.ir_width
+    reset_opcode = OPCODE_IDCODE if tap.has_idcode else bypass_opcode(ir_width)
+    reset_bits = (32 if tap.has_idcode else 1) + margin
+    sentinel = default_sentinel_pattern(reset_bits)
+    fed = bits_from_int(sentinel, reset_bits)
+    split = max(1, reset_bits // 4)
+    tests = []
+
+    seq = _ir_load(reset_opcode, ir_width) + [(0, 0), (0, 0)]  # Run-Test/Idle held
+    seq += [*_TO_SHIFT_DR, *_shift_cycles(fed[:split]), *_PAUSE_AND_RESUME]
+    seq += _shift_cycles(fed[split:])
+    seq += [(0, 0), (1, 0), (1, 0)]  # Exit1 -> Pause -> Exit2 -> Update
+    seq += [(1, 0), (0, 0), (1, 0), (1, 0), (0, 0)]  # -> Select -> Capture -> Exit1 -> Update
+    seq += _dr_scan_cycles(reset_bits, sentinel)  # -> Idle; the register read whole again
+    tests.append(IntegrityTest("dr_paths", _raw(seq), ()))
+
+    ones = [1] * (ir_width + margin)  # BYPASS, fed through the IR's length
+    split = max(1, ir_width // 2)
+    seq = [*_TO_SHIFT_IR, *_shift_cycles(ones[:split]), *_PAUSE_AND_RESUME]
+    seq += _shift_cycles(ones[split:])
+    seq += [(0, 0), (1, 0), (1, 0)]  # Exit1-IR -> Pause-IR -> Exit2-IR -> Update-IR
+    seq += [(1, 0), (0, 0), (0, 0)]  # Update-IR -> Select-DR -> Capture-DR -> Shift-DR
+    seq += _shift_cycles(bits_from_int(default_sentinel_pattern(1 + margin), 1 + margin))
+    seq += _EXIT1_TO_IDLE
+    tests.append(IntegrityTest("ir_paths", _raw(seq), ()))
+
+    # Capture-IR -> Exit1-IR -> Update-IR: the capture pattern itself is loaded.
+    seq = [(1, 0), (1, 0), (0, 0), (1, 0), (1, 0), (0, 0)]
+    seq += _dr_scan_cycles(reset_bits, sentinel)
+    tests.append(IntegrityTest("ir_capture_update", _raw(seq), ()))
+
+    # Select-IR-Scan -> Test-Logic-Reset, held there, from BYPASS.
+    seq = _ir_load(bypass_opcode(ir_width), ir_width) + [(1, 0), (1, 0), (1, 0), (1, 0), (0, 0)]
+    seq += _dr_scan_cycles(reset_bits, sentinel)
+    tests.append(IntegrityTest("select_ir_reset", _raw(seq), ()))
+
+    # Each register held in Pause at 0 and at 1 in every bit: an alternating pattern, then
+    # its complement, each pushed out by the next.
+    if tap.has_idcode:
+        pattern = _alternating(32)
+        seq = _ir_load(OPCODE_IDCODE, ir_width) + list(_TO_SHIFT_DR)
+        seq += [*_shift_cycles(bits_from_int(pattern, 32)), *_PAUSE_AND_RESUME]
+        seq += [*_shift_cycles(bits_from_int(~pattern, 32)), *_PAUSE_AND_RESUME]
+        seq += [*_shift_cycles(bits_from_int(sentinel, reset_bits)), *_EXIT1_TO_IDLE]
+        tests.append(IntegrityTest("idcode_hold", _raw(seq), ()))
+    seq = _ir_load(bypass_opcode(ir_width), ir_width) + list(_TO_SHIFT_DR)
+    seq += [*_shift_cycles([1]), *_PAUSE_AND_RESUME, *_shift_cycles([0, 0])]
+    seq += [*_PAUSE_AND_RESUME, *_shift_cycles([1, 1]), *_EXIT1_TO_IDLE]
+    tests.append(IntegrityTest("bypass_hold", _raw(seq), ()))
+    pattern = _alternating(ir_width)
+    seq = [*_TO_SHIFT_IR, *_shift_cycles(bits_from_int(pattern, ir_width)), *_PAUSE_AND_RESUME]
+    seq += [*_shift_cycles(bits_from_int(~pattern, ir_width)), *_PAUSE_AND_RESUME]
+    seq += [*_shift_cycles(ones), *_EXIT1_TO_IDLE]
+    tests.append(IntegrityTest("ir_hold", _raw(seq), ()))
+
+    # Each register captured while it holds the complement of what it captures.
+    if tap.has_idcode:
+        seq = _ir_load(OPCODE_IDCODE, ir_width) + _dr_scan_cycles(32, ~tap.idcode_value)
+        seq += _dr_scan_cycles(reset_bits, sentinel)
+        tests.append(IntegrityTest("idcode_capture", _raw(seq), ()))
+    seq = _ir_load(bypass_opcode(ir_width), ir_width) + _dr_scan_cycles(2, 0b11)
+    seq += _dr_scan_cycles(1 + margin, default_sentinel_pattern(1 + margin))
+    tests.append(IntegrityTest("bypass_capture", _raw(seq), ()))
+    return tests
+
+
+def _network_hold_tests(
+    graph: PhysicalGraph, opened: Union[frozenset, dict], ir_width: int, margin: int
+) -> list[IntegrityTest]:
+    """SAMPLE/PRELOAD, then one EXTEST scan paused through the network as ``opened`` (what
+    the probes left open), holding an alternating pattern and then its complement; the scan
+    ends by closing every SIB."""
+    tests = []
+    bits = len(graph.chain) + margin
+    seq = _ir_load(OPCODE_SAMPLE_PRELOAD, ir_width)
+    seq += _dr_scan_cycles(bits, default_sentinel_pattern(bits))
+    tests.append(IntegrityTest("sample_preload", _raw(seq), ()))
+
+    length = layout_bit_length(graph, opened)
+    pattern = _alternating(length)
+    close = list(reversed(compose_bits(graph, opened, {}, target_sib=None, payload_value=0)))
+    seq = _ir_load(OPCODE_EXTEST, ir_width) + list(_TO_SHIFT_DR)
+    seq += [*_shift_cycles(bits_from_int(pattern, length)), *_PAUSE_AND_RESUME]
+    seq += [*_shift_cycles(bits_from_int(~pattern, length)), *_PAUSE_AND_RESUME]
+    seq += [*_shift_cycles(close), *_EXIT1_TO_IDLE]
+    tests.append(IntegrityTest("network_hold", _raw(seq), ()))
+    return tests
+
+
 def _integrity_tests(
     graph: PhysicalGraph,
     root: ModuleInstance,
     instruments: Mapping[str, InstrumentNode],
     tap: TapConfig,
     margin: int,
+    *,
     exhaustive_opcodes: bool,
     write_readback: bool,
+    tap_paths: bool,
+    network_hold: bool,
 ) -> list[IntegrityTest]:
     ir_width = tap.ir_width
     reset_dr = 32 if tap.has_idcode else 1
@@ -478,6 +649,9 @@ def _integrity_tests(
         ops = select_instruction(OPCODE_IDCODE, ir_width=ir_width) + sentinel_scan(32)
         tests.append(IntegrityTest("idcode", (), tuple(ops)))
 
+    if tap_paths:
+        tests.extend(_tap_path_tests(tap, margin))
+
     if graph.chain:
         extest = select_instruction(OPCODE_EXTEST, ir_width=ir_width)
         probe = build_overshift_ops(graph, frozenset(), margin=margin)
@@ -491,6 +665,10 @@ def _integrity_tests(
             ops = _close_all(graph, opened) + build_overshift_ops(graph, target, margin=margin)
             opened = _opened(graph, target)
             tests.append(IntegrityTest(f"open_{name}", (), tuple(ops)))
+
+        if network_hold:
+            tests.extend(_network_hold_tests(graph, opened, ir_width, margin))
+            opened = {}  # network_hold closes every SIB
 
         writes = [i for i in instruments.values() if i.direction is InstrumentDirection.WRITE]
         if write_readback and writes:
@@ -528,6 +706,8 @@ def _expected_cycles(
         model = tap.model()
         network = SibNetworkRegister(graph)
         model.register_data_register(Instruction.EXTEST, network)
+        if graph.chain:
+            model.register_data_register(Instruction.SAMPLE_PRELOAD, _NetworkTail(network))
         pairs.append((model, network))
 
     cycles: list[TckCycle] = []

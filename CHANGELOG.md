@@ -22,6 +22,24 @@ implementation stage.
   (flat with a live instrument, nested, ScanMux), including programs built for the wrong
   network or TAP, which fail in the tests that see the difference; on the RTL from before
   the fixes below, the program fails `network_closed` and `tms_reset`.
+- **The integrity program tests the TAP's state machine and the network holding still.**
+  `build_integrity_program` gains two test groups, both on by default: `tap_paths` (raw TCK
+  sequences taking every one of the 32 TAP state transitions -- Pause-DR/IR, Exit2, Update ->
+  Select-DR, Capture -> Exit1 without a shift, Select-IR -> Test-Logic-Reset -- with IDCODE,
+  BYPASS and the IR each held in Pause at 0 and at 1 in every bit, and IDCODE and BYPASS
+  captured over their complement) and `network_hold` (SAMPLE/PRELOAD, whose TDO is the
+  network's tail while the network holds still, then one EXTEST scan through the open network
+  paused holding an alternating pattern and its complement, ending with every SIB closed).
+  `SibNetworkRegister` gains `tail()` and `capture_unselected()`: every instrument leaf
+  captures on every Capture-DR, whatever the instruction, which cross-simulating SAMPLE/PRELOAD
+  on a ScanMux network showed (its tail is a leaf's bit). Graded by FaultFlow's fault
+  simulator (stuck-at, sky130 gate level) on autoMBIST's JTAG-wrapped designs, the program
+  alone now detects 95.6% of the TAP's faults instead of 72.7% (dedicated; 95.7% instead of
+  72.5% on self-repair) and 94.6% of the IJTAG TDRs' instead of 86.5% (92.8% instead of 82.0%);
+  an 8000-cycle random TCK walk on top of it finds 12 more faults on the dedicated design. What
+  stays undetected is almost all out of TCK's reach: a register's behaviour under another
+  instruction (every DR read starts with a capture), decodes of opcodes Update-IR never latches,
+  TDO outside the shift states, and most of a SIB's capture logic.
 
 ### Fixed
 

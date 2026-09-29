@@ -1,10 +1,12 @@
 # Network Integrity
 
 The TCK-level program a production flow plays to test the TAP and the IJTAG network themselves --
-IDCODE, the instruction register, BYPASS and every unimplemented opcode, each SIB and ScanMux arm
-opened alone, each WRITE instrument written and read back, a TMS reset -- with the TDO it expects
-from warptap's own TAP and network models. See the module docstring below for the tests in order
-and for how a READ instrument bound to a design signal makes its TDO bits don't-care.
+IDCODE, the instruction register, BYPASS and every unimplemented opcode, every TAP state
+transition with each register held in Pause at 0 and at 1, each SIB and ScanMux arm opened alone,
+the network held still under SAMPLE/PRELOAD and through Pause, each WRITE instrument written and
+read back, a TMS reset -- with the TDO it expects from warptap's own TAP and network models. See
+the module docstring below for the tests in order and for how a READ instrument bound to a design
+signal makes its TDO bits don't-care.
 
 ```python
 from warptap import build_integrity_program, check_integrity
