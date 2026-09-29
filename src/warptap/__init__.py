@@ -40,6 +40,20 @@ from warptap.pdl_verify import PDLVerifyError, ReadCheckResult, check_reads, cor
 from warptap.pipeline import insert_test_access
 from warptap.sib_insert import SibInsertError, insert_sib_network
 from warptap.sib_plan import HierarchySpec, InstrumentSpec, build_sib_plan
+from warptap.tap_integrity import (
+    TMS_RESET_LEAD_IN,
+    TRST_LEAD_IN,
+    IntegrityFailure,
+    IntegrityProgram,
+    IntegrityResult,
+    IntegrityTest,
+    TapConfig,
+    TapIntegrityError,
+    TckCycle,
+    build_integrity_program,
+    check_integrity,
+    select_instruction,
+)
 from warptap.tap_ir import (
     GotoState,
     PulsePin,
@@ -71,6 +85,7 @@ __all__ = [
     "PDLError",
     "PDLVerifyError",
     "SibInsertError",
+    "TapIntegrityError",
     "TapIrStaplError",
     "TapIrStilError",
     "TapIrSvfError",
@@ -127,6 +142,18 @@ __all__ = [
     "to_svf",
     "to_stapl",
     "to_stil",
+    # TAP / network integrity patterns
+    "IntegrityFailure",
+    "IntegrityProgram",
+    "IntegrityResult",
+    "IntegrityTest",
+    "TapConfig",
+    "TckCycle",
+    "TMS_RESET_LEAD_IN",
+    "TRST_LEAD_IN",
+    "build_integrity_program",
+    "check_integrity",
+    "select_instruction",
     # faultflow
     "retarget_faultflow_patterns",
 ]
