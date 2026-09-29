@@ -37,8 +37,24 @@ CAPTURE_IR_PATTERN = OPCODE_IDCODE
 # 0x1, part 0xA5A5, manufacturer bits [11:1] = 0x001 (JEP106 bank 1, code 0x01), LSB 1. That
 # manufacturer field is NOT an unused code: it lands in an assigned JEP106 slot (not checked
 # here against the current JEP106 table), so this value can collide with a real manufacturer's
-# ID. Replacing it is a separate change -- rtl/tap_core.v's IDCODE_VALUE default must move with it.
+# ID. It is only the default: insert_test_access/insert_sib_network(idcode_value=...) bake a
+# design's own value into its tap_core, and to_bsdl/TapModel/TapConfig take the same keyword.
+# Replacing the default itself means changing rtl/tap_core.v's IDCODE_VALUE default with it.
 IDCODE_VALUE = 0x1A5A5003
+
+
+def idcode_value_error(value: object) -> str | None:
+    """Why ``value`` can't be a TAP's IDCODE, or ``None`` if it can. IEEE 1149.1's
+    device-identification register is 32 bits with bit 0 fixed at 1. Checked here, in Python,
+    because nothing downstream would catch it: Yosys silently truncates a value wider than
+    ``rtl/tap_core.v``'s ``[31:0]`` parameter, and the RTL doesn't check bit 0."""
+    if isinstance(value, bool) or not isinstance(value, int):
+        return f"IDCODE value must be an int, got {value!r}"
+    if not 0 <= value < 1 << 32:
+        return f"IDCODE value {value:#x} is not a 32-bit value"
+    if value & 1 != 1:
+        return f"IDCODE value {value:#010x} has bit 0 clear; IEEE 1149.1 requires bit 0 = 1"
+    return None
 
 
 def bypass_opcode(ir_width: int) -> int:
@@ -162,6 +178,8 @@ class TapModel:
         has_idcode: bool = True,
         idcode_value: int = IDCODE_VALUE,
     ):
+        if has_idcode and (problem := idcode_value_error(idcode_value)):
+            raise TapModelError(problem)
         self.ir_width = ir_width
         self.has_idcode = has_idcode
         bypass = BypassRegister()

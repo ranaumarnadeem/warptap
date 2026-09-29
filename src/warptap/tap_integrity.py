@@ -97,6 +97,7 @@ from warptap.tap_model import (
     Instruction,
     TapModel,
     bypass_opcode,
+    idcode_value_error,
 )
 
 PROGRAM_FORMAT = "warptap-tck-program"
@@ -164,6 +165,10 @@ class TapConfig:
     ir_width: int = DEFAULT_IR_WIDTH
     has_idcode: bool = True
     idcode_value: int = IDCODE_VALUE
+
+    def __post_init__(self) -> None:
+        if self.has_idcode and (problem := idcode_value_error(self.idcode_value)):
+            raise TapIntegrityError(problem)
 
     def implemented_opcodes(self) -> frozenset[int]:
         opcodes = {OPCODE_EXTEST, OPCODE_SAMPLE_PRELOAD, bypass_opcode(self.ir_width)}
