@@ -5,6 +5,8 @@ implementation stage.
 
 ## [Unreleased]
 
+## [0.0.3] - 2026-09-29
+
 ### Added
 
 - **Stage 24 — faultflow compression/compaction-aware pattern retargeting.** Closes a gap

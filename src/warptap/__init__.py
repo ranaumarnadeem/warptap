@@ -54,7 +54,7 @@ from warptap.tap_ir_stil import TapIrStilError, to_stil
 from warptap.tap_ir_svf import TapIrSvfError, to_svf
 from warptap.yosys_io import YosysError, ingest, write_verilog_from_json
 
-__version__ = "0.0.2"
+__version__ = "0.0.3"
 
 __all__ = [
     "__version__",
