@@ -60,12 +60,10 @@ entity chip is
       "connect TDO to the IEEE 1687 IJTAG network (the SIB chain) " &
       "described by the companion ICL AccessLink. Its length depends on " &
       "SIB state, so it is not declared in REGISTER_ACCESS. Load EXTEST to " &
-      "reach that network. Not fully IEEE 1149.1 conformant: entering " &
-      "Test-Logic-Reset through TMS does not reset the instruction " &
-      "register (only TRST_N does), TDO changes on the rising edge of TCK " &
-      "and is driven low, not tri-stated, outside the shift states, and " &
-      "the IDCODE value is a placeholder, not a registered manufacturer " &
-      "ID. PHYSICAL_PIN_MAP UNPACKAGED is a placeholder: no physical " &
-      "package is described.";
+      "reach that network. Not fully IEEE 1149.1 conformant: TDO changes " &
+      "on the rising edge of TCK and is driven low, not tri-stated, " &
+      "outside the shift states, and the IDCODE value is a placeholder, " &
+      "not a registered manufacturer ID. PHYSICAL_PIN_MAP UNPACKAGED is a " &
+      "placeholder: no physical package is described.";
 
 end chip;

@@ -11,6 +11,8 @@ from warptap.tap_fsm import TapState, next_state
 from warptap.tap_model import (
     CAPTURE_IR_PATTERN,
     IDCODE_VALUE,
+    BypassRegister,
+    IdcodeRegister,
     Instruction,
     NETWORK_ACCESS_INSTRUCTION,
     OPCODE_EXTEST,
@@ -92,6 +94,54 @@ def test_default_on_reset_selects_idcode_when_available():
     model.instruction = Instruction.BYPASS  # perturb
     model.reset()
     assert model.instruction is Instruction.IDCODE
+
+
+@pytest.mark.parametrize(
+    "has_idcode, expected", [(True, Instruction.IDCODE), (False, Instruction.BYPASS)]
+)
+def test_test_logic_reset_reloads_the_reset_instruction(has_idcode, expected):
+    """IEEE 1149.1: Test-Logic-Reset reloads IDCODE (BYPASS without one), so five TMS=1
+    cycles deselect EXTEST without a TRST pin."""
+    model = TapModel(has_idcode=has_idcode)
+    _reset_and_idle(model)
+    _shift_ir(model, OPCODE_EXTEST)
+    assert model.instruction is Instruction.EXTEST
+    _reset_and_idle(model)
+    assert model.instruction is expected
+
+
+def test_test_logic_reset_reload_fires_departing_the_state():
+    """Old-state-gated like every other action (rtl/tap_core.v's case on the pre-edge
+    state): arriving in TEST_LOGIC_RESET changes nothing; the next edge reloads."""
+    model = TapModel(has_idcode=True)
+    _reset_and_idle(model)
+    _shift_ir(model, OPCODE_EXTEST)
+    for _ in range(3):  # RUN_TEST_IDLE -> SELECT_DR_SCAN -> SELECT_IR_SCAN -> TEST_LOGIC_RESET
+        model.tick(tms=1)
+    assert model.state is TapState.TEST_LOGIC_RESET
+    assert model.instruction is Instruction.EXTEST
+    model.tick(tms=1)
+    assert model.instruction is Instruction.IDCODE
+
+
+def test_builtin_registers_clear_on_reset():
+    """rtl/tap_core.v resets idcode_shift/bypass_bit on trst_n. Invisible at tdo (Capture-DR
+    always loads them first), so this checks the registers directly."""
+    idcode = IdcodeRegister()
+    idcode.capture()
+    idcode.reset()
+    assert [idcode.shift(0) for _ in range(32)] == [0] * 32
+    bypass = BypassRegister()
+    bypass.shift(1)
+    bypass.reset()
+    assert bypass.shift(0) == 0
+
+    model = TapModel(has_idcode=True)
+    _reset_and_idle(model)
+    _goto_shift_dr(model)  # IDCODE captured into the model's own register
+    model.reset()
+    builtin = model._data_registers[Instruction.IDCODE]
+    assert [builtin.shift(0) for _ in range(32)] == [0] * 32
 
 
 def test_default_on_reset_selects_bypass_when_idcode_not_configured():

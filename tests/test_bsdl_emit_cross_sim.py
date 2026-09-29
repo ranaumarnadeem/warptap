@@ -14,9 +14,10 @@ Checked here:
   the BSDL says it does; IDCODE reads back the declared 32-bit value and is exactly 32 bits;
   BYPASS captures 0 and is exactly 1 bit; every undeclared opcode behaves as BYPASS.
 - The network-access instructions (EXTEST, SAMPLE, PRELOAD): TDO follows ``external_dr_tdo``.
-- The ``DESIGN_WARNING`` claims: entering Test-Logic-Reset through TMS keeps the instruction, the
-  TRST pin (active low) resets it to IDCODE, TDO is low outside the shift states, and TDO changes
-  on the rising edge of TCK only.
+- IDCODE as the default instruction: Test-Logic-Reset selects it whether it's reached through TMS
+  or through the TRST pin (active low).
+- The ``DESIGN_WARNING`` claims: TDO is low outside the shift states, and TDO changes on the
+  rising edge of TCK only.
 
 Not checkable by simulation, and not checked here: the ``TAP_SCAN_CLOCK`` frequency (timing is
 supplied by the integrator, not an RTL property), ``PHYSICAL_PIN_MAP``/``PIN_MAP`` (a placeholder
@@ -42,6 +43,7 @@ from warptap.tap_ir_play import shift_op_ranges, to_cycles
 _RTL_PATH = Path(__file__).resolve().parent.parent / "src" / "warptap" / "rtl" / "tap_core.v"
 
 _TLR = TapState.TEST_LOGIC_RESET.value
+_RTI = TapState.RUN_TEST_IDLE.value
 _SHIFT_STATES = (TapState.SHIFT_DR.value, TapState.SHIFT_IR.value)
 
 _rng = random.Random(20260929)
@@ -230,30 +232,32 @@ def test_every_opcode_selects_what_the_bsdl_says_and_undeclared_ones_are_bypass(
         assert observed[dr_index] == expected, f"opcode {opcode:0{length}b} should act as {kind}"
 
 
-def test_trst_pin_resets_the_instruction_to_idcode_but_a_tms_reset_does_not(bsdl, sim):
-    """The DESIGN_WARNING says only TRST_N resets the instruction. Load EXTEST, drive five TMS=1
-    edges to reach Test-Logic-Reset: EXTEST must still be latched. Then pulse trst_n low: an
-    asynchronous reset to Test-Logic-Reset with IDCODE selected (BSDL: TAP_SCAN_RESET is active
-    low, IDCODE the default instruction)."""
+def test_a_tms_reset_and_the_trst_pin_both_select_idcode(bsdl, sim):
+    """IEEE 1149.1: Test-Logic-Reset selects IDCODE (the BSDL's default instruction), however
+    it's reached. Load EXTEST and drive five TMS=1 edges: resident in Test-Logic-Reset, IDCODE is
+    latched. Load EXTEST again and pulse trst_n low (TAP_SCAN_RESET, active low): an asynchronous
+    reset to Test-Logic-Reset with IDCODE selected."""
     length = bsdl.instruction_length
     extest = _opcode(bsdl, "EXTEST")
+    idcode = _opcode(bsdl, "IDCODE")
     ops = _load_ir(extest, length)
-    entries = (
+    cycles = len(to_cycles(ops))
+
+    tms_reset = sim(
         _entries(ops)
         + [("tick", 1, 0)] * 5  # RUN_TEST_IDLE -> ... -> Test-Logic-Reset via TMS alone
         + [("tick", 0, 0)]  # sampled pre-edge while resident in Test-Logic-Reset
-        + [("reset",)]
-        + [("tick", 0, 0)]
     )
-    result = sim(entries)
-    cycles = len(to_cycles(ops))
-    in_tlr = result.samples[_LEAD_IN_TICKS + cycles + 5]
-    assert (in_tlr.state, in_tlr.instr) == (_TLR, extest)
+    in_tlr = tms_reset.samples[_LEAD_IN_TICKS + cycles + 5]
+    assert (in_tlr.state, in_tlr.instr) == (_TLR, idcode)
 
-    trst_state, trst_instr = result.resets[1]  # resets[0] is the lead-in reset
-    assert (trst_state, trst_instr) == (_TLR, _opcode(bsdl, "IDCODE"))
-    after_trst = result.samples[_LEAD_IN_TICKS + cycles + 6]
-    assert (after_trst.state, after_trst.instr) == (_TLR, _opcode(bsdl, "IDCODE"))
+    trst = sim(_entries(ops) + [("tick", 0, 0), ("reset",), ("tick", 0, 0)])
+    loaded = trst.samples[_LEAD_IN_TICKS + cycles]
+    assert (loaded.state, loaded.instr) == (_RTI, extest)
+    trst_state, trst_instr = trst.resets[1]  # resets[0] is the lead-in reset
+    assert (trst_state, trst_instr) == (_TLR, idcode)
+    after_trst = trst.samples[_LEAD_IN_TICKS + cycles + 1]
+    assert (after_trst.state, after_trst.instr) == (_TLR, idcode)
 
 
 def test_tdo_is_low_outside_the_shift_states_and_changes_only_on_the_rising_edge(bsdl, sim):

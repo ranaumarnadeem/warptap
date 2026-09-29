@@ -120,10 +120,9 @@ def _design_warning() -> str:
         "SIB chain) described by the companion ICL AccessLink. Its length depends on SIB state, "
         "so it is not declared in REGISTER_ACCESS. "
         f"Load {NETWORK_ACCESS_BSDL_INSTRUCTION} to reach that network. "
-        "Not fully IEEE 1149.1 conformant: entering Test-Logic-Reset through TMS does not reset "
-        f"the instruction register (only {TRST_N.upper()} does), TDO changes on the rising edge "
-        "of TCK and is driven low, not tri-stated, outside the shift states, and the IDCODE "
-        "value is a placeholder, not a registered manufacturer ID. "
+        "Not fully IEEE 1149.1 conformant: TDO changes on the rising edge of TCK and is driven "
+        "low, not tri-stated, outside the shift states, and the IDCODE value is a placeholder, "
+        "not a registered manufacturer ID. "
         f"PHYSICAL_PIN_MAP {_PHYSICAL_PIN_MAP} is a placeholder: no physical package is "
         "described."
     )

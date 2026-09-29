@@ -117,6 +117,10 @@ class BypassRegister:
     def update(self) -> None:
         pass  # BYPASS has no parallel output to latch
 
+    def reset(self) -> None:
+        """rtl/tap_core.v's ``bypass_bit`` clears on ``trst_n``."""
+        self._bit = 0
+
 
 class IdcodeRegister:
     """The optional 32-bit IDCODE data register. Captures a fixed configured value on
@@ -140,6 +144,10 @@ class IdcodeRegister:
     def update(self) -> None:
         pass  # IDCODE has no parallel output to latch
 
+    def reset(self) -> None:
+        """rtl/tap_core.v's ``idcode_shift`` clears on ``trst_n``."""
+        self._shreg = 0
+
 
 class TapModel:
     """Cycle-stepped behavioral model: call `tick(tms, tdi)` once per TCK rising edge,
@@ -154,14 +162,16 @@ class TapModel:
     ):
         self.ir_width = ir_width
         self.has_idcode = has_idcode
-        self._data_registers: dict[Instruction, DataRegister] = {
-            Instruction.BYPASS: BypassRegister(),
-        }
+        bypass = BypassRegister()
+        self._builtin_registers: list[BypassRegister | IdcodeRegister] = [bypass]
+        self._data_registers: dict[Instruction, DataRegister] = {Instruction.BYPASS: bypass}
         if has_idcode:
-            self._data_registers[Instruction.IDCODE] = IdcodeRegister(idcode_value)
+            idcode = IdcodeRegister(idcode_value)
+            self._builtin_registers.append(idcode)
+            self._data_registers[Instruction.IDCODE] = idcode
         self.state = TapState.TEST_LOGIC_RESET
         self._ir_shift = 0
-        self.instruction = Instruction.IDCODE if has_idcode else Instruction.BYPASS
+        self.instruction = self._reset_instruction()
 
     def register_data_register(self, instruction: Instruction, dr: DataRegister) -> None:
         """Plug in a real data register for `instruction` — the extension point Stage
@@ -170,11 +180,18 @@ class TapModel:
         self._data_registers[instruction] = dr
 
     def reset(self) -> None:
-        """Async reset: TEST_LOGIC_RESET, and the instruction defaults to IDCODE if
-        configured, else BYPASS (implementation_plan.md §3.1's default-on-reset rule)."""
+        """Async reset: TEST_LOGIC_RESET, the instruction defaults to IDCODE if configured,
+        else BYPASS (implementation_plan.md §3.1's default-on-reset rule), and the built-in
+        BYPASS/IDCODE registers clear, as rtl/tap_core.v's do on ``trst_n``. A register
+        plugged in with register_data_register() is not reset here; the caller resets it."""
         self.state = TapState.TEST_LOGIC_RESET
         self._ir_shift = 0
-        self.instruction = Instruction.IDCODE if self.has_idcode else Instruction.BYPASS
+        self.instruction = self._reset_instruction()
+        for dr in self._builtin_registers:
+            dr.reset()
+
+    def _reset_instruction(self) -> Instruction:
+        return Instruction.IDCODE if self.has_idcode else Instruction.BYPASS
 
     def instruction_opcode(self) -> int:
         """Canonical opcode for the currently-active instruction, normalizing
@@ -208,7 +225,11 @@ class TapModel:
         old_state = self.state
         tdo = 0
 
-        if old_state is TapState.CAPTURE_IR:
+        if old_state is TapState.TEST_LOGIC_RESET:
+            # IEEE 1149.1: Test-Logic-Reset reloads the reset instruction, so five TMS=1
+            # cycles deselect any test-mode instruction without a TRST pin.
+            self.instruction = self._reset_instruction()
+        elif old_state is TapState.CAPTURE_IR:
             self._ir_shift = CAPTURE_IR_PATTERN
         elif old_state is TapState.SHIFT_IR:
             tdo = self._ir_shift & 1

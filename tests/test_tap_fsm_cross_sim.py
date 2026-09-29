@@ -18,7 +18,7 @@ import pytest
 
 from warptap import sim_io
 from warptap.tap_fsm import TapState, next_state
-from warptap.tap_model import TapModel
+from warptap.tap_model import IDCODE_VALUE, OPCODE_EXTEST, OPCODE_IDCODE, TapModel
 from warptap.yosys_io import ingest
 
 _RTL_PATH = Path(__file__).resolve().parent.parent / "src" / "warptap" / "rtl" / "tap_core.v"
@@ -164,6 +164,44 @@ def test_randomized_cross_sim_matches(seed, fixtures_dir, iverilog_command, vvp_
     python_trace = run_on_model(stimulus, TapModel(has_idcode=True))
     rtl_trace = run_on_rtl(stimulus, fixtures_dir, iverilog_command, vvp_command)
     assert rtl_trace == python_trace
+
+
+def test_test_logic_reset_reloads_idcode_on_rtl_and_model(
+    fixtures_dir, iverilog_command, vvp_command
+):
+    """IEEE 1149.1: Test-Logic-Reset reloads IDCODE, so five TMS=1 cycles deselect EXTEST
+    without a TRST pulse -- and the following DR scan reads the IDCODE value."""
+    extest_ir = [("tick", tms, 0) for tms in (1, 1, 0, 0)]  # RUN_TEST_IDLE -> SHIFT_IR
+    extest_ir += [("tick", 0, 0)] * 3 + [("tick", 1, 0)]  # shift 0000, exit to EXIT1_IR
+    extest_ir += [("tick", 1, 0), ("tick", 0, 0)]  # UPDATE_IR -> RUN_TEST_IDLE
+    tms_reset = [("tick", 1, 0)] * 5 + [("tick", 0, 0)]  # -> TEST_LOGIC_RESET -> RUN_TEST_IDLE
+    idcode_dr = [("tick", tms, 0) for tms in (1, 0, 0)]  # -> SHIFT_DR, capturing IDCODE
+    idcode_dr += [("tick", 0, 0)] * 31 + [("tick", 1, 0), ("tick", 1, 0), ("tick", 0, 0)]
+    stimulus = [("reset",), ("tick", 0, 0)] + extest_ir + tms_reset + idcode_dr
+
+    python_trace = run_on_model(stimulus, TapModel(has_idcode=True))
+    rtl_trace = run_on_rtl(stimulus, fixtures_dir, iverilog_command, vvp_command)
+    assert rtl_trace == python_trace
+
+    ir_done = 1 + len(extest_ir)
+    assert rtl_trace[ir_done][1] == OPCODE_EXTEST  # not vacuous: EXTEST really was loaded
+    assert rtl_trace[ir_done + len(tms_reset)][1] == OPCODE_IDCODE
+    shifted = [t[5] for t in rtl_trace if t[3] == 1]
+    assert sum(bit << i for i, bit in enumerate(shifted)) == IDCODE_VALUE
+
+
+def test_every_tap_core_register_is_reset_by_trst_n(yosys_command):
+    """Every tap_core flop is an async-reset flop on trst_n, including the IDCODE/BYPASS
+    shift registers, which Capture-DR always loads before they reach tdo. Without it they
+    start unknown in a gate-level simulation, and a fault grader can't prove tdo X-free."""
+    mod = ingest([_RTL_PATH], "tap_core", yosys_command=yosys_command)["modules"]["tap_core"]
+    trst_n = mod["ports"]["trst_n"]["bits"]
+    flops = [cell for cell in mod["cells"].values() if "dff" in cell["type"]]
+    assert len(flops) == 5  # state, ir_shift, current_instruction_r, idcode_shift, bypass_bit
+    for cell in flops:
+        assert cell["type"] == "$adff"
+        assert cell["connections"]["ARST"] == trst_n
+        assert int(cell["parameters"]["ARST_POLARITY"], 2) == 0
 
 
 def test_tap_core_ingests_via_yosys(yosys_command):

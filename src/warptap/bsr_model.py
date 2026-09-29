@@ -44,10 +44,9 @@ class BoundaryScanRegister:
         """Zero every cell's shift/update state, matching rtl/bc1_full.v's and
         rtl/bc1_shift_only.v's own `trst_n` reset behavior. Callers driving this
         model alongside a TapModel should call this whenever they call
-        TapModel.reset() — TapModel.reset() only resets its own FSM/IR state, it
-        has no way to know which DataRegister protocol implementations need
-        resetting too, since not all of them do (BypassRegister/IdcodeRegister's
-        backing rtl/tap_core.v registers have no explicit reset at all)."""
+        TapModel.reset() — TapModel.reset() resets only its own FSM/IR state and
+        its built-in BYPASS/IDCODE registers, never a register plugged in with
+        register_data_register()."""
         for state in self._states:
             state.shift_ff = 0
             state.po = 0
