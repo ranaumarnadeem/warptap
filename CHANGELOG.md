@@ -5,6 +5,30 @@ implementation stage.
 
 ## [Unreleased]
 
+### Fixed
+
+- **The IJTAG network moved on every DR scan, not just under EXTEST.** `insert_sib_network`
+  tied every top-level SIB's `select` to 1, and `tap_core`'s capture/shift/update strobes fire
+  for every instruction's DR scan. So the network shifted, opened and committed under IDCODE
+  (the instruction after every reset) and BYPASS (a board chain passing through): two
+  all-ones DR scans drove every WRITE instrument (`test_mode`, `bist_start`, ...) to 1. A
+  `$eq` decode (`warptap_ijtag_extest_decode`, like `insert_bsr`'s `extest_mode`) now selects
+  the network only while EXTEST is loaded, matching the Python model, which already drove it
+  only under EXTEST. `insert_sib_network` gains `opcode_extest` (default `0b0000`, which must
+  match `tap_core`). Consequence: in a SIB-only design, SAMPLE/PRELOAD still puts the network's
+  tail on TDO but no longer moves the network (it has no data register there; the model already
+  raised for it). The BSDL `DESIGN_WARNING`, `NETWORK_ACCESS_INSTRUCTION`'s comment and the
+  `bsdl_emit`/`icl_emit` docstrings, which said SAMPLE/PRELOAD reaches the network, say so.
+- **Test-Logic-Reset didn't reload the instruction.** IEEE 1149.1 requires Test-Logic-Reset to
+  load IDCODE (BYPASS without one), so five TMS=1 cycles deselect a test-mode instruction
+  without a TRST pin; `tap_core` only did it on `trst_n`. `tap_core.v` and `TapModel` now both
+  reload it on every TCK edge taken in Test-Logic-Reset. The BSDL `DESIGN_WARNING` no longer
+  lists this deviation, and `test_bsdl_emit_cross_sim`, which pinned it, checks the reload.
+- **`tap_core`'s IDCODE/BYPASS shift registers had no reset.** Invisible at TDO (Capture-DR
+  always loads them first), but they started unknown and fed the TDO mux, so a gate-level X
+  check couldn't clear `tdo`. Both now clear on `trst_n`; `TapModel.reset()` clears its
+  built-in BYPASS/IDCODE registers to match (`BypassRegister`/`IdcodeRegister` gain `reset()`).
+
 ## [0.0.3] - 2026-09-29
 
 ### Added
