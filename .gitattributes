@@ -1,0 +1,4 @@
+# Byte-exact golden files: never let git rewrite line endings (core.autocrlf on Windows would
+# otherwise turn LF into CRLF and break the byte-for-byte comparisons).
+tests/fixtures/golden_icl/* -text
+tests/fixtures/golden_bsdl/* -text
