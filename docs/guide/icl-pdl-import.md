@@ -22,11 +22,12 @@ Both functions parse through a real, independent, MIT-licensed parser
 ([`Honza255/icl_parser`](https://github.com/Honza255/icl_parser)) rather than a self-written
 one — warptap never trusts its own reading of the ICL/PDL grammar. That parser is vendored as a
 git submodule in warptap's own source repository, not published on PyPI, so it isn't installed
-by a plain `pip install warptap`. To use `import_icl`/`import_pdl`, clone it yourself and inject
-its classes:
+by a plain `pip install warptap`. To use `import_icl`/`import_pdl`, clone the fork warptap's
+submodule pins (it adds the compiled PDL parser `import_pdl` needs, which upstream lacks) and
+inject its classes:
 
 ```bash
-git clone https://github.com/Honza255/icl_parser.git
+git clone https://github.com/ranaumarnadeem/icl_parser.git
 pip install antlr4-python3-runtime==4.7.2 z3-solver sympy networkx
 ```
 
