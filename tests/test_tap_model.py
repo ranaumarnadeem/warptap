@@ -12,6 +12,7 @@ from warptap.tap_model import (
     CAPTURE_IR_PATTERN,
     IDCODE_VALUE,
     Instruction,
+    NETWORK_ACCESS_INSTRUCTION,
     OPCODE_EXTEST,
     OPCODE_IDCODE,
     OPCODE_SAMPLE_PRELOAD,
@@ -209,3 +210,12 @@ def test_five_consecutive_tms1_cycles_reach_reset_from_any_state():
         for _ in range(5):
             state = next_state(state, 1)
         assert state is TapState.TEST_LOGIC_RESET, f"starting from {start.name}"
+
+
+def test_network_access_instruction_is_extest_and_decodes_from_its_opcode():
+    """The instruction named to consumers (ICL AccessLink, BSDL) as the one that reaches the
+    IJTAG network: rtl/tap_core.v routes external_dr_tdo for it, so it must be one of the
+    instructions with no built-in data register (EXTEST/SAMPLE_PRELOAD), never IDCODE/BYPASS."""
+    assert NETWORK_ACCESS_INSTRUCTION is Instruction.EXTEST
+    assert decode_instruction(OPCODE_EXTEST, 4) is NETWORK_ACCESS_INSTRUCTION
+    assert NETWORK_ACCESS_INSTRUCTION not in (Instruction.IDCODE, Instruction.BYPASS)

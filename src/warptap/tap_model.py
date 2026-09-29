@@ -33,7 +33,11 @@ OPCODE_IDCODE = 0b0001
 # reset rule already requires instead of on something hazardous like EXTEST.
 CAPTURE_IR_PATTERN = OPCODE_IDCODE
 
-# Explicitly labeled placeholder, not a real registered JEDEC manufacturer ID.
+# A placeholder, not an ID warptap registered with anyone. Decoded per IEEE 1149.1: version
+# 0x1, part 0xA5A5, manufacturer bits [11:1] = 0x001 (JEP106 bank 1, code 0x01), LSB 1. That
+# manufacturer field is NOT an unused code: it lands in an assigned JEP106 slot (not checked
+# here against the current JEP106 table), so this value can collide with a real manufacturer's
+# ID. Replacing it is a separate change -- rtl/tap_core.v's IDCODE_VALUE default must move with it.
 IDCODE_VALUE = 0x1A5A5003
 
 
@@ -48,6 +52,16 @@ class Instruction(enum.Enum):
     SAMPLE_PRELOAD = "SAMPLE_PRELOAD"
     IDCODE = "IDCODE"
     BYPASS = "BYPASS"
+
+
+# The instruction an external tester loads to reach the IJTAG (SIB/TDR) network. rtl/tap_core.v's
+# TDO mux presents ``external_dr_tdo`` -- where the network's tail plugs in -- for any latched
+# instruction that is neither IDCODE nor BYPASS, and Update-IR normalizes every reserved opcode
+# to BYPASS, so both EXTEST and SAMPLE_PRELOAD reach it. EXTEST is the one named to consumers
+# (the ICL AccessLink, the BSDL); in real 1149.1 EXTEST means "drive the boundary register",
+# which is only true of a design with a boundary-scan register and no SIB network (the two never
+# coexist, see sib_insert.insert_sib_network).
+NETWORK_ACCESS_INSTRUCTION = Instruction.EXTEST
 
 
 def decode_instruction(
