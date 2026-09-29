@@ -5,6 +5,24 @@ implementation stage.
 
 ## [Unreleased]
 
+### Added
+
+- **TAP and IJTAG network-integrity patterns** (`warptap.tap_integrity`).
+  `build_integrity_program(graph, root)` builds the TCK-level program a production flow
+  plays to test the TAP and the network through TCK, with the TDO it expects from
+  `TapModel` + `SibNetworkRegister`: IDCODE after TRST, the IR's capture pattern and length,
+  BYPASS, every unimplemented opcode (`exhaustive_opcodes`), an explicit IDCODE load, EXTEST
+  with every SIB closed and then each SIB and ScanMux arm opened alone (over-shift probes,
+  each from an all-closed network), each WRITE instrument written with P, ~P and 0 and read
+  back (`write_readback`), and a TMS reset. READ instruments bound to design signals are
+  don't-care wherever their captured value reaches TDO (two lockstep models, capturing all 0s
+  and all 1s; `live_values` pins them). `check_integrity(program, observed)` names the first
+  failing test; `IntegrityProgram.to_json()`/`from_json()` carry the program as a
+  self-contained file (`warptap-tck-program` v1). Cross-simulated against real inserted RTL
+  (flat with a live instrument, nested, ScanMux), including programs built for the wrong
+  network or TAP, which fail in the tests that see the difference; on the RTL from before
+  the fixes below, the program fails `network_closed` and `tms_reset`.
+
 ### Fixed
 
 - **The IJTAG network moved on every DR scan, not just under EXTEST.** `insert_sib_network`
