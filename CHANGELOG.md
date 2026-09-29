@@ -50,6 +50,64 @@ implementation stage.
   falls back to the original every-position behavior when a manifest has no `load_care` (older
   faultflow, random-fill patterns, non-compression campaigns).
 
+- **Stage 25 — BSDL emitter for the TAP.** `to_bsdl(entity_name, *, tck_max_freq_hz)`
+  (`bsdl_emit.py`, exported with `BsdlEmitError`) writes a BSDL file for the TAP warptap inserts:
+  the entity, the five TAP pins, the `TAP_SCAN_*` attributes, `INSTRUCTION_LENGTH`/`OPCODE`/
+  `CAPTURE`, `IDCODE_REGISTER`, `REGISTER_ACCESS` and a `DESIGN_WARNING`. Every value comes from
+  `tap_model`/`tap_ports`; none is duplicated. It is TAP-only: it declares no `BOUNDARY_LENGTH` or
+  `BOUNDARY_REGISTER`, so it is not a chip-level BSDL and a tool that requires a boundary register
+  will reject it (the `DESIGN_WARNING` says so). EXTEST (0000) and SAMPLE/PRELOAD (0010) are
+  declared as usual; the warning states that in a SIB design they route TDO to the IJTAG network,
+  not to a boundary register, because `rtl/tap_core.v` presents the SIB chain's tail for every
+  instruction other than IDCODE and BYPASS. `tap_model.NETWORK_ACCESS_INSTRUCTION` (EXTEST) names
+  the instruction a tester loads to reach the network; `to_icl` and `to_bsdl` both read it from
+  there. The emitted text is read back and compared with `tap_model`, and every behavioral claim is
+  checked on the real `tap_core.v` under Icarus Verilog: capture pattern, IR length, IDCODE value
+  and width, BYPASS depth, EXTEST/SAMPLE/PRELOAD routing, undeclared opcodes acting as BYPASS, and
+  the `DESIGN_WARNING` claims (a TMS-driven reset keeps the instruction, `trst_n` resets it to
+  IDCODE, TDO is low outside the shift states and changes only on the rising edge of TCK). These
+  tests were mutation-checked against wrong BSDL claims and RTL bugs. No independent BSDL parser
+  validates the output: UrJTAG 0.10 from Ubuntu's apt was installed and tried, and it fails on
+  every input, valid or not, so it cannot tell good files from bad (evidence in
+  `tests/test_bsdl_emit.py`). `to_icl(..., include_access_link=False)` output is now pinned
+  byte-for-byte by golden files (`.gitattributes` marks them `-text` so `core.autocrlf` cannot
+  alter them).
+
+### Fixed
+
+- **`to_icl`'s `AccessLink` named an instruction the TAP does not have.** The block used the
+  instruction name `wdr_select`, copied from the IJTAG benchmark set's example chip, whose
+  instruction blocks are named `wir_select`/`wdr_select`/`clk_select`; it is not part of ICL's
+  syntax, and the docstrings wrongly said the block named `EXTEST`. It now names `EXTEST`, which
+  `to_bsdl` declares, so the ICL and the BSDL agree (checked by `tests/test_icl_bsdl_agreement.py`).
+  `to_icl` gains `bsdl_entity_name` (default `root.name`) so `BSDLEntity` can match the BSDL file's
+  entity, and `include_access_link=True` with an empty chain now raises `IclEmitError` instead of
+  emitting an `AccessLink` with no instruction block, which the grammar rejects.
+  `include_access_link=False` output is unchanged. The syntax was confirmed from the vendored
+  grammar (`icl.g4`), the IJTAG benchmark set (`E30.icl`, from IEEE 1687 Annex E example E.30),
+  MAST's ICL grammar and test files, and ASSET InterTech's IJTAG article; the normative IEEE 1687
+  text is paywalled and was not read. The vendored parser cannot parse any ordinarily formatted
+  `AccessLink`, published ones included, because `AccessLinkGeneric_def` is a lexer rule in
+  `icl.g4`, so the earlier claim that the emitted block was "grammatically valid" had never been
+  checked by that tool. `tests/test_icl_emit_access_link_syntax.py` now checks it through the
+  tool's raw ANTLR parser with the header's whitespace rewritten around that bug, with positive
+  and negative controls.
+- **`IDCODE_VALUE`'s comment was wrong.** `tap_model.py` said the placeholder was not a real
+  registered JEDEC manufacturer ID; its manufacturer field decodes to JEP106 bank 1, code 0x01,
+  which is an assigned code as far as we know (the JEP106 table was not checked). The value is
+  unchanged, and `tap_core.v`'s default must move with it if it is ever replaced.
+
+### Explicitly out of scope
+
+A boundary-scan register in the BSDL (designs with one, from `bsr_insert.py`, get no
+`BOUNDARY_REGISTER` description); a dedicated instruction for the IJTAG network (it still shares
+opcode 0000 with EXTEST, and SAMPLE/PRELOAD also reach it); deciding whether the `AccessLink`'s
+`ScanInterface` list should name every top-level slot rather than only the first (no readable
+source settles it, and the top-level slots' `SEL` ports are never bound in the emitted `Instance`
+statements); and the deviations from IEEE 1149.1 in `rtl/tap_core.v` that the `DESIGN_WARNING`
+reports rather than fixes (Test-Logic-Reset reached through TMS does not reset the instruction,
+TDO changes on the rising edge and is driven low rather than tri-stated outside the shift states).
+
 ## [0.0.2] - 2026-09-16
 
 ### Added

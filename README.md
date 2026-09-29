@@ -4,7 +4,8 @@ Python library to insert IEEE 1149.1 (JTAG/TAP) and IEEE 1687 (IJTAG/ICL+PDL) te
 RTL designs, pre-synthesis, via Yosys netlist surgery. Package/CLI name is `warptap`.
 
 Supports nested SIB networks, multi-arm ScanMux, named sub-field addressing, ICL/PDL
-emit+import, SVF/STAPL/STIL pattern export, and faultflow pattern retargeting.
+emit+import, TAP-only BSDL emit, SVF/STAPL/STIL pattern export, and faultflow pattern
+retargeting.
 
 ## Install
 
