@@ -9,6 +9,7 @@ example using these names.
 
 from __future__ import annotations
 
+from warptap.bsdl_emit import BsdlEmitError, to_bsdl
 from warptap.bsr_insert import BsrInsertError, insert_bsr
 from warptap.errors import WarptapError
 from warptap.faultflow_retarget import FaultflowRetargetError, retarget_faultflow_patterns
@@ -106,6 +107,9 @@ __all__ = [
     # ICL
     "to_icl",
     "import_icl",
+    # BSDL (TAP only)
+    "BsdlEmitError",
+    "to_bsdl",
     # OneHotDataGroup (ICL emit/import only -- never touches the scan chain)
     "OneHotDataGroup",
     "OneHotDataRegister",

@@ -20,5 +20,6 @@ Every exception below subclasses `WarptapError`:
 - [Insertion](insertion.md) — building and inserting a SIB/BSR network
 - [PDL](pdl.md) — driving the network, PDL text emit/import, read verification
 - [ICL](icl.md) — ICL text emit/import
+- [BSDL](bsdl.md) — TAP-only BSDL emit, the file an ICL `AccessLink` points at
 - [Pattern Export](pattern-export.md) — the shared TAP-transaction IR, SVF/STAPL/STIL emitters
 - [Faultflow](faultflow.md) — retargeting faultflow's own exported patterns
