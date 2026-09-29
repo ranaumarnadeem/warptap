@@ -79,13 +79,15 @@ pdl.iApply()
 
 ### 4. Emit a pattern file
 
-Every op `PDLInterpreter` recorded is sitting in `pdl.program` — render it as whichever ATE
-format you need:
+Every op `PDLInterpreter` recorded is sitting in `pdl.program`. It holds data-register scans
+only, so put the instruction load in front: the network moves only while EXTEST is loaded, and
+every reset loads IDCODE. Then render it as whichever ATE format you need:
 
 ```python
-from warptap import to_svf
+from warptap import select_instruction, to_svf
+from warptap.tap_model import OPCODE_EXTEST
 
-print(to_svf(pdl.program))
+print(to_svf(select_instruction(OPCODE_EXTEST) + pdl.program))
 ```
 
 `to_stapl`/`to_stil` render the identical `pdl.program` as STAPL/STIL instead. `to_icl`
