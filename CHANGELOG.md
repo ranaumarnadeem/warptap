@@ -5,67 +5,27 @@ implementation stage.
 
 ## [Unreleased]
 
-### Added
-
-- **TAP and IJTAG network-integrity patterns** (`warptap.tap_integrity`).
-  `build_integrity_program(graph, root)` builds the TCK-level program a production flow
-  plays to test the TAP and the network through TCK, with the TDO it expects from
-  `TapModel` + `SibNetworkRegister`: IDCODE after TRST, the IR's capture pattern and length,
-  BYPASS, every unimplemented opcode (`exhaustive_opcodes`), an explicit IDCODE load, EXTEST
-  with every SIB closed and then each SIB and ScanMux arm opened alone (over-shift probes,
-  each from an all-closed network), each WRITE instrument written with P, ~P and 0 and read
-  back (`write_readback`), and a TMS reset. READ instruments bound to design signals are
-  don't-care wherever their captured value reaches TDO (two lockstep models, capturing all 0s
-  and all 1s; `live_values` pins them). `check_integrity(program, observed)` names the first
-  failing test; `IntegrityProgram.to_json()`/`from_json()` carry the program as a
-  self-contained file (`warptap-tck-program` v1). Cross-simulated against real inserted RTL
-  (flat with a live instrument, nested, ScanMux), including programs built for the wrong
-  network or TAP, which fail in the tests that see the difference; on the RTL from before
-  the fixes below, the program fails `network_closed` and `tms_reset`.
-- **The integrity program tests the TAP's state machine and the network holding still.**
-  `build_integrity_program` gains two test groups, both on by default: `tap_paths` (raw TCK
-  sequences taking every one of the 32 TAP state transitions -- Pause-DR/IR, Exit2, Update ->
-  Select-DR, Capture -> Exit1 without a shift, Select-IR -> Test-Logic-Reset -- with IDCODE,
-  BYPASS and the IR each held in Pause at 0 and at 1 in every bit, and IDCODE and BYPASS
-  captured over their complement) and `network_hold` (SAMPLE/PRELOAD, whose TDO is the
-  network's tail while the network holds still, then one EXTEST scan through the open network
-  paused holding an alternating pattern and its complement, ending with every SIB closed).
-  `SibNetworkRegister` gains `tail()` and `capture_unselected()`: every instrument leaf
-  captures on every Capture-DR, whatever the instruction, which cross-simulating SAMPLE/PRELOAD
-  on a ScanMux network showed (its tail is a leaf's bit). Graded by FaultFlow's fault
-  simulator (stuck-at, sky130 gate level) on autoMBIST's JTAG-wrapped designs, the program
-  alone now detects 95.6% of the TAP's faults instead of 72.7% (dedicated; 95.7% instead of
-  72.5% on self-repair) and 94.6% of the IJTAG TDRs' instead of 86.5% (92.8% instead of 82.0%);
-  an 8000-cycle random TCK walk on top of it finds 12 more faults on the dedicated design. What
-  stays undetected is almost all out of TCK's reach: a register's behaviour under another
-  instruction (every DR read starts with a capture), decodes of opcodes Update-IR never latches,
-  TDO outside the shift states, and most of a SIB's capture logic.
-
-### Fixed
-
-- **The IJTAG network moved on every DR scan, not just under EXTEST.** `insert_sib_network`
-  tied every top-level SIB's `select` to 1, and `tap_core`'s capture/shift/update strobes fire
-  for every instruction's DR scan. So the network shifted, opened and committed under IDCODE
-  (the instruction after every reset) and BYPASS (a board chain passing through): two
-  all-ones DR scans drove every WRITE instrument (`test_mode`, `bist_start`, ...) to 1. A
-  `$eq` decode (`warptap_ijtag_extest_decode`, like `insert_bsr`'s `extest_mode`) now selects
-  the network only while EXTEST is loaded, matching the Python model, which already drove it
-  only under EXTEST. `insert_sib_network` gains `opcode_extest` (default `0b0000`, which must
-  match `tap_core`). Consequence: in a SIB-only design, SAMPLE/PRELOAD still puts the network's
-  tail on TDO but no longer moves the network (it has no data register there; the model already
-  raised for it). The BSDL `DESIGN_WARNING`, `NETWORK_ACCESS_INSTRUCTION`'s comment and the
-  `bsdl_emit`/`icl_emit` docstrings, which said SAMPLE/PRELOAD reaches the network, say so.
-- **Test-Logic-Reset didn't reload the instruction.** IEEE 1149.1 requires Test-Logic-Reset to
-  load IDCODE (BYPASS without one), so five TMS=1 cycles deselect a test-mode instruction
-  without a TRST pin; `tap_core` only did it on `trst_n`. `tap_core.v` and `TapModel` now both
-  reload it on every TCK edge taken in Test-Logic-Reset. The BSDL `DESIGN_WARNING` no longer
-  lists this deviation, and `test_bsdl_emit_cross_sim`, which pinned it, checks the reload.
-- **`tap_core`'s IDCODE/BYPASS shift registers had no reset.** Invisible at TDO (Capture-DR
-  always loads them first), but they started unknown and fed the TDO mux, so a gate-level X
-  check couldn't clear `tdo`. Both now clear on `trst_n`; `TapModel.reset()` clears its
-  built-in BYPASS/IDCODE registers to match (`BypassRegister`/`IdcodeRegister` gain `reset()`).
-
 ## [0.0.3] - 2026-09-29
+
+### Behavior changes
+
+Upgrading from 0.0.2 changes what the inserted TAP does. Check these first.
+
+- **The IJTAG network moves only while EXTEST (`0000`) is loaded.** In 0.0.2 every top-level
+  SIB's `select` was tied to 1, so the network captured, shifted, opened and committed on a DR
+  scan under any instruction: SAMPLE/PRELOAD, IDCODE (loaded by every reset) and BYPASS
+  included. Anything that relied on SAMPLE/PRELOAD, IDCODE or BYPASS moving the network will
+  break; load EXTEST first. Under SAMPLE/PRELOAD the network's tail still reaches TDO, but the
+  network holds still.
+- **A pattern with no instruction load no longer reaches the network.** `PDLInterpreter.program`
+  and the faultflow retargeting functions emit DR scans only. Played straight after a reset
+  (IDCODE loaded), a write-only program took effect by accident in 0.0.2 and now does nothing:
+  prepend `select_instruction(OPCODE_EXTEST)`. No warptap test, fixture or library code path
+  relied on the old behavior; `docs/quickstart.md` and the faultflow guide omitted the EXTEST
+  load and now include it, and the `PDLInterpreter` docstring says it is required.
+- **Entering Test-Logic-Reset through TMS reloads IDCODE.** In 0.0.2 only `trst_n` reset the
+  instruction, so a 5xTMS=1 reset left the previous instruction (e.g. EXTEST) loaded. Anything
+  that relied on the instruction surviving a TMS reset will break.
 
 ### Added
 
@@ -129,31 +89,103 @@ implementation stage.
   gap in what the convenience wrapper's own type/docs *claimed* it could do, not in what the
   underlying insertion machinery could already do.
 
-- **Stage 26 — BSDL emitter for the TAP.** `to_bsdl(entity_name, *, tck_max_freq_hz)`
+- **Stage 26 — BSDL emitter for the TAP.** `to_bsdl(entity_name, *, tck_max_freq_hz,
+  idcode_value=IDCODE_VALUE)`
   (`bsdl_emit.py`, exported with `BsdlEmitError`) writes a BSDL file for the TAP warptap inserts:
   the entity, the five TAP pins, the `TAP_SCAN_*` attributes, `INSTRUCTION_LENGTH`/`OPCODE`/
   `CAPTURE`, `IDCODE_REGISTER`, `REGISTER_ACCESS` and a `DESIGN_WARNING`. Every value comes from
   `tap_model`/`tap_ports`; none is duplicated. It is TAP-only: it declares no `BOUNDARY_LENGTH` or
   `BOUNDARY_REGISTER`, so it is not a chip-level BSDL and a tool that requires a boundary register
   will reject it (the `DESIGN_WARNING` says so). EXTEST (0000) and SAMPLE/PRELOAD (0010) are
-  declared as usual; the warning states that in a SIB design they route TDO to the IJTAG network,
-  not to a boundary register, because `rtl/tap_core.v` presents the SIB chain's tail for every
-  instruction other than IDCODE and BYPASS. `tap_model.NETWORK_ACCESS_INSTRUCTION` (EXTEST) names
+  declared as usual; the warning states that in a SIB design neither selects a boundary register:
+  both put the IJTAG network's tail on TDO (`rtl/tap_core.v` routes it for every instruction
+  other than IDCODE and BYPASS), and only EXTEST moves the network (see the behavior changes
+  above). `tap_model.NETWORK_ACCESS_INSTRUCTION` (EXTEST) names
   the instruction a tester loads to reach the network; `to_icl` and `to_bsdl` both read it from
   there. The emitted text is read back and compared with `tap_model`, and every behavioral claim is
   checked on the real `tap_core.v` under Icarus Verilog: capture pattern, IR length, IDCODE value
   and width, BYPASS depth, EXTEST/SAMPLE/PRELOAD routing, undeclared opcodes acting as BYPASS, and
-  the `DESIGN_WARNING` claims (a TMS-driven reset keeps the instruction, `trst_n` resets it to
-  IDCODE, TDO is low outside the shift states and changes only on the rising edge of TCK). These
-  tests were mutation-checked against wrong BSDL claims and RTL bugs. No independent BSDL parser
-  validates the output: UrJTAG 0.10 from Ubuntu's apt was installed and tried, and it fails on
-  every input, valid or not, so it cannot tell good files from bad (evidence in
-  `tests/test_bsdl_emit.py`). `to_icl(..., include_access_link=False)` output is now pinned
-  byte-for-byte by golden files (`.gitattributes` marks them `-text` so `core.autocrlf` cannot
-  alter them).
+  the `DESIGN_WARNING` claims (a TMS reset and `trst_n` both select IDCODE, TDO is low outside
+  the shift states and changes only on the rising edge of TCK). These tests were
+  mutation-checked against wrong BSDL claims and RTL bugs. No independent BSDL parser validates
+  the output. Three were installed and run: UrJTAG 0.10 (Ubuntu apt) fails on every input,
+  valid or not; `bsdl-parser` can't import on Python 3.10+ (`grako`); `cb_bsdl_parser` raises
+  on every input, valid or not (evidence in `tests/test_bsdl_emit.py`).
+  `to_icl(..., include_access_link=False)` output is now pinned byte-for-byte by golden files
+  (`.gitattributes` marks them `-text` so `core.autocrlf` cannot alter them).
+
+- **A design's own IDCODE: `idcode_value`.** `insert_test_access`, `insert_sib_network` and
+  `to_bsdl` take `idcode_value` (default `tap_model.IDCODE_VALUE`, the placeholder). The
+  inserted `tap_core` gets the value baked into its `IDCODE_VALUE` parameter, imported through
+  Yosys `chparam` as `scan_mux_cell` already is. The default keeps the previous import path,
+  because `chparam` changes Yosys's output even at the default value: default output is
+  byte-identical to before (the inserted Verilog for `real_signal.v` has the same sha256; the
+  BSDL and ICL golden files still match). `tap_model.idcode_value_error` enforces IEEE 1149.1's
+  32 bits with bit 0 set, and `TapModel` (`TapModelError`), `TapConfig` (`TapIntegrityError`),
+  `to_bsdl` (`BsdlEmitError`) and both insertion functions (`SibInsertError`, before anything
+  is ingested) reject anything else; Yosys would otherwise silently truncate a wider value.
+  `to_bsdl` calls only the default value a placeholder. Cross-simulated on real inserted RTL:
+  a custom value shifted out after TRST equals the BSDL's `IDCODE_REGISTER`, and
+  `build_integrity_program(tap=TapConfig(idcode_value=V))` passes on that RTL while a program for
+  the default fails at `reset_instruction`; the test fails if the value is ignored.
+
+- **TAP and IJTAG network-integrity patterns** (`warptap.tap_integrity`).
+  `build_integrity_program(graph, root)` builds the TCK-level program a production flow
+  plays to test the TAP and the network through TCK, with the TDO it expects from
+  `TapModel` + `SibNetworkRegister`: IDCODE after TRST, the IR's capture pattern and length,
+  BYPASS, every unimplemented opcode (`exhaustive_opcodes`), an explicit IDCODE load, EXTEST
+  with every SIB closed and then each SIB and ScanMux arm opened alone (over-shift probes,
+  each from an all-closed network), each WRITE instrument written with P, ~P and 0 and read
+  back (`write_readback`), and a TMS reset. READ instruments bound to design signals are
+  don't-care wherever their captured value reaches TDO (two lockstep models, capturing all 0s
+  and all 1s; `live_values` pins them). `check_integrity(program, observed)` names the first
+  failing test; `IntegrityProgram.to_json()`/`from_json()` carry the program as a
+  self-contained file (`warptap-tck-program` v1). Cross-simulated against real inserted RTL
+  (flat with a live instrument, nested, ScanMux), including programs built for the wrong
+  network or TAP, which fail in the tests that see the difference; on the RTL from before
+  the fixes below, the program fails `network_closed` and `tms_reset`.
+- **The integrity program tests the TAP's state machine and the network holding still.**
+  `build_integrity_program` gains two test groups, both on by default: `tap_paths` (raw TCK
+  sequences taking every one of the 32 TAP state transitions -- Pause-DR/IR, Exit2, Update ->
+  Select-DR, Capture -> Exit1 without a shift, Select-IR -> Test-Logic-Reset -- with IDCODE,
+  BYPASS and the IR each held in Pause at 0 and at 1 in every bit, and IDCODE and BYPASS
+  captured over their complement) and `network_hold` (SAMPLE/PRELOAD, whose TDO is the
+  network's tail while the network holds still, then one EXTEST scan through the open network
+  paused holding an alternating pattern and its complement, ending with every SIB closed).
+  `SibNetworkRegister` gains `tail()` and `capture_unselected()`: every instrument leaf
+  captures on every Capture-DR, whatever the instruction, which cross-simulating SAMPLE/PRELOAD
+  on a ScanMux network showed (its tail is a leaf's bit). Graded by FaultFlow's fault
+  simulator (stuck-at, sky130 gate level) on autoMBIST's JTAG-wrapped designs, the program
+  alone now detects 95.6% of the TAP's faults instead of 72.7% (dedicated; 95.7% instead of
+  72.5% on self-repair) and 94.6% of the IJTAG TDRs' instead of 86.5% (92.8% instead of 82.0%);
+  an 8000-cycle random TCK walk on top of it finds 12 more faults on the dedicated design. What
+  stays undetected is almost all out of TCK's reach: a register's behaviour under another
+  instruction (every DR read starts with a capture), decodes of opcodes Update-IR never latches,
+  TDO outside the shift states, and most of a SIB's capture logic.
 
 ### Fixed
 
+- **The IJTAG network moved on every DR scan, not just under EXTEST.** `insert_sib_network`
+  tied every top-level SIB's `select` to 1, and `tap_core`'s capture/shift/update strobes fire
+  for every instruction's DR scan. So the network shifted, opened and committed under IDCODE
+  (the instruction after every reset) and BYPASS (a board chain passing through): two
+  all-ones DR scans drove every WRITE instrument (`test_mode`, `bist_start`, ...) to 1. A
+  `$eq` decode (`warptap_ijtag_extest_decode`, like `insert_bsr`'s `extest_mode`) now selects
+  the network only while EXTEST is loaded, matching the Python model, which already drove it
+  only under EXTEST. `insert_sib_network` gains `opcode_extest` (default `0b0000`, which must
+  match `tap_core`). Consequence: in a SIB-only design, SAMPLE/PRELOAD still puts the network's
+  tail on TDO but no longer moves the network (it has no data register there; the model already
+  raised for it). The BSDL `DESIGN_WARNING`, `NETWORK_ACCESS_INSTRUCTION`'s comment and the
+  `bsdl_emit`/`icl_emit` docstrings, which said SAMPLE/PRELOAD reaches the network, say so.
+- **Test-Logic-Reset didn't reload the instruction.** IEEE 1149.1 requires Test-Logic-Reset to
+  load IDCODE (BYPASS without one), so five TMS=1 cycles deselect a test-mode instruction
+  without a TRST pin; `tap_core` only did it on `trst_n`. `tap_core.v` and `TapModel` now both
+  reload it on every TCK edge taken in Test-Logic-Reset. The BSDL `DESIGN_WARNING` no longer
+  lists this deviation, and `test_bsdl_emit_cross_sim`, which pinned it, checks the reload.
+- **`tap_core`'s IDCODE/BYPASS shift registers had no reset.** Invisible at TDO (Capture-DR
+  always loads them first), but they started unknown and fed the TDO mux, so a gate-level X
+  check couldn't clear `tdo`. Both now clear on `trst_n`; `TapModel.reset()` clears its
+  built-in BYPASS/IDCODE registers to match (`BypassRegister`/`IdcodeRegister` gain `reset()`).
 - **`to_icl`'s `AccessLink` named an instruction the TAP does not have.** The block used the
   instruction name `wdr_select`, copied from the IJTAG benchmark set's example chip, whose
   instruction blocks are named `wir_select`/`wdr_select`/`clk_select`; it is not part of ICL's
@@ -175,17 +207,29 @@ implementation stage.
   registered JEDEC manufacturer ID; its manufacturer field decodes to JEP106 bank 1, code 0x01,
   which is an assigned code as far as we know (the JEP106 table was not checked). The value is
   unchanged, and `tap_core.v`'s default must move with it if it is ever replaced.
+- **Tests backed by the vendored `icl_parser` skipped silently without it.** A checkout without
+  the `third_party/icl_parser` submodule (every `git worktree`, until initialized) skipped 77
+  grammar, ICL and PDL tests. They now fail with the fix-it command (`git submodule update
+  --init third_party/icl_parser`); `WARPTAP_ALLOW_MISSING_ICL_PARSER=1` restores the skip. The
+  `dev` extra now installs the parser's packages (`antlr4-python3-runtime==4.7.2`, `z3-solver`,
+  `sympy`, `networkx`), the README documents the setup, and the ICL/PDL import guide points at
+  the fork the submodule pins (upstream lacks the compiled PDL parser `import_pdl` needs).
 
 ### Explicitly out of scope
 
-A boundary-scan register in the BSDL (designs with one, from `bsr_insert.py`, get no
-`BOUNDARY_REGISTER` description); a dedicated instruction for the IJTAG network (it still shares
-opcode 0000 with EXTEST, and SAMPLE/PRELOAD also reach it); deciding whether the `AccessLink`'s
-`ScanInterface` list should name every top-level slot rather than only the first (no readable
-source settles it, and the top-level slots' `SEL` ports are never bound in the emitted `Instance`
-statements); and the deviations from IEEE 1149.1 in `rtl/tap_core.v` that the `DESIGN_WARNING`
-reports rather than fixes (Test-Logic-Reset reached through TMS does not reset the instruction,
-TDO changes on the rising edge and is driven low rather than tri-stated outside the shift states).
+- A boundary-scan register in the BSDL: designs with one, from `bsr_insert.py`, get no
+  `BOUNDARY_REGISTER` description, and `insert_bsr` does not take `idcode_value`.
+- A dedicated instruction for the IJTAG network: it still shares opcode 0000 with EXTEST.
+- The `AccessLink`'s `ScanInterface` list still names only the chain's first top-level slot, as a
+  bare instance name. Reading the MAST project's retargeter source (not running it) indicates it
+  needs exactly one entry, the chain's *last* slot as `<instance>.client`, to reach the whole
+  chain; that has not been verified by running a retargeter, so the emitter is unchanged.
+- Width>1 instrument registers in the emitted ICL source scan-out from the bit scan-in enters
+  (`ScanRegister DR[w-1:0]` with `Source DR[w-1]`), which the published ICL convention and the
+  vendored parser read as disconnecting the register's other bits. The RTL is unaffected; the
+  ICL description of it is suspect. Not yet verified with a retargeter, so unchanged.
+- The IEEE 1149.1 deviations in `rtl/tap_core.v` the `DESIGN_WARNING` reports: TDO changes on
+  the rising edge of TCK and is driven low, not tri-stated, outside the shift states.
 
 ## [0.0.2] - 2026-09-16
 
