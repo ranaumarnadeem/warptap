@@ -27,8 +27,10 @@ under SAMPLE/PRELOAD its tail reaches ``tdo`` but it holds still (see
 The network's length depends on SIB state, so it cannot be declared as a fixed-length
 ``REGISTER_ACCESS`` entry and is deliberately not.
 
-**The IDCODE value is a placeholder** (see :data:`warptap.tap_model.IDCODE_VALUE`), emitted as-is
-because the BSDL must match the hardware.
+**The IDCODE** is whatever the design's ``tap_core`` was built with: pass ``to_bsdl`` the same
+``idcode_value`` given to ``insert_test_access``/``insert_sib_network``. The default,
+:data:`warptap.tap_model.IDCODE_VALUE`, is a placeholder, and only then does the output call it
+one.
 
 **No independent BSDL parser validates this output.** The one candidate that would accept a
 TAP-only file, UrJTAG (its parser checks syntax and structure only), was installed and tried; the
@@ -56,6 +58,7 @@ from warptap.tap_model import (
     OPCODE_IDCODE,
     OPCODE_SAMPLE_PRELOAD,
     bypass_opcode,
+    idcode_value_error,
 )
 from warptap.tap_ports import TCK, TDI, TDO, TMS, TRST_N
 
@@ -107,7 +110,7 @@ def _vhdl_string(text: str, width: int = _PIN_MAP_STRING_WIDTH) -> str:
     return " &\n      ".join(f'"{piece}"' for piece in pieces)
 
 
-def _design_warning() -> str:
+def _design_warning(placeholder_idcode: bool) -> str:
     """Everything a reader of this BSDL must know that the standard attributes can't say. Built
     from the same constants as the attributes above it so the two can't disagree."""
     ir_width = DEFAULT_IR_WIDTH
@@ -125,14 +128,21 @@ def _design_warning() -> str:
         "declared in REGISTER_ACCESS. "
         f"Load {NETWORK_ACCESS_BSDL_INSTRUCTION} to reach that network. "
         "Not fully IEEE 1149.1 conformant: TDO changes on the rising edge of TCK and is driven "
-        "low, not tri-stated, outside the shift states, and the IDCODE value is a placeholder, "
-        "not a registered manufacturer ID. "
+        "low, not tri-stated, outside the shift states"
+        + (
+            ", and the IDCODE value is a placeholder, not a registered manufacturer ID. "
+            if placeholder_idcode
+            else ". "
+        )
+        +
         f"PHYSICAL_PIN_MAP {_PHYSICAL_PIN_MAP} is a placeholder: no physical package is "
         "described."
     )
 
 
-def to_bsdl(entity_name: str, *, tck_max_freq_hz: float) -> str:
+def to_bsdl(
+    entity_name: str, *, tck_max_freq_hz: float, idcode_value: int = IDCODE_VALUE
+) -> str:
     """Render the BSDL for the TAP warptap inserts, as the entity ``entity_name`` (use the same
     string passed to ``to_icl`` as its ``BSDLEntity`` -- the real top module's name).
 
@@ -143,8 +153,15 @@ def to_bsdl(entity_name: str, *, tck_max_freq_hz: float) -> str:
     isn't a valid BSDL/VHDL identifier (letters, digits, single underscores, starts with a letter,
     not a VHDL reserved word) or a non-positive/non-finite frequency.
 
+    ``idcode_value`` must be the IDCODE the design's ``tap_core`` was built with (the
+    ``idcode_value`` given to ``insert_test_access``/``insert_sib_network``): a 32-bit value with
+    bit 0 set, as IEEE 1149.1 requires, else :class:`BsdlEmitError`. Only the default,
+    :data:`~warptap.tap_model.IDCODE_VALUE`, is described as a placeholder in the output.
+
     See the module docstring for what this file is not (a chip-level BSDL) and what is and isn't
     independently validated."""
+    if problem := idcode_value_error(idcode_value):
+        raise BsdlEmitError(problem)
     if not _IDENTIFIER.match(entity_name) or entity_name.lower() in _VHDL_RESERVED:
         raise BsdlEmitError(
             f"{entity_name!r} is not a valid BSDL entity name: it must be a VHDL identifier "
@@ -173,10 +190,11 @@ def to_bsdl(entity_name: str, *, tck_max_freq_hz: float) -> str:
         f'    "{pin.ljust(pin_width)} : {pin}{"," if pin != pins[-1] else ""}"' for pin in pins
     ]
 
-    version = IDCODE_VALUE >> 28
-    part = (IDCODE_VALUE >> 12) & 0xFFFF
-    manufacturer = (IDCODE_VALUE >> 1) & 0x7FF
-    required_one = IDCODE_VALUE & 1
+    placeholder_idcode = idcode_value == IDCODE_VALUE
+    version = idcode_value >> 28
+    part = (idcode_value >> 12) & 0xFFFF
+    manufacturer = (idcode_value >> 1) & 0x7FF
+    required_one = idcode_value & 1
 
     opcode_entries = [
         ("EXTEST", OPCODE_EXTEST),
@@ -229,14 +247,15 @@ def to_bsdl(entity_name: str, *, tck_max_freq_hz: float) -> str:
         f"  attribute IDCODE_REGISTER of {name} : entity is",
         f'    "{_bits(version, 4)}" &{" " * 18}-- version',
         f'    "{_bits(part, 16)}" &{" " * 6}-- part number',
-        f'    "{_bits(manufacturer, 11)}" &{" " * 11}-- manufacturer (placeholder)',
+        f'    "{_bits(manufacturer, 11)}" &{" " * 11}-- manufacturer'
+        + (" (placeholder)" if placeholder_idcode else ""),
         f'    "{_bits(required_one, 1)}";{" " * 22}-- required by IEEE 1149.1',
         "",
         f"  attribute REGISTER_ACCESS of {name} : entity is",
         '    "DEVICE_ID (IDCODE)";',
         "",
         f"  attribute DESIGN_WARNING of {name} : entity is",
-        "      " + _vhdl_string(_design_warning()) + ";",
+        "      " + _vhdl_string(_design_warning(placeholder_idcode)) + ";",
         "",
         f"end {name};",
         "",
