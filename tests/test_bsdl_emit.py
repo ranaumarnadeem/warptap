@@ -17,10 +17,15 @@ worked around (the same discipline as the PDL-emit tests). What was tried:
   identically, so the tool cannot tell good from bad. ``strace`` shows it opening the file and
   then reading stdin, and ``gdb`` puts the crash in ``bsdl2jtag``'s own ``main`` on the error
   path. A test built on it would prove nothing. Untried: building upstream UrJTAG from source.
-- Found by research but not run here: ``bsdl-parser`` (depends on ``grako``, which upstream reports
-  broken on Python 3.10+, and its grammar requires the boundary register), ``cb_bsdl_parser``
-  (needs an ANTLR runtime that conflicts with the pinned 4.7.2, and crashes without a boundary
-  register); ``antlr/grammars-v4`` has no BSDL grammar.
+- *bsdl-parser* 0.1.1 (PyPI, cyrozap's grammar), installed in a throwaway Python 3.12 venv and run:
+  its ``bsdl2json`` fails to import -- ``grako`` 3.99.9 does ``from collections import Mapping``,
+  removed in Python 3.10. Its grammar also makes the boundary register mandatory.
+- *cb_bsdl_parser* 0.12.0 (PyPI), installed in a separate venv (it needs ANTLR runtime 4.13, which
+  conflicts with the 4.7.2 this suite pins) and run: ``CBBsdl(path, run_checks=False)`` raises
+  ``IndexError`` in ``build_bsr_content`` for this file, for a deliberately broken copy of it and
+  for plain garbage alike, and its lexer reports token errors on text inside BSDL string
+  literals (the ``/`` in "SAMPLE/PRELOAD", the ``+`` in ``1.000000e+07``).
+- ``antlr/grammars-v4`` has no BSDL grammar.
 - Every standard-following parser requires ``BOUNDARY_LENGTH``/``BOUNDARY_REGISTER``, which this
   TAP-only file deliberately omits, so no independent tool could check its conformance anyway.
 """
