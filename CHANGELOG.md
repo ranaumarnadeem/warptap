@@ -112,7 +112,24 @@ implementation stage.
   falls back to the original every-position behavior when a manifest has no `load_care` (older
   faultflow, random-fill patterns, non-compression campaigns).
 
-- **Stage 25 — BSDL emitter for the TAP.** `to_bsdl(entity_name, *, tck_max_freq_hz)`
+- **Stage 25 — `insert_test_access()` accepts `HierarchySpec`.** Its `specs` parameter was typed
+  `List[InstrumentSpec]` since the Library-quality pass (0.0.1), predating this project's own
+  nested-SIB/ScanMux work (Stage 4's `SibNode.nested`, and the mux-arm generalization that
+  followed) -- purely stale, not a deliberate restriction: the function's own body already
+  forwarded `specs` straight to `build_sib_plan()` unchanged, which has accepted a
+  `HierarchySpec` in the mix since that same nested-network work landed. Widened to a new public
+  `TestAccessSpec = Union[InstrumentSpec, HierarchySpec]` alias (re-exported from
+  `warptap/__init__.py` alongside `insert_test_access`), docstring corrected to stop calling the
+  built network "flat", and a new test
+  (`tests/test_pipeline.py::test_insert_test_access_accepts_a_hierarchy_spec`) proves the
+  *pipeline* entry point specifically -- not just `build_sib_plan`/`insert_sib_network` directly,
+  which is all the existing nested-SIB test suite had ever exercised -- correctly threads a
+  nested `HierarchySpec` end to end (structure, flat sibling addressing, and a working
+  `PDLInterpreter.iApply()` against the nested leaf). No RTL or behavioral change: this closes a
+  gap in what the convenience wrapper's own type/docs *claimed* it could do, not in what the
+  underlying insertion machinery could already do.
+
+- **Stage 26 — BSDL emitter for the TAP.** `to_bsdl(entity_name, *, tck_max_freq_hz)`
   (`bsdl_emit.py`, exported with `BsdlEmitError`) writes a BSDL file for the TAP warptap inserts:
   the entity, the five TAP pins, the `TAP_SCAN_*` attributes, `INSTRUCTION_LENGTH`/`OPCODE`/
   `CAPTURE`, `IDCODE_REGISTER`, `REGISTER_ACCESS` and a `DESIGN_WARNING`. Every value comes from
