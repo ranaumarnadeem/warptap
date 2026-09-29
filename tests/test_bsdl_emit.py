@@ -5,6 +5,24 @@ Pure Python, no external tool. The structural tests read the *emitted text* back
 independently of ``bsdl_emit``), so a formatting slip or a wrong bit order in the emitter fails
 here. The golden file only pins the exact format; it does not by itself prove the values are
 right -- the structural tests and ``test_bsdl_emit_cross_sim.py`` (real TAP RTL under Icarus) do.
+
+**No independent BSDL parser validates this output**, and that is stated plainly rather than
+worked around (the same discipline as the PDL-emit tests). What was tried:
+
+- *UrJTAG* (``sudo apt install urjtag``, Ubuntu noble ``0.10+r2007-1.2build4``): the only
+  candidate found that would accept a TAP-only file (it checks syntax and structure, not
+  conformance). Both ``jtag``'s ``bsdl test``/``bsdl dump`` and ``bsdl2jtag`` are unusable here:
+  every input fails with "BSDL file ... contains errors in VHDL stage" and then SIGSEGV -- a
+  hand-written valid ``entity`` and a deliberately invalid one (missing ``;``) behave
+  identically, so the tool cannot tell good from bad. ``strace`` shows it opening the file and
+  then reading stdin, and ``gdb`` puts the crash in ``bsdl2jtag``'s own ``main`` on the error
+  path. A test built on it would prove nothing. Untried: building upstream UrJTAG from source.
+- Found by research but not run here: ``bsdl-parser`` (depends on ``grako``, which upstream reports
+  broken on Python 3.10+, and its grammar requires the boundary register), ``cb_bsdl_parser``
+  (needs an ANTLR runtime that conflicts with the pinned 4.7.2, and crashes without a boundary
+  register); ``antlr/grammars-v4`` has no BSDL grammar.
+- Every standard-following parser requires ``BOUNDARY_LENGTH``/``BOUNDARY_REGISTER``, which this
+  TAP-only file deliberately omits, so no independent tool could check its conformance anyway.
 """
 
 from __future__ import annotations

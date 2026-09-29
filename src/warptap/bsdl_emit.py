@@ -28,11 +28,14 @@ a fixed-length ``REGISTER_ACCESS`` entry and is deliberately not.
 **The IDCODE value is a placeholder** (see :data:`warptap.tap_model.IDCODE_VALUE`), emitted as-is
 because the BSDL must match the hardware.
 
-**Independent validation.** UrJTAG's BSDL parser is the only independent parser found that accepts
-a TAP-only file, and it checks syntax and structure only (see
-``tests/test_bsdl_emit_urjtag.py``). No independent tool can check conformance of this file: it is
-non-conformant by design. The semantic claims are checked instead by driving the real TAP RTL
-under Icarus (``tests/test_bsdl_emit_cross_sim.py``).
+**No independent BSDL parser validates this output.** The one candidate that would accept a
+TAP-only file, UrJTAG (its parser checks syntax and structure only), was installed and tried; the
+Ubuntu-packaged 0.10+r2007 build is unusable -- see ``tests/test_bsdl_emit.py``'s docstring for the
+evidence. Standard-following parsers require the boundary register, so no independent tool could
+check conformance of this file anyway: it is non-conformant by design. What is checked instead:
+the emitted text is read back and compared with ``tap_model`` (``tests/test_bsdl_emit.py``), and
+every behavioral claim is verified by driving the real TAP RTL under Icarus
+(``tests/test_bsdl_emit_cross_sim.py``).
 """
 
 from __future__ import annotations
