@@ -180,16 +180,16 @@ def test_to_icl_access_link_optional():
     assert "AccessLink" not in without_link
 
 
-def test_to_icl_access_link_wdr_select_has_no_activesignals():
-    """Confirmed real: ActiveSignals belongs to wir_select (naming the IR-decode signal), not
-    wdr_select -- an earlier draft of this emitter incorrectly copied it into wdr_select too."""
+def test_to_icl_access_link_instruction_block_has_no_activesignals():
+    """ActiveSignals names signals the AccessLink itself provides (the benchmark's ``toSWIR``);
+    warptap's network needs none, so the instruction block carries only a ScanInterface."""
     graph = PhysicalGraph(
         chain=(SibNode(sib_name="sib_a", instrument=_read_instrument(name="a", width=1)),)
     )
     root = ModuleInstance(name="chip", children=(ModuleInstance(name="a"),))
     text = to_icl(graph, root, include_access_link=True)
-    wdr_line = next(line for line in text.splitlines() if "wdr_select" in line)
-    assert "ActiveSignals" not in wdr_line
+    instruction_line = next(line for line in text.splitlines() if "EXTEST {" in line)
+    assert "ActiveSignals" not in instruction_line
 
 
 def test_to_icl_each_distinct_instrument_type_rendered_once():

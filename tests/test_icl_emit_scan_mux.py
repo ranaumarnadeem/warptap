@@ -202,9 +202,9 @@ def test_to_icl_collects_muxes_nested_inside_arms_too():
     assert "Module warptap_scan_mux_mux_inner {" in text
 
 
-def test_to_icl_wdr_select_references_mux_when_it_is_the_first_slot():
+def test_to_icl_access_link_references_mux_when_it_is_the_first_slot():
     graph = PhysicalGraph(chain=(_mux(),))
     root = ModuleInstance(name="chip")
     text = to_icl(graph, root, include_access_link=True)
-    wdr_line = next(line for line in text.splitlines() if "wdr_select" in line)
-    assert "warptap_scan_mux_mux_a" in wdr_line
+    instruction_line = next(line for line in text.splitlines() if "EXTEST {" in line)
+    assert "warptap_scan_mux_mux_a" in instruction_line
