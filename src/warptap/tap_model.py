@@ -57,7 +57,9 @@ class Instruction(enum.Enum):
 # The instruction an external tester loads to reach the IJTAG (SIB/TDR) network. rtl/tap_core.v's
 # TDO mux presents ``external_dr_tdo`` -- where the network's tail plugs in -- for any latched
 # instruction that is neither IDCODE nor BYPASS, and Update-IR normalizes every reserved opcode
-# to BYPASS, so both EXTEST and SAMPLE_PRELOAD reach it. EXTEST is the one named to consumers
+# to BYPASS, so both EXTEST and SAMPLE_PRELOAD put the network's tail on TDO; but sib_insert
+# decodes EXTEST into every top-level SIB's select, so the network captures, shifts and updates
+# only under EXTEST (under SAMPLE_PRELOAD it holds still). EXTEST is the one named to consumers
 # (the ICL AccessLink, the BSDL); in real 1149.1 EXTEST means "drive the boundary register",
 # which is only true of a design with a boundary-scan register and no SIB network (the two never
 # coexist, see sib_insert.insert_sib_network).

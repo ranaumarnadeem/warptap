@@ -15,11 +15,18 @@ Deliberately fully independent of ``bsr_insert.py``/``tap_core.v`` (implementati
 instruction, zero edits to any Stage 1-3 file. ``_import_template`` is duplicated rather than
 shared (exactly two occurrences -- the textbook "rule of three" case for not extracting yet).
 
-Unlike ``bsr_insert.py``, no ``extest_mode`` decode cell is built here: ``sib_cell.v`` has no
-``extest_mode`` port at all (it isn't a pin-driving cell gated by which TAP instruction is
-active -- it shifts/captures/updates purely as a function of ``capture_dr``/``shift_dr``/
-``update_dr``, which are already instruction-independent per-state strobes from ``tap_core``),
-so there is nothing in this insertion pass to consume it.
+The network is selected by ``EXTEST`` only. ``tap_core``'s ``capture_dr``/``shift_dr``/
+``update_dr`` are per-state strobes that fire on every instruction's DR scan, so, like
+``bsr_insert.py``'s ``extest_mode``, one ``$eq`` decode cell (``warptap_ijtag_extest_decode``)
+compares the TAP's current instruction with ``EXTEST`` and drives ``warptap_ijtag_select``,
+every top-level slot's ``select``. Nested slots and WRITE commits are gated through it (a
+SIB's ``nested_active``/``nested_select`` both AND in its own ``select``). Without it, a DR
+scan under ``IDCODE`` (loaded by every reset) or ``BYPASS`` (a board chain passing through)
+shifted, opened and committed the network: two all-ones scans raised every WRITE
+instrument. ``bc1_shift_only``/``instrument_write`` shift registers still move on any DR
+scan, which is harmless: they reach ``tdo`` only through an open SIB, and a commit needs one.
+``SAMPLE_PRELOAD``, which ``tap_core`` also routes to ``external_dr_tdo``, therefore has no
+working data register in a SIB-only design (its model has none either).
 
 A :class:`~warptap.icl_model.ScanMuxNode` slot instantiates ``rtl/scan_mux_cell.v`` instead,
 one FRESHLY-IMPORTED, uniquely-named module PER mux instance -- NOT the shared-import-once
@@ -66,10 +73,11 @@ _SIB_CELL = "sib_cell"
 _INSTRUMENT_WRITE = "instrument_write"
 _SCAN_MUX_CELL = "scan_mux_cell"
 
-# Must match rtl/tap_core.v's own parameter default: v1 never overrides it on the
-# hierarchical instance (same reasoning as bsr_insert.py's DEFAULT_IR_WIDTH), so this is
-# the actual value in effect, not just a convenient default to relax later.
+# Must match rtl/tap_core.v's own parameter defaults: v1 never overrides them on the
+# hierarchical instance (same reasoning as bsr_insert.py's DEFAULT_IR_WIDTH), so these are
+# the actual values in effect, not just a convenient default to relax later.
 DEFAULT_IR_WIDTH = 4
+DEFAULT_OPCODE_EXTEST = 0b0000
 
 
 class SibInsertError(WarptapError):
@@ -235,15 +243,15 @@ def _insert_chain(
     yosys_command: str | None,
 ) -> list[Bit]:
     """One level of a chain: each slot becomes one ``sib_cell`` instance, its ``select``
-    wired to ``select_bits`` (the constant 1 for a top-level chain; a parent SIB's own
-    ``nested_select`` output for a nested one -- exactly the same signal
-    ``instrument_write.v``'s WRITE instruments already consume today, just fed to another
-    ``sib_cell`` instance instead of an instrument cell; confirmed sound against real RTL,
-    ``tests/test_sib_cell_nested_cross_sim.py``). A leaf slot gets its instrument's own
-    chained bit cells wired between the SIB's ``nested_si``/``nested_so``, exactly as
-    before; a hierarchy slot (``slot.nested`` populated) recurses instead, with its own
-    ``nested_si``/``nested_select`` becoming the recursive call's ``entry_bits``/
-    ``select_bits`` and its returned final ``so`` becoming this slot's own ``nested_so``.
+    wired to ``select_bits`` (the TAP's EXTEST decode for a top-level chain; a parent SIB's
+    own ``nested_active`` output for a nested one -- see the hierarchy case below for why not
+    ``nested_select``, the signal ``instrument_write.v``'s WRITE instruments consume;
+    confirmed sound against real RTL, ``tests/test_sib_cell_nested_cross_sim.py``). A leaf
+    slot gets its instrument's own chained bit cells wired between the SIB's
+    ``nested_si``/``nested_so``, exactly as before; a hierarchy slot (``slot.nested``
+    populated) recurses instead, with its own ``nested_si``/``nested_active`` becoming the
+    recursive call's ``entry_bits``/``select_bits`` and its returned final ``so`` becoming
+    this slot's own ``nested_so``.
     Returns the chain's own final ``so`` bits, threaded as the next slot's (or the caller's)
     ``entry_bits``."""
     prev_so = entry_bits
@@ -510,6 +518,7 @@ def insert_sib_network(
     graph: PhysicalGraph,
     *,
     ir_width: int = DEFAULT_IR_WIDTH,
+    opcode_extest: int = DEFAULT_OPCODE_EXTEST,
     yosys_command: str | None = None,
 ) -> None:
     """Insert a TAP + SIB network into ``netlist``'s ``top`` module, matching ``graph``
@@ -539,14 +548,16 @@ def insert_sib_network(
     ``iApply``'s phase-1 retargeting shift (which walks every instrument cell's
     ``capture_dr``/``shift_dr``/``update_dr`` unconditionally, matching every other cell)
     would commit garbage into this instrument's real host signal, including while
-    retargeting *away* from it. Mutates ``netlist`` in place and returns
-    ``None`` -- matching ``insert_bsr()``'s convention; the caller already has the
-    :class:`~warptap.icl_model.ModuleInstance` tree from ``build_sib_plan`` for dotted-
-    address resolution, since instrument naming (unlike Yosys cell instance naming) is
-    decided entirely at planning time, not here.
+    retargeting *away* from it. Every top-level slot's ``select`` is the TAP's EXTEST
+    decode, so none of this moves outside EXTEST (see this module's docstring). Mutates
+    ``netlist`` in place and returns ``None`` -- matching ``insert_bsr()``'s convention; the
+    caller already has the :class:`~warptap.icl_model.ModuleInstance` tree from
+    ``build_sib_plan`` for dotted-address resolution, since instrument naming (unlike Yosys
+    cell instance naming) is decided entirely at planning time, not here.
 
-    ``ir_width`` must match ``rtl/tap_core.v``'s actual compiled ``IR_WIDTH`` parameter
-    (its own default, currently) since this function never overrides it on the instance.
+    ``ir_width``/``opcode_extest`` must match ``rtl/tap_core.v``'s actual compiled
+    parameters (its own defaults, currently) since this function never overrides them on
+    the instance.
     """
     top_mod = netlist.module(top)
     # Snapshot before any detach_port() calls below -- mirrors bsr_insert.py's own
@@ -581,9 +592,24 @@ def insert_sib_network(
     # call created, corrupting it.
     detached_bits_by_port: dict[str, list[Bit]] = {}
 
+    # The network's DR is EXTEST's: select it only while EXTEST is the current instruction
+    # (bsr_insert.py's extest_mode decode, same cell shape).
+    ijtag_select_bits = top_mod.new_wire(1, name="warptap_ijtag_select")
+    opcode_bits: list[Bit] = [str((opcode_extest >> i) & 1) for i in range(ir_width)]
+    top_mod.add_cell(
+        "warptap_ijtag_extest_decode",
+        "$eq",
+        parameters={
+            "A_SIGNED": 0, "B_SIGNED": 0,
+            "A_WIDTH": ir_width, "B_WIDTH": ir_width, "Y_WIDTH": 1,
+        },
+        port_directions={"A": "input", "B": "input", "Y": "output"},
+        connections={"A": current_instruction_bits, "B": opcode_bits, "Y": ijtag_select_bits},
+    )
+
     prev_so = _insert_chain(
         netlist, top_mod, graph.chain,
-        entry_bits=tdi_bits, select_bits=["1"],  # every top-level SIB is unconditionally reachable
+        entry_bits=tdi_bits, select_bits=ijtag_select_bits,
         tck_bits=tck_bits, trst_n_bits=trst_n_bits,
         capture_dr_bits=capture_dr_bits, shift_dr_bits=shift_dr_bits, update_dr_bits=update_dr_bits,
         port_bits_by_name=port_bits_by_name, detached_bits_by_port=detached_bits_by_port,

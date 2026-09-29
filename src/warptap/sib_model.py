@@ -19,9 +19,10 @@ which is fine at this project's scale.
 always-block (capture and shift too), so it must stay asserted for a parent's entire open
 window, not flicker with the parent's own ``shift_ff`` while it mirrors varying content
 mid-shift. Every recursive method below threads a ``parent_open`` flag downward for exactly
-this reason -- ``True`` unconditionally at the top level (every top-level slot's own ``select``
-is hardwired to constant 1), a parent's own ``sib_po`` (or, for a mux parent, whether its own
-currently-matched arm is the one being walked) one level down.
+this reason -- ``True`` at the top level (every top-level slot's own ``select`` is the TAP's
+EXTEST decode, and ``TapModel`` drives this register only under EXTEST), a parent's own
+``sib_po`` (or, for a mux parent, whether its own currently-matched arm is the one being
+walked) one level down.
 
 **A mux arm generalizes this the same way ``rtl/scan_mux_cell.v`` does** (multi-arm ScanMux
 plan Phase 0/3): ``sib_shift_ff``/``sib_po`` become ``shift_ff``/``po`` lists of

@@ -20,10 +20,12 @@ this module attempts.
 
 **What EXTEST means here.** In real 1149.1, EXTEST drives the boundary register. In a warptap
 SIB design there is none: ``rtl/tap_core.v`` presents the SIB chain's tail (``external_dr_tdo``) at
-``tdo`` for every instruction that is neither IDCODE nor BYPASS, so EXTEST *and* SAMPLE/PRELOAD
-reach the IJTAG network (see :data:`warptap.tap_model.NETWORK_ACCESS_INSTRUCTION`). The emitted
-``DESIGN_WARNING`` says so. The network's length depends on SIB state, so it cannot be declared as
-a fixed-length ``REGISTER_ACCESS`` entry and is deliberately not.
+``tdo`` for every instruction that is neither IDCODE nor BYPASS, but :mod:`warptap.sib_insert`
+decodes EXTEST into every top-level SIB's ``select``, so only EXTEST moves the IJTAG network:
+under SAMPLE/PRELOAD its tail reaches ``tdo`` but it holds still (see
+:data:`warptap.tap_model.NETWORK_ACCESS_INSTRUCTION`). The emitted ``DESIGN_WARNING`` says so.
+The network's length depends on SIB state, so it cannot be declared as a fixed-length
+``REGISTER_ACCESS`` entry and is deliberately not.
 
 **The IDCODE value is a placeholder** (see :data:`warptap.tap_model.IDCODE_VALUE`), emitted as-is
 because the BSDL must match the hardware.
@@ -116,9 +118,11 @@ def _design_warning() -> str:
         "or BOUNDARY_REGISTER is declared, so a tool that requires a boundary register will "
         "reject this file. "
         f"{NETWORK_ACCESS_BSDL_INSTRUCTION} ({extest}) and SAMPLE/PRELOAD ({sample_preload}) do "
-        "not select a boundary register: they connect TDO to the IEEE 1687 IJTAG network (the "
-        "SIB chain) described by the companion ICL AccessLink. Its length depends on SIB state, "
-        "so it is not declared in REGISTER_ACCESS. "
+        "not select a boundary register: both put the tail of the IEEE 1687 IJTAG network (the "
+        "SIB chain) described by the companion ICL AccessLink on TDO, but only "
+        f"{NETWORK_ACCESS_BSDL_INSTRUCTION} selects the network, so only under it does the "
+        "network capture, shift and update. Its length depends on SIB state, so it is not "
+        "declared in REGISTER_ACCESS. "
         f"Load {NETWORK_ACCESS_BSDL_INSTRUCTION} to reach that network. "
         "Not fully IEEE 1149.1 conformant: TDO changes on the rising edge of TCK and is driven "
         "low, not tri-stated, outside the shift states, and the IDCODE value is a placeholder, "

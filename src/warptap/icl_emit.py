@@ -76,8 +76,10 @@ clause text, which is paywalled and was not read.
 This emitter names ``EXTEST`` -- :data:`warptap.bsdl_emit.NETWORK_ACCESS_BSDL_INSTRUCTION`, the
 instruction :mod:`warptap.bsdl_emit` declares in the BSDL it writes. ``rtl/tap_core.v`` presents
 ``external_dr_tdo`` (where the SIB chain plugs in) at ``tdo`` for any instruction that decodes to
-neither ``IDCODE`` nor ``BYPASS``, so ``SAMPLE``/``PRELOAD`` reach the same network; only
-``EXTEST`` is named. (An earlier version emitted the instruction name ``wdr_select`` and its
+neither ``IDCODE`` nor ``BYPASS``, but :mod:`warptap.sib_insert` decodes ``EXTEST`` from the
+current instruction into every top-level SIB's ``select``, so the chain captures, shifts and
+updates only under ``EXTEST``; under ``SAMPLE``/``PRELOAD`` it reaches ``tdo`` but holds
+still. (An earlier version emitted the instruction name ``wdr_select`` and its
 docstrings claimed it named ``EXTEST``: ``wdr_select`` is the instruction name in the benchmark
 file whose shape this emitter copied, not part of ICL's syntax, and no TAP warptap inserts has
 an instruction of that name.)
