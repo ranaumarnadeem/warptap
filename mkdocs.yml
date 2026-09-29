@@ -52,6 +52,7 @@ nav:
       - PDL: reference/pdl.md
       - ICL: reference/icl.md
       - BSDL: reference/bsdl.md
+      - Network Integrity: reference/integrity.md
       - Pattern Export: reference/pattern-export.md
       - Faultflow: reference/faultflow.md
   - Changelog: changelog.md

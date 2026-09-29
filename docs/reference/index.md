@@ -21,5 +21,6 @@ Every exception below subclasses `WarptapError`:
 - [PDL](pdl.md) — driving the network, PDL text emit/import, read verification
 - [ICL](icl.md) — ICL text emit/import
 - [BSDL](bsdl.md) — TAP-only BSDL emit, the file an ICL `AccessLink` points at
+- [Network Integrity](integrity.md) — TAP/IJTAG network-integrity patterns and their TDO check
 - [Pattern Export](pattern-export.md) — the shared TAP-transaction IR, SVF/STAPL/STIL emitters
 - [Faultflow](faultflow.md) — retargeting faultflow's own exported patterns
