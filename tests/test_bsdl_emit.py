@@ -35,9 +35,10 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from bsdl_reader import parse_bsdl
+from bsdl_reader import parse_bsdl, strict_problems
 
 from warptap.bsdl_emit import (
+    IJTAG_ACCESS_BSDL_INSTRUCTION,
     NETWORK_ACCESS_BSDL_INSTRUCTION,
     BsdlEmitError,
     to_bsdl,
@@ -48,24 +49,35 @@ from warptap.tap_model import (
     IDCODE_VALUE,
     OPCODE_EXTEST,
     OPCODE_IDCODE,
+    OPCODE_IJTAG_ACCESS,
     OPCODE_SAMPLE_PRELOAD,
     bypass_opcode,
 )
 from warptap.tap_ports import TCK, TDI, TDO, TMS, TRST_N
 
-_GOLDEN = Path(__file__).resolve().parent / "fixtures" / "golden_bsdl" / "chip_tap.bsd"
+_GOLDEN_DIR = Path(__file__).resolve().parent / "fixtures" / "golden_bsdl"
+_GOLDEN = _GOLDEN_DIR / "chip_tap.bsd"
+_GOLDEN_IJTAG_ACCESS = _GOLDEN_DIR / "chip_tap_ijtag_access.bsd"
 
 
 def _bits(value: int, width: int) -> str:
     return format(value, f"0{width}b")
 
 
-def _emit(name: str = "chip", freq: float = 10e6):
-    return to_bsdl(name, tck_max_freq_hz=freq)
+def _emit(name: str = "chip", freq: float = 10e6, **options):
+    return to_bsdl(name, tck_max_freq_hz=freq, **options)
+
+
+def _emit_ijtag_access(**options):
+    return _emit(ijtag_access_opcode=OPCODE_IJTAG_ACCESS, **options)
 
 
 def test_output_is_byte_identical_to_golden():
     assert _emit() == _GOLDEN.read_bytes().decode("utf-8")
+
+
+def test_ijtag_access_output_is_byte_identical_to_its_golden():
+    assert _emit_ijtag_access() == _GOLDEN_IJTAG_ACCESS.read_bytes().decode("utf-8")
 
 
 def test_entity_name_appears_in_entity_and_end_lines():
@@ -194,3 +206,69 @@ def test_valid_entity_names_are_accepted(name):
 def test_invalid_tck_frequency_raises_a_named_error(freq):
     with pytest.raises(BsdlEmitError, match="tck_max_freq_hz"):
         _emit(freq=freq)
+
+
+# --- read strictly ------------------------------------------------------------------------------
+
+_BOUNDARY = ("BOUNDARY_LENGTH", "BOUNDARY_REGISTER")
+
+
+@pytest.mark.parametrize("emit", [_emit, _emit_ijtag_access], ids=["extest", "ijtag_access"])
+def test_held_to_the_standard_only_the_boundary_register_is_missing(emit):
+    """Every mandatory attribute and instruction is there; what a strict reader refuses is the
+    boundary register this TAP-only file leaves out on purpose, and nothing else."""
+    text = emit()
+    assert strict_problems(text) == [f"missing attribute {name}" for name in _BOUNDARY]
+    assert strict_problems(text, waive=_BOUNDARY) == []
+
+
+@pytest.mark.parametrize(
+    ("old", "new", "problem"),
+    [
+        ('  attribute INSTRUCTION_CAPTURE of chip : entity is "0001";\n', "",
+         "missing attribute INSTRUCTION_CAPTURE"),
+        ("  attribute TAP_SCAN_RESET of trst_n : signal is true;\n", "",
+         "port trst_n is not a TAP pin"),
+        ('"PRELOAD (0010),"', '"PRIVATE (0010),"', "missing mandatory instruction PRELOAD"),
+        ('"BYPASS  (1111)"', '"BYPASS  (1110)"', "the all-ones opcode belongs to []"),
+        ('entity is "0001";', 'entity is "0010";', "INSTRUCTION_CAPTURE '0010'"),
+        ('"trst_n : trst_n," &\n', "", "PIN_MAP_STRING does not map port trst_n"),
+        ("  use STD_1149_1_2001.all;\n", "", "no use clause"),
+        ('"DEVICE_ID (IDCODE)"', '"DEVICE_ID (USERCODE)"',
+         "REGISTER_ACCESS gives undeclared instruction USERCODE"),
+    ],
+)
+def test_the_strict_reader_catches_each_omission(old, new, problem):
+    """Not vacuous: each edit of the emitted text is reported."""
+    text = _emit()
+    assert old in text
+    problems = strict_problems(text.replace(old, new), waive=_BOUNDARY)
+    assert any(p.startswith(problem) for p in problems), problems
+
+
+# --- IJTAG_ACCESS --------------------------------------------------------------------------------
+
+
+def test_ijtag_access_is_declared_at_its_opcode_beside_the_standard_instructions():
+    opcodes = parse_bsdl(_emit_ijtag_access()).opcodes
+    assert IJTAG_ACCESS_BSDL_INSTRUCTION == "IJTAG_ACCESS"
+    assert opcodes == {**parse_bsdl(_emit()).opcodes, "IJTAG_ACCESS": ["1100"]}
+
+
+def test_ijtag_access_gives_extest_sample_and_preload_the_bypass_register():
+    access = parse_bsdl(_emit_ijtag_access()).register_access
+    assert access == {"DEVICE_ID": ["IDCODE"], "BYPASS": ["EXTEST", "SAMPLE", "PRELOAD"]}
+
+
+def test_ijtag_access_design_warning_names_the_network_instruction_and_bypass():
+    warning = parse_bsdl(_emit_ijtag_access()).design_warning
+    assert "NOT a chip-level BSDL" in warning
+    assert "IJTAG_ACCESS (1100) selects the IEEE 1687 IJTAG network" in warning
+    assert "EXTEST (0000) and SAMPLE/PRELOAD (0010) select the 1-bit BYPASS register" in warning
+    assert "Load EXTEST" not in warning
+
+
+@pytest.mark.parametrize("opcode", [0b0000, 0b0001, 0b0010, 0b1111, 0b10000, -1, True, "12"])
+def test_an_opcode_no_tap_can_give_ijtag_access_is_refused(opcode):
+    with pytest.raises(BsdlEmitError, match="IJTAG_ACCESS opcode"):
+        _emit(ijtag_access_opcode=opcode)

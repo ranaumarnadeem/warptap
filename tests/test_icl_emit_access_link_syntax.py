@@ -101,14 +101,20 @@ def parse(icl_parser_module):
 
 @pytest.mark.parametrize("case", sorted(CASES))
 @pytest.mark.parametrize("entity", [None, "chip_tap"])
-def test_emitted_access_link_parses_and_names_the_expected_things(case, entity, parse):
+@pytest.mark.parametrize("ijtag_access", [False, True])
+def test_emitted_access_link_parses_and_names_the_expected_things(
+    case, entity, ijtag_access, parse
+):
     graph, root = CASES[case]()
-    text = to_icl(graph, root, include_access_link=True, bsdl_entity_name=entity)
+    text = to_icl(
+        graph, root, include_access_link=True, bsdl_entity_name=entity, ijtag_access=ijtag_access
+    )
     errors, consumed, links = parse(_lexable(text))
     assert errors == []
     assert consumed
+    instruction = "IJTAG_ACCESS" if ijtag_access else "EXTEST"
     assert links == [
-        ("warptap_tap", entity or root.name, [("EXTEST", [_FIRST_SLOT[case]])]),
+        ("warptap_tap", entity or root.name, [(instruction, [_FIRST_SLOT[case]])]),
     ]
 
 

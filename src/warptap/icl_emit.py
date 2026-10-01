@@ -82,7 +82,10 @@ updates only under ``EXTEST``; under ``SAMPLE``/``PRELOAD`` it reaches ``tdo`` b
 still. (An earlier version emitted the instruction name ``wdr_select`` and its
 docstrings claimed it named ``EXTEST``: ``wdr_select`` is the instruction name in the benchmark
 file whose shape this emitter copied, not part of ICL's syntax, and no TAP warptap inserts has
-an instruction of that name.)
+an instruction of that name.) For a TAP inserted with ``ijtag_access_opcode``, ``to_icl(...,
+ijtag_access=True)`` names ``IJTAG_ACCESS`` instead
+(:data:`warptap.bsdl_emit.IJTAG_ACCESS_BSDL_INSTRUCTION`), the instruction the BSDL written
+with the same opcode declares; there, EXTEST and SAMPLE/PRELOAD select BYPASS.
 
 **Open question, deliberately not guessed at:** the ``ScanInterface { ... }`` list names only the
 chain's first slot, while the top-level slots' ``SEL`` ports are never bound in the ``Instance``
@@ -131,7 +134,7 @@ from __future__ import annotations
 import re
 from typing import List
 
-from warptap.bsdl_emit import NETWORK_ACCESS_BSDL_INSTRUCTION
+from warptap.bsdl_emit import IJTAG_ACCESS_BSDL_INSTRUCTION, NETWORK_ACCESS_BSDL_INSTRUCTION
 from warptap.errors import WarptapError
 from warptap.icl_model import (
     ChainSlot,
@@ -683,6 +686,7 @@ def to_icl(
     *,
     include_access_link: bool = True,
     bsdl_entity_name: str | None = None,
+    ijtag_access: bool = False,
 ) -> str:
     """Render the complete ICL description of ``graph`` (from ``sib_plan.build_sib_plan``,
     ideally called with ``top_name`` set to the real target module's own name -- ``root.name``
@@ -711,6 +715,10 @@ def to_icl(
     entity isn't named after the top module. It must be an ICL identifier. An AccessLink needs
     a scan interface to name, so ``include_access_link=True`` with an empty chain raises
     :class:`IclEmitError` rather than emitting a block ICL's grammar rejects.
+
+    ``ijtag_access=True`` names ``IJTAG_ACCESS`` in the AccessLink instead of ``EXTEST``: pass
+    it for a TAP inserted with an ``ijtag_access_opcode``, whose BSDL (``to_bsdl`` given the same
+    opcode) declares that instruction.
 
     ``include_access_link`` defaults to ``True``. ``include_access_link=False`` output is
     unchanged by everything above (pinned byte-for-byte by ``tests/test_icl_emit_golden.py``).
@@ -766,9 +774,10 @@ def to_icl(
         top_lines.append("")
         top_lines.append("    AccessLink warptap_tap Of STD_1149_1_2001 {")
         top_lines.append(f"        BSDLEntity {bsdl_entity_name or root.name};")
-        top_lines.append(
-            f"        {NETWORK_ACCESS_BSDL_INSTRUCTION} {{ ScanInterface {{ {first_slot}; }} }}"
+        instruction = (
+            IJTAG_ACCESS_BSDL_INSTRUCTION if ijtag_access else NETWORK_ACCESS_BSDL_INSTRUCTION
         )
+        top_lines.append(f"        {instruction} {{ ScanInterface {{ {first_slot}; }} }}")
         top_lines.append("    }")
     top_lines.append("}")
 

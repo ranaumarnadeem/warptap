@@ -30,8 +30,13 @@ from warptap.tap_integrity import (
     select_instruction,
 )
 from warptap.tap_fsm import TapState, next_state
-from warptap.tap_ir import bits_from_int
-from warptap.tap_model import CAPTURE_IR_PATTERN, IDCODE_VALUE, OPCODE_EXTEST
+from warptap.tap_ir import ShiftIR, bits_from_int
+from warptap.tap_model import (
+    CAPTURE_IR_PATTERN,
+    IDCODE_VALUE,
+    OPCODE_EXTEST,
+    OPCODE_IJTAG_ACCESS,
+)
 
 MARGIN = 4
 
@@ -348,3 +353,62 @@ def test_select_instruction_checks_the_opcode_width():
     assert len(select_instruction(0b1111)) == 3
     with pytest.raises(ValueError):
         select_instruction(0b10000)
+
+
+# --- a TAP with IJTAG_ACCESS ----------------------------------------------------------------------
+
+_IJTAG_ACCESS = TapConfig(ijtag_access_opcode=OPCODE_IJTAG_ACCESS)
+
+
+def test_with_ijtag_access_extest_and_sample_preload_are_tested_as_bypass():
+    """EXTEST's and SAMPLE/PRELOAD's opcodes join the unimplemented ones (BYPASS), IJTAG_ACCESS's
+    leaves them, and the network holding still is checked under EXTEST too."""
+    names = [t.name for t in _program(tap=_IJTAG_ACCESS).tests]
+    assert names[:3] == ["reset_instruction", "instruction_register", "bypass"]
+    assert names[3:16] == [f"opcode_{op:04b}" for op in range(16) if op not in (1, 12, 15)]
+    assert names[16:] == [
+        "idcode", *_TAP_PATHS, "network_closed",
+        "open_sib_ctrl", "open_sib_status", "open_sib_stub", "open_all",
+        "extest", "sample_preload", "network_hold",
+        "write_readback_ctrl", "tms_reset",
+    ]
+
+
+@pytest.mark.parametrize("test", ["extest", "sample_preload", "opcode_0000", "opcode_0010"])
+def test_with_ijtag_access_board_instructions_delay_by_one(test):
+    bits = _shifted(_program(tap=_IJTAG_ACCESS), test)[4:]  # after the IR load
+    assert bits[0] == 0  # BYPASS's capture
+    fed = _sentinel(len(bits))
+    assert bits[1:] == fed[: len(bits) - 1]
+
+
+def test_with_ijtag_access_the_network_is_selected_by_its_opcode():
+    program = _program(tap=_IJTAG_ACCESS)
+    for name in ("network_closed", "network_hold"):
+        test = next(t for t in program.tests if t.name == name)
+        loads = [op for op in test.ops if isinstance(op, ShiftIR)]
+        if loads:  # network_hold is raw cycles: its IR load is the 4 TDI bits after Capture-IR
+            assert [op.tdi for op in loads] == [OPCODE_IJTAG_ACCESS]
+        else:
+            tdi = [c.tdi for c in program.cycles if c.test == name and c.shift][:4]
+            assert tdi == bits_from_int(OPCODE_IJTAG_ACCESS, 4)
+    # The network's own tests read what the EXTEST program's read: only the TAP differs.
+    default = _program()
+    for name in ("network_closed", "open_all", "network_hold", "write_readback_ctrl"):
+        assert _shifted(program, name)[4:] == _shifted(default, name)[4:]
+
+
+def test_an_ijtag_access_program_round_trips_through_json_and_says_so():
+    program = _program(tap=_IJTAG_ACCESS)
+    data = json.loads(json.dumps(program.to_json()))
+    assert data["tap"]["ijtag_access_opcode"] == OPCODE_IJTAG_ACCESS
+    loaded = IntegrityProgram.from_json(data)
+    assert loaded.tap == _IJTAG_ACCESS
+    assert loaded.cycles == program.cycles
+    assert "ijtag_access_opcode" not in _program().to_json()["tap"]  # default JSON unchanged
+
+
+@pytest.mark.parametrize("opcode", [0b0000, 0b0010, 0b0001, 0b1111, 0b10000])
+def test_tap_config_refuses_an_opcode_no_tap_can_give_ijtag_access(opcode):
+    with pytest.raises(TapIntegrityError, match="IJTAG_ACCESS opcode"):
+        TapConfig(ijtag_access_opcode=opcode)

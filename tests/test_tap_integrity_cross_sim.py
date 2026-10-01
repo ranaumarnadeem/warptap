@@ -2,9 +2,10 @@
 model; this is where it meets tap_core.v and the SIB/mux/instrument cells).
 
 Positive: the program for a network passes on that network's RTL -- flat with a live READ
-instrument (real_signal.v's status_out, masked), nested, and a ScanMux. Negative: a program
-built for a different network (wrong width, swapped order, a missing SIB) or a different TAP
-(IDCODE value, IR width) fails, naming the first test that sees the difference.
+instrument (real_signal.v's status_out, masked), nested, and a ScanMux -- with EXTEST or with
+IJTAG_ACCESS selecting it. Negative: a program built for a different network (wrong width,
+swapped order, a missing SIB) or a different TAP (IDCODE value, IR width, the other network
+instruction) fails, naming the first test that sees the difference.
 """
 
 from __future__ import annotations
@@ -33,7 +34,7 @@ from warptap.tap_integrity import (
     build_integrity_program,
     check_integrity,
 )
-from warptap.tap_model import IDCODE_VALUE
+from warptap.tap_model import IDCODE_VALUE, OPCODE_IJTAG_ACCESS
 from warptap.yosys_io import ingest, write_verilog_from_json
 
 _CTRL = InstrumentSpec(
@@ -66,10 +67,12 @@ def _mux_graph() -> tuple[PhysicalGraph, ModuleInstance]:
     return PhysicalGraph(chain=(mux,)), root
 
 
-def _inserted(fixtures_dir, yosys_command, design: str, graph: PhysicalGraph) -> str:
+def _inserted(
+    fixtures_dir, yosys_command, design: str, graph: PhysicalGraph, **options
+) -> str:
     raw = ingest([fixtures_dir / f"{design}.v"], design, yosys_command=yosys_command)
     netlist = Netlist.from_json(raw)
-    insert_sib_network(netlist, design, graph, yosys_command=yosys_command)
+    insert_sib_network(netlist, design, graph, yosys_command=yosys_command, **options)
     return write_verilog_from_json(netlist.to_json(), yosys_command=yosys_command)
 
 
@@ -98,9 +101,10 @@ def _observed_tdo(
     return [int(v) if v in ("0", "1") else -1 for v in tdo]
 
 
+@pytest.mark.parametrize("ijtag_access_opcode", [None, OPCODE_IJTAG_ACCESS], ids=["extest", "ijtag"])
 @pytest.mark.parametrize("network", ["flat", "nested", "mux"])
 def test_the_program_passes_on_its_own_network(
-    network, fixtures_dir, yosys_command, iverilog_command, vvp_command
+    network, ijtag_access_opcode, fixtures_dir, yosys_command, iverilog_command, vvp_command
 ):
     if network == "flat":
         graph, root = build_sib_plan([_CTRL, _STATUS], top_name="real_signal")
@@ -110,8 +114,12 @@ def test_the_program_passes_on_its_own_network(
         )
     else:
         graph, root = _mux_graph()
-    program = build_integrity_program(graph, root)
-    verilog = _inserted(fixtures_dir, yosys_command, "real_signal", graph)
+    tap = TapConfig(ijtag_access_opcode=ijtag_access_opcode)
+    program = build_integrity_program(graph, root, tap=tap)
+    verilog = _inserted(
+        fixtures_dir, yosys_command, "real_signal", graph,
+        ijtag_access_opcode=ijtag_access_opcode,
+    )
 
     observed = _observed_tdo(
         fixtures_dir, iverilog_command, vvp_command, "real_signal", verilog, program
@@ -169,6 +177,33 @@ def test_a_program_for_another_tap_fails_in_the_tap_tests(
     graph, root = build_sib_plan([_A, _B], top_name="trivial")
     program = build_integrity_program(graph, root, tap=tap)
     verilog = _inserted(fixtures_dir, yosys_command, "trivial", graph)
+
+    result = check_integrity(
+        program,
+        _observed_tdo(fixtures_dir, iverilog_command, vvp_command, "trivial", verilog, program),
+    )
+
+    assert result.failures[0].test == first_failure
+
+
+@pytest.mark.parametrize(
+    ("program_opcode", "rtl_opcode", "first_failure"),
+    [(None, OPCODE_IJTAG_ACCESS, "opcode_1100"), (OPCODE_IJTAG_ACCESS, None, "opcode_0000")],
+    ids=["extest_program_on_ijtag_rtl", "ijtag_program_on_extest_rtl"],
+)
+def test_a_program_for_the_other_network_instruction_fails_at_its_opcode(
+    program_opcode, rtl_opcode, first_failure,
+    fixtures_dir, yosys_command, iverilog_command, vvp_command,
+):
+    """Each TAP selects the network under an opcode the other program expects to be BYPASS:
+    the first opcode test that loads it fails."""
+    graph, root = build_sib_plan([_A, _B], top_name="trivial")
+    program = build_integrity_program(
+        graph, root, tap=TapConfig(ijtag_access_opcode=program_opcode)
+    )
+    verilog = _inserted(
+        fixtures_dir, yosys_command, "trivial", graph, ijtag_access_opcode=rtl_opcode
+    )
 
     result = check_integrity(
         program,

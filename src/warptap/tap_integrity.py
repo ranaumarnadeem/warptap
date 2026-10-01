@@ -22,15 +22,16 @@ here runs, in order:
    0 and at 1 in every bit); ``idcode_capture``/``bypass_capture`` (each register captured
    while it holds the complement of its capture value). With the rest of the program, every
    one of the 32 TAP state transitions is taken;
-7. ``network_closed``: EXTEST with every SIB closed -- the network's length and continuity,
-   by an over-shift probe (:mod:`warptap.sib_overshift`);
+7. ``network_closed``: the network's instruction (EXTEST, or IJTAG_ACCESS for a TAP with an
+   ``ijtag_access_opcode``) with every SIB closed -- the network's length and continuity, by
+   an over-shift probe (:mod:`warptap.sib_overshift`);
 8. ``open_<slot>``: each SIB, and each ScanMux arm, opened alone from an all-closed network
    and probed the same way; then ``open_all``, every SIB outside a mux at once;
 9. the network holding still (``network_hold``): ``sample_preload`` (SAMPLE/PRELOAD puts the
-   network's tail on TDO for the whole scan without selecting the network), then
-   ``network_hold`` (one EXTEST scan through the network as the probes left it, paused
-   holding an alternating pattern and then its complement, which ends by closing every
-   SIB);
+   network's tail on TDO for the whole scan without selecting the network; with
+   IJTAG_ACCESS, ``extest`` and then ``sample_preload``, each a scan through BYPASS), then
+   ``network_hold`` (one scan through the network as the probes left it, paused holding an
+   alternating pattern and then its complement, which ends by closing every SIB);
 10. ``write_readback_<instrument>``: each WRITE instrument written with an alternating
     pattern P and read back (Capture-DR captures what it last committed), then ~P, then 0
     (``write_readback``);
@@ -42,12 +43,13 @@ stage_open_sequence` leaves an already-open SIB it isn't asked about open, so ea
 preceded by one scan that closes whatever the last one opened.
 
 The expected TDO comes from :class:`~warptap.tap_model.TapModel` with
-:class:`~warptap.sib_model.SibNetworkRegister` registered under EXTEST, and under
-SAMPLE/PRELOAD the network's tail (:meth:`~warptap.sib_model.SibNetworkRegister.tail`),
-stepped through every TCK cycle. A READ instrument bound to a design signal (a *live* one)
-captures a value the model can't know, so two models run in lockstep, their live instruments
-capturing all 0s and all 1s; a TDO bit on which they disagree carries a live value and is
-don't-care (``care=False``). A probe's fed bits fully replace the chain's content, so a
+:class:`~warptap.sib_model.SibNetworkRegister` registered under the network's instruction, and
+under SAMPLE/PRELOAD the network's tail (:meth:`~warptap.sib_model.SibNetworkRegister.tail`;
+BYPASS with IJTAG_ACCESS), stepped through every TCK cycle. A READ instrument bound to a
+design signal (a *live* one) captures a value the model can't know, so two models run in
+lockstep, their live instruments capturing all 0s and all 1s; a TDO bit on which they
+disagree carries a live value and is don't-care (``care=False``). A probe's fed bits fully
+replace the chain's content, so a
 captured value reaches TDO but never a SIB's state, and the two models only ever disagree
 bit-for-bit. ``live_values`` pins a live instrument to a known value instead.
 
@@ -98,6 +100,7 @@ from warptap.tap_model import (
     TapModel,
     bypass_opcode,
     idcode_value_error,
+    ijtag_access_opcode_error,
 )
 
 PROGRAM_FORMAT = "warptap-tck-program"
@@ -160,25 +163,42 @@ class TapIntegrityError(WarptapError):
 @dataclass(frozen=True)
 class TapConfig:
     """The TAP the program targets -- ``rtl/tap_core.v``'s parameters. Its opcodes are
-    :mod:`warptap.tap_model`'s (EXTEST 0, IDCODE 1, SAMPLE_PRELOAD 2, BYPASS all 1s)."""
+    :mod:`warptap.tap_model`'s (EXTEST 0, IDCODE 1, SAMPLE_PRELOAD 2, BYPASS all 1s), plus
+    IJTAG_ACCESS at ``ijtag_access_opcode`` for a TAP built with one: the network's instruction
+    then, and EXTEST and SAMPLE/PRELOAD decode to BYPASS."""
 
     ir_width: int = DEFAULT_IR_WIDTH
     has_idcode: bool = True
     idcode_value: int = IDCODE_VALUE
+    ijtag_access_opcode: Optional[int] = None
 
     def __post_init__(self) -> None:
         if self.has_idcode and (problem := idcode_value_error(self.idcode_value)):
             raise TapIntegrityError(problem)
+        if self.ijtag_access_opcode is not None and (
+            problem := ijtag_access_opcode_error(self.ijtag_access_opcode, self.ir_width)
+        ):
+            raise TapIntegrityError(problem)
 
     def implemented_opcodes(self) -> frozenset[int]:
-        opcodes = {OPCODE_EXTEST, OPCODE_SAMPLE_PRELOAD, bypass_opcode(self.ir_width)}
+        if self.ijtag_access_opcode is None:
+            opcodes = {OPCODE_EXTEST, OPCODE_SAMPLE_PRELOAD, bypass_opcode(self.ir_width)}
+        else:
+            opcodes = {self.ijtag_access_opcode, bypass_opcode(self.ir_width)}
         if self.has_idcode:
             opcodes.add(OPCODE_IDCODE)
         return frozenset(opcodes)
 
+    def network_opcode(self) -> int:
+        """The opcode that selects the network: EXTEST's, or IJTAG_ACCESS's."""
+        return OPCODE_EXTEST if self.ijtag_access_opcode is None else self.ijtag_access_opcode
+
     def model(self) -> TapModel:
         return TapModel(
-            ir_width=self.ir_width, has_idcode=self.has_idcode, idcode_value=self.idcode_value
+            ir_width=self.ir_width,
+            has_idcode=self.has_idcode,
+            idcode_value=self.idcode_value,
+            ijtag_access_opcode=self.ijtag_access_opcode,
         )
 
 
@@ -230,19 +250,23 @@ class IntegrityProgram:
     def to_json(self) -> dict[str, Any]:
         """The program as JSON data: ``tap``, ``tests`` (name and cycle range), and one
         string of ``0``/``1`` per cycle field -- ``tms``, ``tdi``, ``trst_n``, ``shift``,
-        ``tdo``, ``care`` -- each character one TCK cycle."""
+        ``tdo``, ``care`` -- each character one TCK cycle. ``tap`` has an
+        ``ijtag_access_opcode`` only for a TAP with one."""
 
         def column(field: str) -> str:
             return "".join(str(int(getattr(cycle, field))) for cycle in self.cycles)
 
+        tap: dict[str, Any] = {
+            "ir_width": self.tap.ir_width,
+            "has_idcode": self.tap.has_idcode,
+            "idcode_value": self.tap.idcode_value,
+        }
+        if self.tap.ijtag_access_opcode is not None:
+            tap["ijtag_access_opcode"] = self.tap.ijtag_access_opcode
         return {
             "format": PROGRAM_FORMAT,
             "version": PROGRAM_VERSION,
-            "tap": {
-                "ir_width": self.tap.ir_width,
-                "has_idcode": self.tap.has_idcode,
-                "idcode_value": self.tap.idcode_value,
-            },
+            "tap": tap,
             "tests": [
                 {"name": name, "start": start, "stop": stop}
                 for name, start, stop in self.test_ranges()
@@ -280,11 +304,15 @@ class IntegrityProgram:
             for i in range(count)
         )
         tap = data["tap"]
+        ijtag_access_opcode = tap.get("ijtag_access_opcode")
         return cls(
             tap=TapConfig(
                 ir_width=int(tap["ir_width"]),
                 has_idcode=bool(tap["has_idcode"]),
                 idcode_value=int(tap["idcode_value"]),
+                ijtag_access_opcode=(
+                    None if ijtag_access_opcode is None else int(ijtag_access_opcode)
+                ),
             ),
             tests=tuple(
                 IntegrityTest(str(entry["name"]), (), ()) for entry in data["tests"]
@@ -479,8 +507,9 @@ def _opened(graph: PhysicalGraph, target: Union[frozenset, dict]) -> dict:
 
 
 def _close_all(graph: PhysicalGraph, opened: Union[frozenset, dict]) -> list[_IrOp]:
-    """One EXTEST DR scan that closes every SIB (and bypasses every mux) open in
-    ``opened``, content fed 0. A WRITE instrument doesn't commit on its SIB's closing edge."""
+    """One DR scan, under the network's instruction, that closes every SIB (and bypasses every
+    mux) open in ``opened``, content fed 0. A WRITE instrument doesn't commit on its SIB's
+    closing edge."""
     if not opened:
         return []
     bits = compose_bits(graph, opened, {}, target_sib=None, payload_value=0)
@@ -592,21 +621,27 @@ def _tap_path_tests(tap: TapConfig, margin: int) -> list[IntegrityTest]:
 
 
 def _network_hold_tests(
-    graph: PhysicalGraph, opened: Union[frozenset, dict], ir_width: int, margin: int
+    graph: PhysicalGraph, opened: Union[frozenset, dict], tap: TapConfig, margin: int
 ) -> list[IntegrityTest]:
-    """SAMPLE/PRELOAD, then one EXTEST scan paused through the network as ``opened`` (what
-    the probes left open), holding an alternating pattern and then its complement; the scan
-    ends by closing every SIB."""
+    """SAMPLE/PRELOAD (with IJTAG_ACCESS, EXTEST and then SAMPLE/PRELOAD, both BYPASS there),
+    then one scan under the network's instruction, paused through the network as ``opened``
+    (what the probes left open), holding an alternating pattern and then its complement; the
+    scan ends by closing every SIB."""
+    ir_width = tap.ir_width
     tests = []
     bits = len(graph.chain) + margin
-    seq = _ir_load(OPCODE_SAMPLE_PRELOAD, ir_width)
-    seq += _dr_scan_cycles(bits, default_sentinel_pattern(bits))
-    tests.append(IntegrityTest("sample_preload", _raw(seq), ()))
+    board = [("sample_preload", OPCODE_SAMPLE_PRELOAD)]
+    if tap.ijtag_access_opcode is not None:
+        board.insert(0, ("extest", OPCODE_EXTEST))
+    for name, opcode in board:
+        seq = _ir_load(opcode, ir_width)
+        seq += _dr_scan_cycles(bits, default_sentinel_pattern(bits))
+        tests.append(IntegrityTest(name, _raw(seq), ()))
 
     length = layout_bit_length(graph, opened)
     pattern = _alternating(length)
     close = list(reversed(compose_bits(graph, opened, {}, target_sib=None, payload_value=0)))
-    seq = _ir_load(OPCODE_EXTEST, ir_width) + list(_TO_SHIFT_DR)
+    seq = _ir_load(tap.network_opcode(), ir_width) + list(_TO_SHIFT_DR)
     seq += [*_shift_cycles(bits_from_int(pattern, length)), *_PAUSE_AND_RESUME]
     seq += [*_shift_cycles(bits_from_int(~pattern, length)), *_PAUSE_AND_RESUME]
     seq += [*_shift_cycles(close), *_EXIT1_TO_IDLE]
@@ -658,9 +693,9 @@ def _integrity_tests(
         tests.extend(_tap_path_tests(tap, margin))
 
     if graph.chain:
-        extest = select_instruction(OPCODE_EXTEST, ir_width=ir_width)
+        network = select_instruction(tap.network_opcode(), ir_width=ir_width)
         probe = build_overshift_ops(graph, frozenset(), margin=margin)
-        tests.append(IntegrityTest("network_closed", (), tuple(extest + probe)))
+        tests.append(IntegrityTest("network_closed", (), tuple(network + probe)))
         opened: dict = {}
         targets = _probe_targets(graph.chain)
         every_sib = _sibs_outside_muxes(graph.chain)
@@ -672,7 +707,7 @@ def _integrity_tests(
             tests.append(IntegrityTest(f"open_{name}", (), tuple(ops)))
 
         if network_hold:
-            tests.extend(_network_hold_tests(graph, opened, ir_width, margin))
+            tests.extend(_network_hold_tests(graph, opened, tap, margin))
             opened = {}  # network_hold closes every SIB
 
         writes = [i for i in instruments.values() if i.direction is InstrumentDirection.WRITE]
@@ -710,8 +745,8 @@ def _expected_cycles(
     for graph in (low, high):
         model = tap.model()
         network = SibNetworkRegister(graph)
-        model.register_data_register(Instruction.EXTEST, network)
-        if graph.chain:
+        model.register_data_register(model.network_instruction, network)
+        if graph.chain and tap.ijtag_access_opcode is None:
             model.register_data_register(Instruction.SAMPLE_PRELOAD, _NetworkTail(network))
         pairs.append((model, network))
 

@@ -8,6 +8,10 @@ computes those from *state* alone, not from which instruction is active), but ha
 register registered by default — their data register is the boundary-scan register, which
 doesn't exist until Stage 3. Shifting through them before Stage 3 registers a real one raises
 TapModelError loudly rather than silently validating nothing against a fake stand-in.
+
+A TAP built with a dedicated IJTAG_ACCESS opcode (``ijtag_access_opcode``) decodes that opcode
+to IJTAG_ACCESS, the instruction that selects the IJTAG network, and EXTEST's and
+SAMPLE/PRELOAD's to BYPASS.
 """
 
 from __future__ import annotations
@@ -26,6 +30,11 @@ DEFAULT_IR_WIDTH = 4
 OPCODE_EXTEST = 0b0000
 OPCODE_SAMPLE_PRELOAD = 0b0010
 OPCODE_IDCODE = 0b0001
+
+# The suggested opcode for a dedicated IJTAG_ACCESS instruction (``ijtag_access_opcode``,
+# off by default). The only 4-bit value at least two bits from each of EXTEST, SAMPLE/PRELOAD,
+# IDCODE and BYPASS, so one corrupted IR bit can't turn a board instruction into it.
+OPCODE_IJTAG_ACCESS = 0b1100
 
 # The pattern Capture-IR loads is deliberately equal to OPCODE_IDCODE: if a shift sequence
 # goes Capture-IR -> Update-IR without ever visiting Shift-IR, the captured pattern becomes
@@ -68,6 +77,7 @@ class Instruction(enum.Enum):
     SAMPLE_PRELOAD = "SAMPLE_PRELOAD"
     IDCODE = "IDCODE"
     BYPASS = "BYPASS"
+    IJTAG_ACCESS = "IJTAG_ACCESS"
 
 
 # The instruction an external tester loads to reach the IJTAG (SIB/TDR) network. rtl/tap_core.v's
@@ -78,19 +88,57 @@ class Instruction(enum.Enum):
 # only under EXTEST (under SAMPLE_PRELOAD it holds still). EXTEST is the one named to consumers
 # (the ICL AccessLink, the BSDL); in real 1149.1 EXTEST means "drive the boundary register",
 # which is only true of a design with a boundary-scan register and no SIB network (the two never
-# coexist, see sib_insert.insert_sib_network).
+# coexist, see sib_insert.insert_sib_network). That is the default; a TAP inserted with
+# ``ijtag_access_opcode`` selects the network under IJTAG_ACCESS instead
+# (:func:`network_access_instruction`), and a board-level EXTEST then can't reach it.
 NETWORK_ACCESS_INSTRUCTION = Instruction.EXTEST
 
 
+def network_access_instruction(ijtag_access_opcode: int | None) -> Instruction:
+    """The instruction that selects the IJTAG network: EXTEST, or IJTAG_ACCESS for a TAP built
+    with an ``ijtag_access_opcode``."""
+    if ijtag_access_opcode is None:
+        return NETWORK_ACCESS_INSTRUCTION
+    return Instruction.IJTAG_ACCESS
+
+
+def ijtag_access_opcode_error(opcode: object, ir_width: int = DEFAULT_IR_WIDTH) -> str | None:
+    """Why ``opcode`` can't be a TAP's IJTAG_ACCESS opcode, or ``None`` if it can: it must fit
+    the instruction register and be none of EXTEST, SAMPLE/PRELOAD, IDCODE or BYPASS. IDCODE's
+    is also the Capture-IR pattern, which an Update-IR straight after Capture-IR loads."""
+    if isinstance(opcode, bool) or not isinstance(opcode, int):
+        return f"IJTAG_ACCESS opcode must be an int, got {opcode!r}"
+    if not 0 <= opcode < 1 << ir_width:
+        return f"IJTAG_ACCESS opcode {opcode:#x} does not fit a {ir_width}-bit instruction register"
+    taken = {
+        OPCODE_EXTEST: "EXTEST's",
+        OPCODE_SAMPLE_PRELOAD: "SAMPLE/PRELOAD's",
+        OPCODE_IDCODE: "IDCODE's (and the Capture-IR pattern)",
+        bypass_opcode(ir_width): "BYPASS's",
+    }
+    if opcode in taken:
+        return f"IJTAG_ACCESS opcode {opcode:0{ir_width}b} is already {taken[opcode]}"
+    return None
+
+
 def decode_instruction(
-    opcode: int, ir_width: int, *, has_idcode: bool = True
+    opcode: int,
+    ir_width: int,
+    *,
+    has_idcode: bool = True,
+    ijtag_access_opcode: int | None = None,
 ) -> Instruction:
     """Map a shifted-in IR opcode to an Instruction. Unimplemented/reserved opcodes (and
     the IDCODE opcode when IDCODE isn't configured) decode to BYPASS, matching common
-    real-TAP practice and keeping the TDO mux's default case safe."""
-    if opcode == OPCODE_EXTEST:
+    real-TAP practice and keeping the TDO mux's default case safe. With
+    ``ijtag_access_opcode``, that opcode decodes to IJTAG_ACCESS, and EXTEST's and
+    SAMPLE/PRELOAD's decode to BYPASS: there is no boundary register for them to select."""
+    if ijtag_access_opcode is not None:
+        if opcode == ijtag_access_opcode:
+            return Instruction.IJTAG_ACCESS
+    elif opcode == OPCODE_EXTEST:
         return Instruction.EXTEST
-    if opcode == OPCODE_SAMPLE_PRELOAD:
+    elif opcode == OPCODE_SAMPLE_PRELOAD:
         return Instruction.SAMPLE_PRELOAD
     if has_idcode and opcode == OPCODE_IDCODE:
         return Instruction.IDCODE
@@ -177,11 +225,19 @@ class TapModel:
         ir_width: int = DEFAULT_IR_WIDTH,
         has_idcode: bool = True,
         idcode_value: int = IDCODE_VALUE,
+        ijtag_access_opcode: int | None = None,
     ):
         if has_idcode and (problem := idcode_value_error(idcode_value)):
             raise TapModelError(problem)
+        if ijtag_access_opcode is not None and (
+            problem := ijtag_access_opcode_error(ijtag_access_opcode, ir_width)
+        ):
+            raise TapModelError(problem)
         self.ir_width = ir_width
         self.has_idcode = has_idcode
+        self.ijtag_access_opcode = ijtag_access_opcode
+        # What the network's data register is registered under.
+        self.network_instruction = network_access_instruction(ijtag_access_opcode)
         bypass = BypassRegister()
         self._builtin_registers: list[BypassRegister | IdcodeRegister] = [bypass]
         self._data_registers: dict[Instruction, DataRegister] = {Instruction.BYPASS: bypass}
@@ -219,15 +275,23 @@ class TapModel:
         rtl/tap_core.v's `current_instruction` register value exactly (both
         normalize at Update-IR time the same way), so
         tests/test_tap_fsm_cross_sim.py can diff the two with no translation."""
-        return {
+        opcodes = {
             Instruction.EXTEST: OPCODE_EXTEST,
             Instruction.SAMPLE_PRELOAD: OPCODE_SAMPLE_PRELOAD,
             Instruction.IDCODE: OPCODE_IDCODE,
             Instruction.BYPASS: bypass_opcode(self.ir_width),
-        }[self.instruction]
+        }
+        if self.ijtag_access_opcode is not None:
+            opcodes[Instruction.IJTAG_ACCESS] = self.ijtag_access_opcode
+        return opcodes[self.instruction]
 
     def _active_dr(self) -> DataRegister:
         dr = self._data_registers.get(self.instruction)
+        if dr is None and self.instruction is Instruction.IJTAG_ACCESS:
+            raise TapModelError(
+                "no data register registered for IJTAG_ACCESS -- register the network's "
+                "(a SibNetworkRegister) with register_data_register() first"
+            )
         if dr is None:
             raise TapModelError(
                 f"no data register registered for {self.instruction.value} — its data "
@@ -256,7 +320,10 @@ class TapModel:
             self._ir_shift = (self._ir_shift >> 1) | ((tdi & 1) << (self.ir_width - 1))
         elif old_state is TapState.UPDATE_IR:
             self.instruction = decode_instruction(
-                self._ir_shift, self.ir_width, has_idcode=self.has_idcode
+                self._ir_shift,
+                self.ir_width,
+                has_idcode=self.has_idcode,
+                ijtag_access_opcode=self.ijtag_access_opcode,
             )
         elif old_state is TapState.CAPTURE_DR:
             self._active_dr().capture()

@@ -263,6 +263,15 @@ def test_to_icl_access_link_names_the_network_instruction_not_wdr_select():
     assert "wdr_select" not in text
 
 
+def test_to_icl_access_link_names_ijtag_access_for_a_tap_with_it():
+    root = ModuleInstance(name="chip")
+    text = to_icl(_one_sib_graph(), root, include_access_link=True, ijtag_access=True)
+    assert "IJTAG_ACCESS { ScanInterface { warptap_sib_a; } }" in text
+    assert "EXTEST" not in text
+    default = to_icl(_one_sib_graph(), root, include_access_link=True)
+    assert text == default.replace("EXTEST {", "IJTAG_ACCESS {")  # nothing else changes
+
+
 def test_to_icl_bsdl_entity_defaults_to_the_top_module_name():
     text = to_icl(_one_sib_graph(), ModuleInstance(name="my_chip"), include_access_link=True)
     assert "BSDLEntity my_chip;" in text

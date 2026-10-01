@@ -17,11 +17,14 @@ from warptap.tap_model import (
     NETWORK_ACCESS_INSTRUCTION,
     OPCODE_EXTEST,
     OPCODE_IDCODE,
+    OPCODE_IJTAG_ACCESS,
     OPCODE_SAMPLE_PRELOAD,
     TapModel,
     TapModelError,
     bypass_opcode,
     decode_instruction,
+    ijtag_access_opcode_error,
+    network_access_instruction,
 )
 
 
@@ -269,3 +272,76 @@ def test_network_access_instruction_is_extest_and_decodes_from_its_opcode():
     assert NETWORK_ACCESS_INSTRUCTION is Instruction.EXTEST
     assert decode_instruction(OPCODE_EXTEST, 4) is NETWORK_ACCESS_INSTRUCTION
     assert NETWORK_ACCESS_INSTRUCTION not in (Instruction.IDCODE, Instruction.BYPASS)
+
+
+# --- a dedicated IJTAG_ACCESS opcode ----------------------------------------------------------
+
+
+def test_ijtag_access_decodes_its_opcode_and_board_instructions_to_bypass():
+    """With an IJTAG_ACCESS opcode there is no boundary register for EXTEST or SAMPLE/PRELOAD
+    to select: both decode to BYPASS, like every unimplemented opcode."""
+    decoded = {
+        opcode: decode_instruction(opcode, 4, ijtag_access_opcode=OPCODE_IJTAG_ACCESS)
+        for opcode in range(16)
+    }
+    assert decoded.pop(OPCODE_IJTAG_ACCESS) is Instruction.IJTAG_ACCESS
+    assert decoded.pop(OPCODE_IDCODE) is Instruction.IDCODE
+    assert set(decoded.values()) == {Instruction.BYPASS}
+    assert OPCODE_EXTEST in decoded and OPCODE_SAMPLE_PRELOAD in decoded
+
+
+def test_without_ijtag_access_its_opcode_is_just_unimplemented():
+    assert decode_instruction(OPCODE_IJTAG_ACCESS, 4) is Instruction.BYPASS
+    assert network_access_instruction(None) is NETWORK_ACCESS_INSTRUCTION is Instruction.EXTEST
+    assert network_access_instruction(OPCODE_IJTAG_ACCESS) is Instruction.IJTAG_ACCESS
+
+
+def test_the_model_selects_bypass_for_extest_and_the_network_for_ijtag_access():
+    model = TapModel(has_idcode=True, ijtag_access_opcode=OPCODE_IJTAG_ACCESS)
+    assert model.network_instruction is Instruction.IJTAG_ACCESS
+    _reset_and_idle(model)
+    for board in (OPCODE_EXTEST, OPCODE_SAMPLE_PRELOAD):
+        _shift_ir(model, board)
+        assert model.instruction is Instruction.BYPASS
+        assert model.instruction_opcode() == bypass_opcode(4)
+    _shift_ir(model, OPCODE_IJTAG_ACCESS)
+    assert model.instruction is Instruction.IJTAG_ACCESS
+    assert model.instruction_opcode() == OPCODE_IJTAG_ACCESS
+    with pytest.raises(TapModelError, match="IJTAG_ACCESS"):
+        _goto_shift_dr(model)  # nothing registered for the network yet
+
+
+def test_the_suggested_opcode_is_two_bits_from_every_other_instruction():
+    """OPCODE_IJTAG_ACCESS's comment: the only 4-bit opcode at least two bits from each of
+    EXTEST, SAMPLE/PRELOAD, IDCODE and BYPASS."""
+    taken = (OPCODE_EXTEST, OPCODE_SAMPLE_PRELOAD, OPCODE_IDCODE, bypass_opcode(4))
+
+    def far(opcode: int) -> bool:
+        return all(bin(opcode ^ other).count("1") >= 2 for other in taken)
+
+    assert [opcode for opcode in range(16) if far(opcode)] == [OPCODE_IJTAG_ACCESS]
+
+
+@pytest.mark.parametrize(
+    ("opcode", "match"),
+    [
+        (OPCODE_EXTEST, "EXTEST"),
+        (OPCODE_SAMPLE_PRELOAD, "SAMPLE/PRELOAD"),
+        (OPCODE_IDCODE, "Capture-IR"),
+        (0b1111, "BYPASS"),
+        (0b10000, "does not fit"),
+        (-1, "does not fit"),
+        (True, "must be an int"),
+        (12.0, "must be an int"),
+    ],
+)
+def test_an_opcode_no_tap_can_give_ijtag_access_is_refused(opcode, match):
+    assert match in ijtag_access_opcode_error(opcode)
+    with pytest.raises(TapModelError, match=match):
+        TapModel(ijtag_access_opcode=opcode)
+
+
+def test_the_ijtag_access_opcode_follows_the_ir_width():
+    assert ijtag_access_opcode_error(0b11100, ir_width=5) is None
+    assert "BYPASS" in ijtag_access_opcode_error(0b11111, ir_width=5)
+    assert ijtag_access_opcode_error(0b1111, ir_width=5) is None

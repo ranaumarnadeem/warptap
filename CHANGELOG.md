@@ -23,6 +23,19 @@ implementation stage.
   Update-DR within those two edges is lost, and with TCK stopped the clear holds. The model
   doesn't simulate a chip reset: a program must leave it inactive after its TRST lead-in.
   Off by default, byte for byte as before.
+- **A dedicated IJTAG_ACCESS instruction** (`ijtag_access_opcode` on `insert_sib_network` /
+  `insert_test_access`; `tap_model.OPCODE_IJTAG_ACCESS`, `1100`, is the suggested opcode, the
+  only one two bits from every other instruction). It alone selects the IJTAG network, and
+  EXTEST, SAMPLE and PRELOAD select BYPASS, since there is no boundary register: a board-level
+  EXTEST and its DR scans leave the network, and every signal a WRITE instrument drives,
+  untouched. `rtl/tap_core.v` is unchanged: the inserted copy has the opcode in its
+  `OPCODE_EXTEST` and `OPCODE_SAMPLE_PRELOAD` parameters, so it is the only one routed to the
+  network, and the select decode compares with it. `TapModel`, `TapConfig` (and so the
+  integrity program, which then also tests EXTEST and SAMPLE/PRELOAD as BYPASS), `to_bsdl`
+  (an `IJTAG_ACCESS` instruction; `REGISTER_ACCESS` gives EXTEST, SAMPLE and PRELOAD the
+  BYPASS register) take the same opcode, and `to_icl(..., ijtag_access=True)` names
+  `IJTAG_ACCESS` in the AccessLink. The program JSON's `tap` carries the opcode only when
+  set. Off by default, byte for byte as before.
 
 ## [0.0.3] - 2026-09-29
 

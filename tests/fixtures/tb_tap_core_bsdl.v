@@ -25,7 +25,10 @@ module tb_tap_core_bsdl;
     wire [IR_WIDTH-1:0] current_instruction;
     wire capture_dr, shift_dr, update_dr;
 
-    tap_core #(.IR_WIDTH(IR_WIDTH)) dut (
+    // No parameter override: the same testbench runs a tap_core specialized by Yosys (an
+    // IJTAG_ACCESS insertion's), whose Verilog has no parameters left. IR_WIDTH must stay
+    // tap_core's default.
+    tap_core dut (
         .tck(tck),
         .tms(tms),
         .tdi(tdi),

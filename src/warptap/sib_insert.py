@@ -28,6 +28,13 @@ scan, which is harmless: they reach ``tdo`` only through an open SIB, and a comm
 ``SAMPLE_PRELOAD``, which ``tap_core`` also routes to ``external_dr_tdo``, therefore has no
 working data register in a SIB-only design (its model has none either).
 
+With :func:`insert_sib_network`'s ``ijtag_access_opcode``, a dedicated IJTAG_ACCESS instruction
+selects the network instead, so a board-level EXTEST can't reach it. ``tap_core`` is imported
+with that opcode in both ``OPCODE_EXTEST`` and ``OPCODE_SAMPLE_PRELOAD``
+(:func:`_import_tap_core`): it is then the only opcode routed to ``external_dr_tdo``, EXTEST's
+and SAMPLE/PRELOAD's own opcodes match nothing at Update-IR and load BYPASS, and the decode
+cell (``warptap_ijtag_access_decode``) compares with it.
+
 A :class:`~warptap.icl_model.ScanMuxNode` slot instantiates ``rtl/scan_mux_cell.v`` instead,
 one FRESHLY-IMPORTED, uniquely-named module PER mux instance -- NOT the shared-import-once
 pattern every other template here uses (:func:`_import_template`), and not a per-instance
@@ -63,7 +70,7 @@ from pathlib import Path
 from warptap.errors import WarptapError
 from warptap.icl_model import ChainSlot, InstrumentDirection, PhysicalGraph, ScanMuxNode, SibNode
 from warptap.netlist import Bit, Module, Netlist
-from warptap.tap_model import IDCODE_VALUE, idcode_value_error
+from warptap.tap_model import IDCODE_VALUE, idcode_value_error, ijtag_access_opcode_error
 from warptap.tap_ports import TCK, TDI, TDO, TMS, TRST_N
 from warptap.yosys_io import ingest, ingest_with_params
 
@@ -81,8 +88,9 @@ _SCAN_MUX_CELL = "scan_mux_cell"
 
 # Must match rtl/tap_core.v's own parameter defaults: its IR width and opcodes are never
 # overridden on the hierarchical instance (same reasoning as bsr_insert.py's
-# DEFAULT_IR_WIDTH), so these are the actual values in effect. Only IDCODE_VALUE is ever
-# overridden (insert_sib_network's idcode_value).
+# DEFAULT_IR_WIDTH), so these are the actual values in effect. Only IDCODE_VALUE
+# (insert_sib_network's idcode_value) and, for IJTAG_ACCESS, the EXTEST and SAMPLE_PRELOAD
+# opcodes (its ijtag_access_opcode) are ever overridden, by importing a specialized copy.
 DEFAULT_IR_WIDTH = 4
 DEFAULT_OPCODE_EXTEST = 0b0000
 
@@ -136,19 +144,34 @@ def _import_scan_mux_template(
     return module_type
 
 
-def _import_tap_core(netlist: Netlist, *, idcode_value: int, yosys_command: str | None) -> None:
-    """Import ``rtl/tap_core.v`` with ``idcode_value`` baked into its ``IDCODE_VALUE``. The
-    default value keeps the plain :func:`_import_template` path: re-importing through
-    ``chparam`` changes Yosys's output (an added ``hdlname`` attribute, renumbered internal
-    cells) even when the value is unchanged, and default output must stay byte-identical. The
-    module keeps the name ``tap_core``; a design has exactly one."""
-    if idcode_value == IDCODE_VALUE:
+def _import_tap_core(
+    netlist: Netlist,
+    *,
+    idcode_value: int,
+    ijtag_access_opcode: int | None,
+    yosys_command: str | None,
+) -> None:
+    """Import ``rtl/tap_core.v`` with ``idcode_value`` baked into its ``IDCODE_VALUE`` and, if
+    given, ``ijtag_access_opcode`` into both ``OPCODE_EXTEST`` and ``OPCODE_SAMPLE_PRELOAD``,
+    the two instructions whose data register is ``external_dr_tdo``: that one opcode then
+    reaches the network, and EXTEST's and SAMPLE/PRELOAD's own opcodes fall through Update-IR's
+    decode to BYPASS. The defaults keep the plain :func:`_import_template` path: re-importing
+    through ``chparam`` changes Yosys's output (an added ``hdlname`` attribute, renumbered
+    internal cells) even when the value is unchanged, and default output must stay
+    byte-identical. The module keeps the name ``tap_core``; a design has exactly one."""
+    chparams: dict[str, int] = {}
+    if idcode_value != IDCODE_VALUE:
+        chparams["IDCODE_VALUE"] = idcode_value
+    if ijtag_access_opcode is not None:
+        chparams["OPCODE_EXTEST"] = ijtag_access_opcode
+        chparams["OPCODE_SAMPLE_PRELOAD"] = ijtag_access_opcode
+    if not chparams:
         _import_template(netlist, _TAP_CORE, yosys_command=yosys_command)
         return
     raw = ingest_with_params(
         [_RTL_DIR / f"{_TAP_CORE}.v"],
         _TAP_CORE,
-        {"IDCODE_VALUE": idcode_value},
+        chparams,
         yosys_command=yosys_command,
     )
     mod = netlist.add_module(_TAP_CORE, raw["modules"][_TAP_CORE])
@@ -599,6 +622,7 @@ def insert_sib_network(
     yosys_command: str | None = None,
     chip_reset: str | None = None,
     chip_reset_active_low: bool = True,
+    ijtag_access_opcode: int | None = None,
 ) -> None:
     """Insert a TAP + SIB network into ``netlist``'s ``top`` module, matching ``graph``
     (from ``sib_plan.build_sib_plan``). Adds five new top-level JTAG ports (tck/tms/tdi/
@@ -630,7 +654,8 @@ def insert_sib_network(
     ``capture_dr``/``shift_dr``/``update_dr`` unconditionally, matching every other cell)
     would commit garbage into this instrument's real host signal, including while
     retargeting *away* from it. Every top-level slot's ``select`` is the TAP's EXTEST
-    decode, so none of this moves outside EXTEST (see this module's docstring). Mutates
+    decode (IJTAG_ACCESS's, see below), so none of this moves under any other instruction
+    (see this module's docstring). Mutates
     ``netlist`` in place and returns ``None`` -- matching ``insert_bsr()``'s convention; the
     caller already has the :class:`~warptap.icl_model.ModuleInstance` tree from
     ``build_sib_plan`` for dotted-address resolution, since instrument naming (unlike Yosys
@@ -638,7 +663,7 @@ def insert_sib_network(
 
     ``ir_width``/``opcode_extest`` must match ``rtl/tap_core.v``'s actual compiled
     parameters (its own defaults, currently) since this function never overrides them on
-    the instance.
+    the instance. ``opcode_extest`` is unused with ``ijtag_access_opcode``.
 
     ``idcode_value`` is baked into the inserted ``tap_core``'s ``IDCODE_VALUE`` (default:
     :data:`warptap.tap_model.IDCODE_VALUE`, a placeholder). It must be a 32-bit value with bit 0
@@ -651,8 +676,21 @@ def insert_sib_network(
     if TRST never pulsed: its cells are ``instrument_write_clr``, cleared by ``tck_reset_sync``,
     which asserts with the chip reset and releases two TCK edges after it -- an Update-DR in
     those two edges is lost. Off by default, and then nothing changes.
+
+    ``ijtag_access_opcode`` gives the network an instruction of its own, IJTAG_ACCESS, at that
+    opcode (:data:`warptap.tap_model.OPCODE_IJTAG_ACCESS` is the suggested one): it alone
+    selects the network, and EXTEST, SAMPLE and PRELOAD select BYPASS -- there is no boundary
+    register -- so a board-level EXTEST leaves the network, and every signal a WRITE instrument
+    drives, untouched. It must fit ``ir_width`` and not be EXTEST's, SAMPLE/PRELOAD's, IDCODE's
+    or BYPASS's opcode, else :class:`SibInsertError`. Give :func:`warptap.bsdl_emit.to_bsdl`,
+    ``TapModel`` and ``TapConfig`` the same value, and :func:`warptap.icl_emit.to_icl`
+    ``ijtag_access=True``. Off by default, and then nothing changes.
     """
     if problem := idcode_value_error(idcode_value):
+        raise SibInsertError(problem)
+    if ijtag_access_opcode is not None and (
+        problem := ijtag_access_opcode_error(ijtag_access_opcode, ir_width)
+    ):
         raise SibInsertError(problem)
     top_mod = netlist.module(top)
     if chip_reset is not None:
@@ -668,7 +706,12 @@ def insert_sib_network(
     # (see _insert_chain).
     port_bits_by_name: dict[str, list[Bit]] = {p.name: p.bits for p in top_mod.ports()}
 
-    _import_tap_core(netlist, idcode_value=idcode_value, yosys_command=yosys_command)
+    _import_tap_core(
+        netlist,
+        idcode_value=idcode_value,
+        ijtag_access_opcode=ijtag_access_opcode,
+        yosys_command=yosys_command,
+    )
     _import_template(netlist, _BC1_SHIFT_ONLY, yosys_command=yosys_command)
     _import_template(netlist, _SIB_CELL, yosys_command=yosys_command)
     _import_template(netlist, _INSTRUMENT_WRITE, yosys_command=yosys_command)
@@ -699,12 +742,17 @@ def insert_sib_network(
     # call created, corrupting it.
     detached_bits_by_port: dict[str, list[Bit]] = {}
 
-    # The network's DR is EXTEST's: select it only while EXTEST is the current instruction
-    # (bsr_insert.py's extest_mode decode, same cell shape).
+    # The network's DR is EXTEST's (IJTAG_ACCESS's with ijtag_access_opcode): select it only
+    # while that is the current instruction (bsr_insert.py's extest_mode decode, same cell
+    # shape).
     ijtag_select_bits = top_mod.new_wire(1, name="warptap_ijtag_select")
-    opcode_bits: list[Bit] = [str((opcode_extest >> i) & 1) for i in range(ir_width)]
+    if ijtag_access_opcode is None:
+        decode_name, network_opcode = "warptap_ijtag_extest_decode", opcode_extest
+    else:
+        decode_name, network_opcode = "warptap_ijtag_access_decode", ijtag_access_opcode
+    opcode_bits: list[Bit] = [str((network_opcode >> i) & 1) for i in range(ir_width)]
     top_mod.add_cell(
-        "warptap_ijtag_extest_decode",
+        decode_name,
         "$eq",
         parameters={
             "A_SIGNED": 0, "B_SIGNED": 0,

@@ -1,5 +1,7 @@
 """Cross-simulation: every behavioral claim ``warptap.bsdl_emit.to_bsdl`` makes, checked against
-the real TAP RTL (``rtl/tap_core.v``) under Icarus Verilog.
+the real TAP RTL (``rtl/tap_core.v``) under Icarus Verilog -- both as written, with the default
+BSDL, and as an IJTAG_ACCESS insertion builds it (``insert_sib_network``'s own import, with
+``ijtag_access_opcode``), with the BSDL written for that opcode.
 
 The claims are read back out of the *emitted BSDL text* (``tests/bsdl_reader.py``), never taken
 from ``warptap.tap_model`` -- so this fails if the BSDL and the hardware disagree, whichever of
@@ -10,10 +12,12 @@ Checked here:
 
 - ``INSTRUCTION_CAPTURE``: the bits Capture-IR loads, as shifted out of TDO.
 - ``INSTRUCTION_LENGTH``: a 2L-bit IR scan comes back as capture pattern then the first L bits in.
-- ``INSTRUCTION_OPCODE`` / ``IDCODE_REGISTER`` / BYPASS: each declared opcode selects the register
-  the BSDL says it does; IDCODE reads back the declared 32-bit value and is exactly 32 bits;
-  BYPASS captures 0 and is exactly 1 bit; every undeclared opcode behaves as BYPASS.
-- The network-access instructions (EXTEST, SAMPLE, PRELOAD): TDO follows ``external_dr_tdo``.
+- ``INSTRUCTION_OPCODE`` / ``IDCODE_REGISTER`` / ``REGISTER_ACCESS`` / BYPASS: each declared
+  opcode selects the register the BSDL says it does; IDCODE reads back the declared 32-bit value
+  and is exactly 32 bits; BYPASS, and every instruction ``REGISTER_ACCESS`` gives the BYPASS
+  register, captures 0 and is exactly 1 bit; every undeclared opcode behaves as BYPASS.
+- The network-access instructions, those with no register of their own (EXTEST, SAMPLE and
+  PRELOAD by default; IJTAG_ACCESS alone with it): TDO follows ``external_dr_tdo``.
 - IDCODE as the default instruction: Test-Logic-Reset selects it whether it's reached through TMS
   or through the TRST pin (active low).
 - The ``DESIGN_WARNING`` claims: TDO is low outside the shift states, and TDO changes on the
@@ -36,9 +40,14 @@ from bsdl_reader import Bsdl, parse_bsdl
 
 from warptap import sim_io
 from warptap.bsdl_emit import to_bsdl
+from warptap.netlist import Netlist
+from warptap.sib_insert import insert_sib_network
+from warptap.sib_plan import InstrumentSpec, build_sib_plan
 from warptap.tap_fsm import TapState
 from warptap.tap_ir import GotoState, ShiftDR, ShiftIR, bits_to_int
 from warptap.tap_ir_play import shift_op_ranges, to_cycles
+from warptap.tap_model import OPCODE_IJTAG_ACCESS
+from warptap.yosys_io import ingest, write_verilog_from_json
 
 _RTL_PATH = Path(__file__).resolve().parent.parent / "src" / "warptap" / "rtl" / "tap_core.v"
 
@@ -73,13 +82,35 @@ class Result(NamedTuple):
     resets: List[Tuple[int, int]]  # (state, instruction) sampled while trst_n is still low
 
 
-@pytest.fixture(scope="module")
-def bsdl() -> Bsdl:
-    return parse_bsdl(to_bsdl("chip", tck_max_freq_hz=10e6))
+@pytest.fixture(scope="module", params=["extest", "ijtag_access"])
+def variant(request, tmp_path_factory, fixtures_dir, yosys_command) -> Tuple[Bsdl, Path]:
+    """The BSDL and the tap_core it describes: ``rtl/tap_core.v`` as written, or the tap_core an
+    IJTAG_ACCESS insertion imports (a specialized copy whose Verilog has no parameters left)."""
+    if request.param == "extest":
+        return parse_bsdl(to_bsdl("chip", tck_max_freq_hz=10e6)), _RTL_PATH
+    raw = ingest([fixtures_dir / "real_signal.v"], "real_signal", yosys_command=yosys_command)
+    netlist = Netlist.from_json(raw)
+    graph, _root = build_sib_plan([InstrumentSpec("stub", width=1, capture_value=0)])
+    insert_sib_network(
+        netlist, "real_signal", graph,
+        yosys_command=yosys_command, ijtag_access_opcode=OPCODE_IJTAG_ACCESS,
+    )
+    tap_core = {"modules": {"tap_core": netlist.to_json()["modules"]["tap_core"]}}
+    path = tmp_path_factory.mktemp("ijtag_access") / "tap_core.v"
+    path.write_text(write_verilog_from_json(tap_core, yosys_command=yosys_command), encoding="utf-8")
+    bsdl = to_bsdl("chip", tck_max_freq_hz=10e6, ijtag_access_opcode=OPCODE_IJTAG_ACCESS)
+    return parse_bsdl(bsdl), path
 
 
 @pytest.fixture
-def sim(fixtures_dir, iverilog_command, vvp_command) -> Callable[..., Result]:
+def bsdl(variant) -> Bsdl:
+    return variant[0]
+
+
+@pytest.fixture
+def sim(variant, fixtures_dir, iverilog_command, vvp_command) -> Callable[..., Result]:
+    rtl_path = variant[1]
+
     def run(entries: Sequence[Entry], ext: Callable[[int], int] = _ext) -> Result:
         lines: List[str] = []
         tick_index = 0
@@ -91,7 +122,7 @@ def sim(fixtures_dir, iverilog_command, vvp_command) -> Callable[..., Result]:
                 lines.append(f"0 {tms} {tdi} {ext(tick_index)}")
                 tick_index += 1
         stdout = sim_io.run_verilog_testbench(
-            [_RTL_PATH, fixtures_dir / "tb_tap_core_bsdl.v"],
+            [rtl_path, fixtures_dir / "tb_tap_core_bsdl.v"],
             extra_inputs={"stimulus.txt": "\n".join(lines) + "\n"},
             iverilog_command=iverilog_command,
             vvp_command=vvp_command,
@@ -154,7 +185,10 @@ def _opcode(bsdl: Bsdl, name: str) -> int:
 
 
 def _network_instructions(bsdl: Bsdl) -> List[str]:
-    return sorted(set(bsdl.opcodes) - {"IDCODE", "BYPASS"})
+    """The declared instructions with no register of their own: neither IDCODE nor BYPASS, nor
+    given a register by REGISTER_ACCESS."""
+    given = {name for names in bsdl.register_access.values() for name in names}
+    return sorted(set(bsdl.opcodes) - {"IDCODE", "BYPASS"} - given)
 
 
 def test_instruction_capture_pattern_and_length_match_the_rtl(bsdl, sim):
@@ -186,23 +220,27 @@ def test_idcode_opcode_selects_a_32_bit_register_holding_the_declared_value(bsdl
     assert dr >> 32 == first_in  # exactly 32 bits of delay
 
 
-def test_bypass_opcode_selects_a_one_bit_register_that_captures_zero(bsdl, sim):
+def test_bypass_and_what_register_access_gives_it_are_one_bit_capturing_zero(bsdl, sim):
+    """BYPASS's opcode, and each instruction REGISTER_ACCESS gives the BYPASS register (with
+    IJTAG_ACCESS: EXTEST, SAMPLE and PRELOAD), selects a 1-bit register that captures 0."""
     tdi = 0b1011_0111
-    ops = _load_ir(_opcode(bsdl, "BYPASS"), bsdl.instruction_length) + _scan_dr(8, tdi)
-    _, dr = _observed(sim(_entries(ops)), ops)
-    assert dr == (tdi << 1) & 0xFF  # captured 0, then TDI delayed by exactly one cycle
+    for name in ["BYPASS", *bsdl.register_access.get("BYPASS", [])]:
+        ops = _load_ir(_opcode(bsdl, name), bsdl.instruction_length) + _scan_dr(8, tdi)
+        _, dr = _observed(sim(_entries(ops)), ops)
+        assert dr == (tdi << 1) & 0xFF, name  # captured 0, then TDI delayed by exactly one cycle
 
 
-def test_the_declared_network_instructions_are_extest_sample_and_preload(bsdl):
-    assert _network_instructions(bsdl) == ["EXTEST", "PRELOAD", "SAMPLE"]
+def test_the_declared_network_instructions(bsdl, request):
+    expected = {"extest": ["EXTEST", "PRELOAD", "SAMPLE"], "ijtag_access": ["IJTAG_ACCESS"]}
+    assert _network_instructions(bsdl) == expected[request.node.callspec.params["variant"]]
 
 
-@pytest.mark.parametrize("name", ["EXTEST", "SAMPLE", "PRELOAD"])
-def test_network_access_instruction_passes_external_dr_tdo_to_tdo(name, bsdl, sim):
-    ops = _load_ir(_opcode(bsdl, name), bsdl.instruction_length) + _scan_dr(24, 0)
-    _, dr = _observed(sim(_entries(ops)), ops)
-    assert dr == _ext_stream(ops, 1, 24)
-    assert dr != 0  # the stream is not trivially all zeros
+def test_network_access_instructions_pass_external_dr_tdo_to_tdo(bsdl, sim):
+    for name in _network_instructions(bsdl):
+        ops = _load_ir(_opcode(bsdl, name), bsdl.instruction_length) + _scan_dr(24, 0)
+        _, dr = _observed(sim(_entries(ops)), ops)
+        assert dr == _ext_stream(ops, 1, 24), name
+        assert dr != 0  # the stream is not trivially all zeros
 
 
 def test_every_opcode_selects_what_the_bsdl_says_and_undeclared_ones_are_bypass(bsdl, sim):
@@ -234,13 +272,13 @@ def test_every_opcode_selects_what_the_bsdl_says_and_undeclared_ones_are_bypass(
 
 def test_a_tms_reset_and_the_trst_pin_both_select_idcode(bsdl, sim):
     """IEEE 1149.1: Test-Logic-Reset selects IDCODE (the BSDL's default instruction), however
-    it's reached. Load EXTEST and drive five TMS=1 edges: resident in Test-Logic-Reset, IDCODE is
-    latched. Load EXTEST again and pulse trst_n low (TAP_SCAN_RESET, active low): an asynchronous
-    reset to Test-Logic-Reset with IDCODE selected."""
+    it's reached. Load a network instruction and drive five TMS=1 edges: resident in
+    Test-Logic-Reset, IDCODE is latched. Load it again and pulse trst_n low (TAP_SCAN_RESET,
+    active low): an asynchronous reset to Test-Logic-Reset with IDCODE selected."""
     length = bsdl.instruction_length
-    extest = _opcode(bsdl, "EXTEST")
+    network = _opcode(bsdl, _network_instructions(bsdl)[0])
     idcode = _opcode(bsdl, "IDCODE")
-    ops = _load_ir(extest, length)
+    ops = _load_ir(network, length)
     cycles = len(to_cycles(ops))
 
     tms_reset = sim(
@@ -253,7 +291,7 @@ def test_a_tms_reset_and_the_trst_pin_both_select_idcode(bsdl, sim):
 
     trst = sim(_entries(ops) + [("tick", 0, 0), ("reset",), ("tick", 0, 0)])
     loaded = trst.samples[_LEAD_IN_TICKS + cycles]
-    assert (loaded.state, loaded.instr) == (_RTI, extest)
+    assert (loaded.state, loaded.instr) == (_RTI, network)
     trst_state, trst_instr = trst.resets[1]  # resets[0] is the lead-in reset
     assert (trst_state, trst_instr) == (_TLR, idcode)
     after_trst = trst.samples[_LEAD_IN_TICKS + cycles + 1]
@@ -261,13 +299,14 @@ def test_a_tms_reset_and_the_trst_pin_both_select_idcode(bsdl, sim):
 
 
 def test_tdo_is_low_outside_the_shift_states_and_changes_only_on_the_rising_edge(bsdl, sim):
-    """Two DESIGN_WARNING claims, checked over a long run with EXTEST selected and
-    external_dr_tdo held high (so any leak of it onto TDO outside a shift state is visible):
+    """Two DESIGN_WARNING claims, checked over a long run with a network instruction selected
+    and external_dr_tdo held high (so any leak of it onto TDO outside a shift state is visible):
     TDO is driven low, not tri-stated or passed through, outside Shift-DR/Shift-IR; and it never
     differs between just-after-rising-edge and just-after-falling-edge (it changes only at the
     rising edge -- 1149.1 wants the falling edge)."""
     length = bsdl.instruction_length
-    ops = _load_ir(_opcode(bsdl, "EXTEST"), length) + _scan_dr(16, 0xA5A5)
+    network = _opcode(bsdl, _network_instructions(bsdl)[0])
+    ops = _load_ir(network, length) + _scan_dr(16, 0xA5A5)
     walk_rng = random.Random(7)
     walk: List[Entry] = [("tick", walk_rng.randint(0, 1), walk_rng.randint(0, 1)) for _ in range(400)]
     result = sim(_entries(ops) + walk, ext=lambda i: 1)

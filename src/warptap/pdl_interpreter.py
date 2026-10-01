@@ -240,9 +240,11 @@ class PDLInterpreter:
     ``program`` holds DR scans only; it never loads an instruction. Before playing it, the TAP
     must hold EXTEST, the only instruction that selects the network
     (:data:`warptap.tap_model.NETWORK_ACCESS_INSTRUCTION`): prepend
-    ``select_instruction(OPCODE_EXTEST)`` (:func:`warptap.tap_integrity.select_instruction`).
-    Every reset loads IDCODE, under which the network holds still, so a program played
-    without that step reads nothing back and commits nothing."""
+    ``select_instruction(OPCODE_EXTEST)`` (:func:`warptap.tap_integrity.select_instruction`),
+    or ``select_instruction(<its ijtag_access_opcode>)`` for a TAP inserted with one, where
+    IJTAG_ACCESS selects the network instead. Every reset loads IDCODE, under which the network
+    holds still, so a program played without that step reads nothing back and commits
+    nothing."""
 
     def __init__(self, graph: PhysicalGraph, root: ModuleInstance) -> None:
         self._graph = graph
