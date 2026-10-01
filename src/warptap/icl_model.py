@@ -67,6 +67,10 @@ class InstrumentNode(NamedTuple):
     direction: InstrumentDirection = InstrumentDirection.READ
     signal_bits: tuple[SignalBinding, ...] = ()  # () or exactly `width` long
     aliases: tuple[Alias, ...] = ()  # named sub-fields PDL's iWrite/iRead can address by name
+    # READ only: capture through a two-TCK-flop synchronizer (rtl/bc1_shift_only_sync.v), for
+    # a signal from another clock domain. A capture then shows the signal as it was two TCK
+    # edges earlier.
+    capture_sync: bool = False
 
 
 class SibNode(NamedTuple):

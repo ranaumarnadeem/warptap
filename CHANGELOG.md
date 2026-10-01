@@ -5,6 +5,16 @@ implementation stage.
 
 ## [Unreleased]
 
+### Added
+
+- **`capture_sync` on a READ instrument** (`InstrumentSpec(..., capture_sync=True)`): its
+  bits capture through a two-TCK-flop synchronizer (`rtl/bc1_shift_only_sync.v`, reset by
+  `trst_n`), for a signal from another clock domain. A capture shows the signal as it was two
+  TCK edges earlier, never a value caught changing. Each bit has its own synchronizer, so a
+  multi-bit value is coherent only if it holds still for those two edges, as a settled status
+  does. Off by default: a network without it is inserted byte for byte as before. A WRITE
+  instrument can't ask for it.
+
 ## [0.0.3] - 2026-09-29
 
 ### Behavior changes

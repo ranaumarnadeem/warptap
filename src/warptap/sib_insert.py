@@ -71,6 +71,7 @@ _RTL_DIR = Path(__file__).resolve().parent / "rtl"
 
 _TAP_CORE = "tap_core"
 _BC1_SHIFT_ONLY = "bc1_shift_only"
+_BC1_SHIFT_ONLY_SYNC = "bc1_shift_only_sync"  # imported only when a READ asks for capture_sync
 _SIB_CELL = "sib_cell"
 _INSTRUMENT_WRITE = "instrument_write"
 _SCAN_MUX_CELL = "scan_mux_cell"
@@ -153,6 +154,33 @@ def _import_tap_core(netlist: Netlist, *, idcode_value: int, yosys_command: str 
     mod.set_module_attribute("keep", 1)
 
 
+def _check_capture_sync(instrument, owner_desc: str) -> None:
+    if instrument.capture_sync and instrument.direction is InstrumentDirection.WRITE:
+        raise SibInsertError(
+            f"instrument {instrument.name!r} (gated by {owner_desc}) is a WRITE instrument "
+            "with capture_sync -- only a READ instrument captures from a signal"
+        )
+
+
+def _read_cell(instrument) -> str:
+    """The cell type a READ instrument's bits are: synchronized or not."""
+    return _BC1_SHIFT_ONLY_SYNC if instrument.capture_sync else _BC1_SHIFT_ONLY
+
+
+def _instruments(chain: tuple[ChainSlot, ...]):
+    """Every instrument of a chain, nested sub-chains and scan-mux arms included."""
+    for slot in chain:
+        if isinstance(slot, ScanMuxNode):
+            for arm in slot.arms:
+                if arm.instrument is not None:
+                    yield arm.instrument
+                yield from _instruments(arm.nested)
+        else:
+            if slot.instrument is not None:
+                yield slot.instrument
+            yield from _instruments(slot.nested)
+
+
 def _insert_leaf_instrument_bits(
     top_mod: Module,
     instrument,
@@ -196,6 +224,7 @@ def _insert_leaf_instrument_bits(
             f"instrument {instrument.name!r} (gated by {owner_desc}) is a WRITE instrument "
             "with no signal_bits -- nothing for it to drive"
         )
+    _check_capture_sync(instrument, owner_desc)
 
     prev_inst_so: list[Bit] = entry_bits
     for k in range(width):
@@ -236,7 +265,7 @@ def _insert_leaf_instrument_bits(
                 pi_bits = [str((capture_value >> k) & 1)]
             top_mod.add_cell(
                 inst_instance,
-                _BC1_SHIFT_ONLY,
+                _read_cell(instrument),
                 port_directions={
                     "pi": "input", "si": "input", "so": "output",
                     "capture_dr": "input", "shift_dr": "input",
@@ -440,6 +469,7 @@ def _insert_chain(
                     f"instrument {slot.instrument.name!r} (gated by {slot.sib_name!r}) is a "
                     "WRITE instrument with no signal_bits -- nothing for it to drive"
                 )
+            _check_capture_sync(slot.instrument, repr(slot.sib_name))
 
             nested_so_bits = top_mod.new_wire(1, name=f"{sib_instance}_nested_so")
             prev_inst_so: list[Bit] = nested_si_bits
@@ -489,7 +519,7 @@ def _insert_chain(
                         pi_bits = [str((capture_value >> k) & 1)]
                     top_mod.add_cell(
                         inst_instance,
-                        _BC1_SHIFT_ONLY,
+                        _read_cell(slot.instrument),
                         port_directions={
                             "pi": "input", "si": "input", "so": "output",
                             "capture_dr": "input", "shift_dr": "input",
@@ -563,7 +593,9 @@ def insert_sib_network(
     ``nested_si``/``nested_so`` (implementation_plan.md §7 Stage 9): a READ instrument gets
     ``bc1_shift_only`` cells, each ``pi`` either tied to one bit of the fixed
     ``capture_value`` stub (no ``signal_bits``) or fanned out from one real host port bit
-    (``signal_bits`` given); a WRITE instrument gets ``instrument_write`` cells, each
+    (``signal_bits`` given) -- ``bc1_shift_only_sync`` instead, a two-TCK-flop synchronizer
+    before capture, when the instrument asks for ``capture_sync`` (a signal from another
+    clock domain); a WRITE instrument gets ``instrument_write`` cells, each
     ``pin_out`` wired directly onto one bit of its target host port -- ``detach_port`` once
     per distinct port name, so every existing internal driver/reader of that port's old bits
     is now driven by JTAG instead. A WRITE cell's ``select`` is wired to its own SIB's
@@ -603,6 +635,9 @@ def insert_sib_network(
     _import_template(netlist, _BC1_SHIFT_ONLY, yosys_command=yosys_command)
     _import_template(netlist, _SIB_CELL, yosys_command=yosys_command)
     _import_template(netlist, _INSTRUMENT_WRITE, yosys_command=yosys_command)
+    # Only on request, so a network without capture_sync comes out exactly as before.
+    if any(instrument.capture_sync for instrument in _instruments(graph.chain)):
+        _import_template(netlist, _BC1_SHIFT_ONLY_SYNC, yosys_command=yosys_command)
     # scan_mux_cell.v is NOT imported here -- unlike every other template, it's imported once
     # PER ScanMuxNode instance, freshly parameter-specialized, inside _insert_chain itself
     # (see _import_scan_mux_template's own docstring, and this module's own, for why).
