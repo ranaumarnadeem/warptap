@@ -41,6 +41,8 @@ def insert_test_access(
     use_sv: bool = False,
     port_renames: dict[str, str] | None = None,
     idcode_value: int = IDCODE_VALUE,
+    chip_reset: str | None = None,
+    chip_reset_active_low: bool = True,
 ) -> Tuple[str, PhysicalGraph, ModuleInstance]:
     """Ingest ``sources``, build the SIB/instrument network ``specs`` describes, insert it into
     ``top_module``, and return the synthesizable inserted Verilog text plus the
@@ -76,6 +78,9 @@ def insert_test_access(
     :func:`~warptap.sib_insert.insert_sib_network`): a 32-bit value with bit 0 set, else
     :class:`~warptap.sib_insert.SibInsertError`, raised before anything is ingested. Give
     :func:`~warptap.bsdl_emit.to_bsdl` the same value.
+
+    ``chip_reset``/``chip_reset_active_low`` make every WRITE instrument also clear on the
+    chip reset input (see :func:`~warptap.sib_insert.insert_sib_network`); off by default.
     """
     if problem := idcode_value_error(idcode_value):
         raise SibInsertError(problem)
@@ -87,7 +92,13 @@ def insert_test_access(
             top_mod.rename_port(old_name, new_name)
     graph, root = build_sib_plan(specs, top_name=top_module)
     insert_sib_network(
-        netlist, top_module, graph, idcode_value=idcode_value, yosys_command=yosys_command
+        netlist,
+        top_module,
+        graph,
+        idcode_value=idcode_value,
+        yosys_command=yosys_command,
+        chip_reset=chip_reset,
+        chip_reset_active_low=chip_reset_active_low,
     )
     inserted_verilog = write_verilog_from_json(
         netlist.to_json(), yosys_command=yosys_command

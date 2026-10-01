@@ -14,6 +14,15 @@ implementation stage.
   multi-bit value is coherent only if it holds still for those two edges, as a settled status
   does. Off by default: a network without it is inserted byte for byte as before. A WRITE
   instrument can't ask for it.
+- **`chip_reset` on `insert_sib_network` / `insert_test_access`**: every WRITE instrument also
+  clears on the chip reset input (active low unless `chip_reset_active_low=False`), not only
+  on `trst_n`, so the signals it drives come up deasserted after a chip reset even when TRST
+  never pulsed. Its cells are `rtl/instrument_write_clr.v`, cleared through
+  `rtl/tck_reset_sync.v`, which asserts with the chip reset and releases two TCK edges after
+  it: the release is a TCK-domain path, never an asynchronous one near a TCK edge. An
+  Update-DR within those two edges is lost, and with TCK stopped the clear holds. The model
+  doesn't simulate a chip reset: a program must leave it inactive after its TRST lead-in.
+  Off by default, byte for byte as before.
 
 ## [0.0.3] - 2026-09-29
 
