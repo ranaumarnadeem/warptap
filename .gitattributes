@@ -1,3 +1,8 @@
+# Every text file is checked out with LF, on Windows too: Git for Windows defaults to
+# core.autocrlf=true, and the tests run under WSL/Linux, where CRLF sources and scripts
+# misbehave. Binary files are left alone (text=auto detects them).
+* text=auto eol=lf
+
 # Byte-exact golden files: never let git rewrite line endings (core.autocrlf on Windows would
 # otherwise turn LF into CRLF and break the byte-for-byte comparisons).
 tests/fixtures/golden_icl/* -text
