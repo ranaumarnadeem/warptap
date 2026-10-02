@@ -1,4 +1,4 @@
-"""SIB network insertion — the impure surgery phase (implementation_plan.md §7 Stage 4).
+"""SIB network insertion: the impure surgery phase (implementation_plan.md §7 Stage 4).
 Given a :class:`~warptap.icl_model.PhysicalGraph` (from ``sib_plan.build_sib_plan``), imports
 ``tap_core.v``, ``sib_cell.v``, ``bc1_shift_only.v``, and ``instrument_write.v`` as
 hierarchical submodules (the same "hand-author once, capture as JSON" mechanism

@@ -3,7 +3,7 @@
 This is the single source of truth two other artifacts are checked against: the hand-authored
 `rtl/tap_core.v` (via tests/test_tap_fsm_cross_sim.py's behavioral simulation) and this same
 table re-derived from independent references (tests/test_tap_fsm_table.py's structural check).
-Deliberately has no knowledge of instructions/opcodes — the real 16-state FSM is driven by TMS
+Deliberately has no knowledge of instructions/opcodes: the real 16-state FSM is driven by TMS
 alone, identically for every IEEE-1149.1-conformant TAP regardless of IR width or instruction
 set, so keeping that fact out of this file is what makes it the right thing to cross-check.
 """

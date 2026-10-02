@@ -41,11 +41,11 @@ def _reset_and_idle(model: TapModel) -> None:
 
 def _shift_ir_to_exit1(model: TapModel, opcode: int) -> None:
     """From RUN_TEST_IDLE, shift `opcode` into the instruction register and stop at
-    EXIT1_IR — deliberately *before* Update-IR, so a test can observe that
+    EXIT1_IR: deliberately *before* Update-IR, so a test can observe that
     `model.instruction` hasn't changed yet.
 
     Real JTAG hardware shifts on *every* cycle resident in Shift-IR, including the
-    cycle that exits via TMS=1 — the last bit and the exit transition happen on the
+    cycle that exits via TMS=1: the last bit and the exit transition happen on the
     same edge. So only `ir_width - 1` bits are fed while looping with TMS=0; the final
     bit rides the TMS=1 tick that actually leaves Shift-IR."""
     model.tick(tms=1)  # RUN_TEST_IDLE -> SELECT_DR_SCAN
@@ -67,7 +67,7 @@ def _shift_ir(model: TapModel, opcode: int) -> None:
 
 
 def _goto_shift_dr(model: TapModel) -> None:
-    """From RUN_TEST_IDLE to SHIFT_DR, performing Capture-DR on the way — the shared
+    """From RUN_TEST_IDLE to SHIFT_DR, performing Capture-DR on the way: the shared
     setup every DR end-to-end test builds on."""
     model.tick(tms=1)  # RUN_TEST_IDLE -> SELECT_DR_SCAN
     model.tick(tms=0)  # -> CAPTURE_DR
@@ -81,7 +81,7 @@ def test_capture_ir_pattern_lsbs_are_01():
 def test_capture_ir_pattern_equals_idcode_opcode():
     """Deliberate design choice (implementation_plan.md §7 Stage 2): if a shift
     sequence goes Capture-IR -> Update-IR without visiting Shift-IR, the captured
-    pattern becomes the new instruction, and this way that edge case lands on IDCODE —
+    pattern becomes the new instruction, and this way that edge case lands on IDCODE:
     the same safe default the reset rule already requires."""
     assert CAPTURE_IR_PATTERN == OPCODE_IDCODE
 

@@ -1,6 +1,6 @@
 """Structural post-synthesis check (implementation_plan.md §4.3, refined per-cell not
 aggregate, per this session's research): every planned BsrCell must survive Yosys's real
-default synthesis recipe as a distinct, individually-identifiable instance — not merged
+default synthesis recipe as a distinct, individually-identifiable instance: not merged
 (yosys#855's opt_merge risk), not deleted."""
 
 from __future__ import annotations
@@ -13,7 +13,7 @@ from warptap.yosys_io import ingest, synthesize
 
 def _decode_int_attr(value) -> int:
     """Yosys round-trips integer-valued attributes as zero-padded binary strings
-    (confirmed empirically against this project's own inserted netlists) — string
+    (confirmed empirically against this project's own inserted netlists): string
     attributes (e.g. warptap_bsr_port_name) pass through unchanged."""
     if isinstance(value, int):
         return value
@@ -52,7 +52,7 @@ def test_every_bsr_cell_survives_synth_with_flatten(fixtures_dir, yosys_command)
 
 
 def test_no_bsr_cell_is_merged_with_another(fixtures_dir, yosys_command):
-    """Identity, not just count: exactly one surviving cell per cell_number — a raw
+    """Identity, not just count: exactly one surviving cell per cell_number: a raw
     aggregate count would miss an opt_merge collapse of two cells into one shared
     instance (structurally-identical repeated cells, e.g. two INPUT cells, are
     exactly opt_merge's documented collapse target)."""
@@ -74,7 +74,7 @@ def test_no_bsr_cell_is_merged_with_another(fixtures_dir, yosys_command):
 
 
 def test_tap_core_instance_survives_synth(fixtures_dir, yosys_command):
-    """The TAP itself is also `set_keep`-tagged (bsr_insert.py) — confirm it
+    """The TAP itself is also `set_keep`-tagged (bsr_insert.py): confirm it
     survives the same worst-case synth pass as a single, undamaged instance."""
     netlist, _plan = _build_inserted_plan(fixtures_dir, yosys_command)
 

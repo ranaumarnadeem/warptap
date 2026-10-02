@@ -1,6 +1,6 @@
 # Named sub-field addressing
 
-Real ICL lets an instrument declare named `Alias` sub-ranges within its own register — a
+Real ICL lets an instrument declare named `Alias` sub-ranges within its own register: a
 control/status word split into meaningfully-named fields rather than one opaque integer.
 Declare them on the `InstrumentSpec`, then address them by name from `iWrite`/`iRead` instead
 of writing/reading the whole register.
@@ -29,8 +29,8 @@ field, rather than silently addressing the wrong bits.
 
 ## Fields and separate applies
 
-Writing one field in a fresh `iApply` cycle — with no other field of the same instrument also
-queued that same batch — preserves the other fields' own last-committed values instead of
+Writing one field in a fresh `iApply` cycle, with no other field of the same instrument also
+queued that same batch, preserves the other fields' own last-committed values instead of
 zeroing them: `PDLInterpreter` tracks each `WRITE`-direction instrument's own last-known
 committed value across calls, so a sub-field write only ever touches the bits it names.
 `iRead(expected, field=...)` works the same way for the read side, masking in only the named

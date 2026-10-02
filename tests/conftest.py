@@ -13,7 +13,7 @@ def _default_yosys_command() -> str:
         return os.environ["WARPTAP_YOSYS_CMD"]
     if shutil.which("yosys"):
         return "yosys"
-    # No system Yosys on PATH — fall back to the yowasp-yosys console-script
+    # No system Yosys on PATH: fall back to the yowasp-yosys console-script
     # installed alongside this interpreter (e.g. in a dev venv), per
     # implementation_plan.md's note on using the WASM build for local dev/test.
     candidate = Path(sys.executable).with_name(

@@ -2,9 +2,9 @@
 §3.2). Two genuinely separate structures, confirmed independently by real ICL sources and by
 Honza255/icl_parser's own design:
 
-  1. :class:`PhysicalGraph` — the physical shift-topology graph. What actually sits on the scan
+  1. :class:`PhysicalGraph`: the physical shift-topology graph. What actually sits on the scan
      path, in TDI-to-TDO order, and which SIB gates which nested segment.
-  2. :class:`ModuleInstance` — the module-instantiation tree. Pure lexical containment, used
+  2. :class:`ModuleInstance`: the module-instantiation tree. Pure lexical containment, used
      only for dotted-address resolution (``top.wrapper.instrument``), never for shift-order
      math. A SIB's own instance name normally does NOT appear in the dotted address of the
      instrument it gates -- confirmed against real ICL examples that SIB and instrument are

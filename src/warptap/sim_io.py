@@ -4,7 +4,7 @@ hand-authored RTL (e.g. ``rtl/tap_core.v``) against its Python behavioral-model 
 
 Mirrors ``yosys_io.py``'s established pattern deliberately: a custom ``*Error`` carrying
 command/returncode/stdout/stderr, ``tempfile.TemporaryDirectory`` + ``cwd=tmp`` + relative
-filenames (same reason as ``yosys_io.py`` — one code path that works whether paths are native
+filenames (same reason as ``yosys_io.py``: one code path that works whether paths are native
 or sandboxed), and ``WARPTAP_*_CMD`` environment-variable overrides.
 """
 
@@ -57,7 +57,7 @@ def run_verilog_testbench(
 
     ``extra_inputs`` (e.g. a generated stimulus file a testbench reads via ``$fscanf``)
     are written into the same cwd-relative temp directory the Verilog sources are copied
-    into, under the given filenames — the testbench should read them by that bare name,
+    into, under the given filenames: the testbench should read them by that bare name,
     same discipline as ``yosys_io.ingest()``.
     """
     with tempfile.TemporaryDirectory(prefix="warptap-sim-") as tmpdir:
@@ -82,6 +82,6 @@ def run_verilog_testbench(
 
 def tool_available(command: str) -> bool:
     """Whether ``command`` resolves to a real executable, either on PATH or as an
-    absolute/relative path that exists — used by conftest.py to skip cross-sim tests
+    absolute/relative path that exists: used by conftest.py to skip cross-sim tests
     cleanly when Icarus Verilog isn't installed, rather than failing."""
     return shutil.which(command) is not None or Path(command).exists()

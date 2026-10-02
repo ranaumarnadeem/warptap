@@ -1,6 +1,6 @@
 """Python behavioral model of an inserted boundary-scan chain (implementation_plan.md §7
 Stage 3), implementing ``warptap.tap_model``'s ``DataRegister`` protocol so it can be plugged
-into ``TapModel.register_data_register(Instruction.EXTEST, ...)`` — the extension point
+into ``TapModel.register_data_register(Instruction.EXTEST, ...)``: the extension point
 ``TapModelError`` already names. Used by ``tests/test_bsr_insert_cross_sim.py`` to
 cross-simulate against the real inserted RTL; not used by ``bsr_insert.py`` itself, which only
 ever emits RTL.
@@ -25,7 +25,7 @@ class BoundaryScanRegister:
     ``tap_core.v`` sees it: a single serial path from TDI, through every
     :class:`~warptap.bsr_plan.BsrCell` in ``cell_number`` order, to
     ``external_dr_tdo``. ``plan.cells`` must contain only INPUT/CONTROL/OUTPUT3
-    cells (v1 scope — BIDIR isn't modeled here yet, matching ``bsr_insert.py``)."""
+    cells (v1 scope: BIDIR isn't modeled here yet, matching ``bsr_insert.py``)."""
 
     def __init__(self, plan: BsrPlan):
         for cell in plan.cells:
@@ -44,7 +44,7 @@ class BoundaryScanRegister:
         """Zero every cell's shift/update state, matching rtl/bc1_full.v's and
         rtl/bc1_shift_only.v's own `trst_n` reset behavior. Callers driving this
         model alongside a TapModel should call this whenever they call
-        TapModel.reset() — TapModel.reset() resets only its own FSM/IR state and
+        TapModel.reset(), because TapModel.reset() resets only its own FSM/IR state and
         its built-in BYPASS/IDCODE registers, never a register plugged in with
         register_data_register()."""
         for state in self._states:
@@ -88,11 +88,11 @@ class BoundaryScanRegister:
 
         Mirrors ``y = EN ? A : 1'bz`` with both ``A`` (the output3 cell's
         ``pin_out``) and ``EN`` (the control cell's ``pin_out``) independently
-        following ``extest_mode ? po : func_in`` — outside EXTEST the control
+        following ``extest_mode ? po : func_in``. Outside EXTEST the control
         cell's ``func_in`` is the fixed constant ``1`` (v1, matching
         ``bsr_insert.py``), so the driver is always enabled in normal mode; under
         EXTEST, whether it's enabled depends on whatever was last shifted into the
-        control cell's ``po`` via Update-DR — which starts disabled on reset
+        control cell's ``po`` via Update-DR, which starts disabled on reset
         (``safe_value=0``'s whole point), not enabled by default."""
         output_state = None
         control_state = None

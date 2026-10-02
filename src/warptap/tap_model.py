@@ -5,7 +5,7 @@ This is the reference side of every cross-simulation test against rtl/tap_core.v
 extension point Stage 9's PDL functional verification eventually drives. SAMPLE_PRELOAD and
 EXTEST decode correctly and drive capture/shift/update strobes correctly (real hardware
 computes those from *state* alone, not from which instruction is active), but have no data
-register registered by default — their data register is the boundary-scan register, which
+register registered by default: their data register is the boundary-scan register, which
 doesn't exist until Stage 3. Shifting through them before Stage 3 registers a real one raises
 TapModelError loudly rather than silently validating nothing against a fake stand-in.
 
@@ -67,7 +67,7 @@ def idcode_value_error(value: object) -> str | None:
 
 
 def bypass_opcode(ir_width: int) -> int:
-    """BYPASS must decode to all-1s for whatever IR width is configured — computed, not
+    """BYPASS must decode to all-1s for whatever IR width is configured: computed, not
     hardcoded, since the mandate is about the pattern, not a fixed bit width."""
     return (1 << ir_width) - 1
 
@@ -149,13 +149,13 @@ def decode_instruction(
 
 class TapModelError(WarptapError):
     """Raised when TapModel is asked to do something its currently-registered data
-    registers don't support — e.g. shifting through SAMPLE_PRELOAD/EXTEST before Stage 3's
+    registers don't support: e.g. shifting through SAMPLE_PRELOAD/EXTEST before Stage 3's
     boundary-scan register exists (implementation_plan.md §7)."""
 
 
 class DataRegister(Protocol):
     """The interface TapModel expects from anything registered via
-    `register_data_register` — BYPASS/IDCODE below, and Stage 3+'s real boundary-scan
+    `register_data_register`: BYPASS/IDCODE below, and Stage 3+'s real boundary-scan
     register later."""
 
     def capture(self) -> None: ...
@@ -250,7 +250,7 @@ class TapModel:
         self.instruction = self._reset_instruction()
 
     def register_data_register(self, instruction: Instruction, dr: DataRegister) -> None:
-        """Plug in a real data register for `instruction` — the extension point Stage
+        """Plug in a real data register for `instruction`: the extension point Stage
         3 (boundary-scan register, for EXTEST/SAMPLE_PRELOAD) and later stages use,
         without touching any FSM/IR logic in this class."""
         self._data_registers[instruction] = dr
@@ -271,7 +271,7 @@ class TapModel:
 
     def instruction_opcode(self) -> int:
         """Canonical opcode for the currently-active instruction, normalizing
-        reserved/unimplemented opcodes to BYPASS's own opcode — matches
+        reserved/unimplemented opcodes to BYPASS's own opcode: matches
         rtl/tap_core.v's `current_instruction` register value exactly (both
         normalize at Update-IR time the same way), so
         tests/test_tap_fsm_cross_sim.py can diff the two with no translation."""
@@ -294,7 +294,7 @@ class TapModel:
             )
         if dr is None:
             raise TapModelError(
-                f"no data register registered for {self.instruction.value} — its data "
+                f"no data register registered for {self.instruction.value}: its data "
                 "register is the boundary-scan register, which doesn't exist until "
                 "Stage 3 (implementation_plan.md §7). Call register_data_register() "
                 "first, or drive an instruction with a built-in register (BYPASS/IDCODE)."
@@ -304,7 +304,7 @@ class TapModel:
     def tick(self, tms: int, tdi: int = 0) -> int:
         """Step one TCK rising edge. `tms`/`tdi` are the values sampled on this edge;
         returns the TDO value for this cycle (only meaningful while resident in
-        Shift-IR/Shift-DR — other states return 0, since real TAPs don't guarantee a
+        Shift-IR/Shift-DR: other states return 0, since real TAPs don't guarantee a
         protocol-significant TDO value outside a shift state either)."""
         old_state = self.state
         tdo = 0

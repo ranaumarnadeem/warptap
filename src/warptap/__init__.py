@@ -1,4 +1,4 @@
-"""warptap — inserts IEEE 1149.1 (JTAG/TAP) and IEEE 1687 (IJTAG/ICL+PDL) test-access
+"""warptap inserts IEEE 1149.1 (JTAG/TAP) and IEEE 1687 (IJTAG/ICL+PDL) test-access
 infrastructure into a design.
 
 This module re-exports the real entry points a caller actually needs -- everything else stays

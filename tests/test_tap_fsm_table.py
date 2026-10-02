@@ -2,11 +2,11 @@
 public TAP implementations (implementation_plan.md §8: "TAP FSM table cross-check against at
 least two independent references... off-by-one edge transitions are the realistic bug class
 here"). Every IEEE-1149.1-conformant TAP has the *identical* 16-state/32-edge FSM regardless
-of IR width or instruction set, so any mismatch here is a transcription bug — in either
+of IR width or instruction set, so any mismatch here is a transcription bug: in either
 warptap's own table or the reference being compared against.
 
 Both reference tables below are transcribed directly from the actual project sources (fetched
-2026-08-19), not derived from warptap.tap_fsm.TRANSITIONS — the whole point is that they were
+2026-08-19), not derived from warptap.tap_fsm.TRANSITIONS: the whole point is that they were
 written down independently.
 """
 
@@ -16,7 +16,7 @@ from warptap.tap_fsm import TapState, TRANSITIONS
 
 # Transcribed from freecores/jtag's tap/rtl/verilog/tap_top.v
 # (https://github.com/freecores/jtag/blob/master/tap/rtl/verilog/tap_top.v). That file has no
-# single next-state table — instead, one `always @(posedge tck_pad_i or posedge trst_pad_i)`
+# single next-state table: instead, one `always @(posedge tck_pad_i or posedge trst_pad_i)`
 # block per state, each of the shape `if (tms_pad_i & (A | B | ...)) target <= 1'b1;` (or
 # `~tms_pad_i & (...)` for the tms=0 case). This dict is that structure transcribed as-is:
 # target_state -> [(tms value required, source state that asserts it), ...]. The actual
@@ -51,7 +51,7 @@ _FREECORES_ASSERTED_BY: dict[str, list[tuple[int, str]]] = {
 def _derive_transitions_from_assertions(
     asserted_by: dict[str, list[tuple[int, str]]],
 ) -> dict[str, tuple[str, str]]:
-    """Invert a target->[(tms, source), ...] assertion map into source->(next0, next1) —
+    """Invert a target->[(tms, source), ...] assertion map into source->(next0, next1):
     i.e. actually compute the transition table implied by the fetched boolean logic,
     rather than trusting a hand-derivation of it."""
     by_source: dict[str, dict[int, str]] = {name: {} for name in asserted_by}
@@ -64,7 +64,7 @@ def _derive_transitions_from_assertions(
 FREECORES_TRANSITIONS = _derive_transitions_from_assertions(_FREECORES_ASSERTED_BY)
 
 # Transcribed verbatim from KadiChandu/JTAG-TAP-Controller's tap_controller_design.v
-# (https://github.com/KadiChandu/JTAG-TAP-Controller, fetched 2026-08-19) — a plain
+# (https://github.com/KadiChandu/JTAG-TAP-Controller, fetched 2026-08-19): a plain
 # `case (state) STATE: next_state = tms ? A : B; ...` block, so this is a direct
 # state -> (next if tms=0, next if tms=1) transcription of that case statement.
 KADICHANDU_TRANSITIONS: dict[str, tuple[str, str]] = {
