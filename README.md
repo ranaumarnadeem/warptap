@@ -49,6 +49,28 @@ warptap is the access layer: autoMBIST's MBIST controllers become instruments on
 warptap-inserted IJTAG network, and faultflow's scan patterns, compressed and compacted ones
 included, are retargeted through it.
 
+## FAQ
+
+**Is there an open-source alternative to Tessent IJTAG?**
+warptap covers IJTAG network insertion, ICL and PDL generation, and PDL execution for open flows,
+for the networks it inserts itself. It is not a general IEEE 1687 tool: ICL import recognizes
+only warptap's own network shape, and it does not retarget PDL across arbitrary third-party ICL
+hierarchies.
+
+**Can I use warptap with Yosys and OpenROAD / LibreLane?**
+warptap runs Yosys itself and returns plain Verilog, which you synthesize like any other source,
+so it fits a Yosys-based flow. The test suite synthesizes the inserted Verilog with Yosys; it
+does not run OpenROAD or LibreLane.
+
+**Which pattern formats can it produce for a tester?**
+SVF, STAPL and STIL. It also writes a TAP-only BSDL file describing the TAP it inserts.
+
+**Does it work on gate-level netlists?**
+Yes, if Yosys can read the netlist: give it interface-only (`(* blackbox *)`) declarations for the
+library cells. The test suite inserts a network into a sky130 gate-level netlist this way. The
+TAP, SIBs and instrument registers warptap adds are generic logic, not mapped to your cell
+library, so the result still needs synthesis or technology mapping.
+
 ## Development
 
 Requires a real `yosys` on `PATH` (this project shells out to it, the same way faultflow does
