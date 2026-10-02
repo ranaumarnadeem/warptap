@@ -36,6 +36,19 @@ Needs a real `yosys` on `PATH` (shelled out to, never bundled).
 warptap is a Python library. A `warptap` CLI entry point exists but is not stable yet: today
 it only prints its version and help, with no subcommands.
 
+## Part of an open-source DFT toolchain
+
+| Tool | What it does |
+|---|---|
+| [faultflow](https://github.com/ranaumarnadeem/faultflow) | ATPG and fault simulation for Yosys gate-level netlists |
+| [OpenTestability](https://github.com/ranaumarnadeem/OpenTestability) | SCOAP/COP testability analysis and test point insertion |
+| [autoMBIST](https://github.com/ranaumarnadeem/autoMBIST) | MBIST, BIRA and BISR generation for OpenRAM memories |
+| **warptap** | JTAG/IJTAG test-access insertion, ICL and PDL |
+
+warptap is the access layer: autoMBIST's MBIST controllers become instruments on a
+warptap-inserted IJTAG network, and faultflow's scan patterns, compressed and compacted ones
+included, are retargeted through it.
+
 ## Development
 
 Requires a real `yosys` on `PATH` (this project shells out to it, the same way faultflow does
