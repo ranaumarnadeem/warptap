@@ -1,0 +1,19 @@
+# warptap
+
+> Open-source Python library that inserts IEEE 1149.1 (JTAG/TAP) and IEEE 1687 (IJTAG) test-access networks into RTL, emits ICL and PDL, and generates SVF, STAPL and STIL patterns.
+
+## Docs
+- [Quickstart](https://ranaumarnadeem.github.io/warptap/quickstart/): install and insert a first IJTAG network
+- [Nested SIB networks](https://ranaumarnadeem.github.io/warptap/guide/nested-sib-networks/): a SIB gating a nested sub-network
+- [Multi-arm ScanMux](https://ranaumarnadeem.github.io/warptap/guide/scan-mux/): N-arm ScanMux segments
+- [Named sub-field addressing](https://ranaumarnadeem.github.io/warptap/guide/field-addressing/): reading and writing part of an instrument by name
+- [ICL / PDL import](https://ranaumarnadeem.github.io/warptap/guide/icl-pdl-import/): reading ICL and PDL back in
+- [System-clock pulsing](https://ranaumarnadeem.github.io/warptap/guide/sck-clock-pulsing/): pulsing a functional clock from PDL (-sck)
+- [Faultflow pattern retargeting](https://ranaumarnadeem.github.io/warptap/guide/faultflow-retargeting/): driving faultflow scan patterns through the network
+- [API reference](https://ranaumarnadeem.github.io/warptap/reference/): every public function and class
+- [Changelog](https://ranaumarnadeem.github.io/warptap/changelog/)
+
+## Related
+- [faultflow](https://github.com/ranaumarnadeem/faultflow): ATPG and fault simulation
+- [autoMBIST](https://github.com/ranaumarnadeem/autoMBIST): MBIST, BIRA and BISR generator
+- [OpenTestability](https://github.com/ranaumarnadeem/OpenTestability): testability analysis and test point insertion

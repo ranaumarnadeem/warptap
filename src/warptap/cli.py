@@ -1,6 +1,6 @@
 """warptap command-line entry point.
 
-Stage 1 only wires up plumbing (see implementation_plan.md §7) — no JTAG/IJTAG
+Stage 1 only wires up plumbing (see implementation_plan.md §7): no JTAG/IJTAG
 subcommands exist yet.
 """
 

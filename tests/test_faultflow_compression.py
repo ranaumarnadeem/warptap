@@ -71,6 +71,33 @@ def test_solve_pattern_seed_contradiction_raises_named_error():
         solve_pattern_seed(load_seqs, rows, _POLY.width, pattern_index=0)
 
 
+def test_solve_pattern_seed_ignores_dont_care_position_when_load_care_given():
+    """Same load_seqs as test_solve_pattern_seed_contradiction_raises_named_error -- chain0
+    cycle0 and chain1 cycle2 hit the same GF(2) column with conflicting required values,
+    unsatisfiable when every position is a hard constraint. With load_care naming ONLY chain0
+    cycle0 as a real care bit, the conflicting chain1 cycle2 value must be dropped entirely
+    (not solved-against-as-a-constraint) rather than making the system unsatisfiable -- the
+    exact scenario the old, load_care-less code could get wrong."""
+    rows = care_bit_rows(_POLY, _PHASE_SHIFTER_TAPS, 3)
+    load_seqs = {"0": [True, False, False], "1": [False, False, False]}
+    seed = solve_pattern_seed(
+        load_seqs, rows, _POLY.width, pattern_index=0, load_care={(0, 0)}
+    )
+    assert seed == 1  # bit0=1 (chain0 cycle0's only real constraint), bit1 free -> defaults 0
+
+
+def test_solve_pattern_seed_load_care_none_still_uses_every_position():
+    """Backward compatibility: load_care=None (also the default) must reproduce the original
+    behavior exactly -- the same contradiction still raises, since every specified position
+    remains a hard constraint when load_care isn't given."""
+    rows = care_bit_rows(_POLY, _PHASE_SHIFTER_TAPS, 3)
+    load_seqs = {"0": [True, False, False], "1": [False, False, False]}
+    with pytest.raises(FaultflowCompressionError, match="pattern 0"):
+        solve_pattern_seed(
+            load_seqs, rows, _POLY.width, pattern_index=0, load_care=None
+        )
+
+
 def test_solve_pattern_seed_wrong_length_raises_named_error():
     rows = care_bit_rows(_POLY, _PHASE_SHIFTER_TAPS, 3)
     load_seqs = {"0": [True, False]}  # 2 bits, but max_chain_length (len(rows)) is 3
@@ -164,6 +191,38 @@ def test_retarget_compressed_load_phase_op_sequence():
     assert any(isinstance(op, ShiftDR) for op in ops[:seed_write_index])
     # The unload read (a whole-instrument iApply) happens after the capture pulse.
     assert any(isinstance(op, ShiftDR) for op in ops[capture_index + 1 :])
+
+
+def test_retarget_compressed_uses_load_care_to_avoid_a_dont_care_conflict():
+    """A pattern whose load_seqs would be unsatisfiable if every position were a hard
+    constraint (the exact fixture from test_solve_pattern_seed_contradiction_raises_named_error),
+    but whose load_care names only the one real care-bit position -- confirms
+    retarget_compressed_faultflow_patterns actually reads pattern["load_care"] and passes it
+    through to solve_pattern_seed, not just that solve_pattern_seed itself can accept one."""
+    graph, root = _graph_root()
+    patterns = [
+        {
+            "load_seqs": {"0": [True, False, False], "1": [False, False, False]},
+            "load_care": [[0, 0]],
+            "expected_unload": {},
+            "capture_pi_values": {},
+        }
+    ]
+    # Would raise FaultflowCompressionError without load_care being read and threaded through --
+    # see test_solve_pattern_seed_contradiction_raises_named_error for that same load_seqs
+    # rejected outright with no load_care.
+    retarget_compressed_faultflow_patterns(
+        patterns,
+        {},
+        "tdi_channel",
+        graph,
+        root,
+        poly=_POLY,
+        phase_shifter_taps=_PHASE_SHIFTER_TAPS,
+        max_chain_length=3,
+        clock_port="clk",
+        scan_enable_port="scan_en",
+    )
 
 
 def test_retarget_compressed_load_only_pattern_gets_no_capture_pulse():

@@ -16,11 +16,18 @@ Ported, verbatim in structure, from real faultflow source (re-verified directly 
 checkout at ``C:\\Users\\Potato\\Desktop\\faultflow`` this session, not from memory):
 
 - ``PRIMITIVE_POLYNOMIALS``/``LfsrPolynomial``/``lookup_polynomial``/``_step``/``care_bit_rows``
-  -- ``faultflow/scan/ring_generator.py``. This table is NOT itself present in
-  ``manifest["compression"]`` (confirmed: that section carries ``num_channels``,
-  ``phase_shifter_taps``, but not the LFSR's own feedback taps) -- an external tool needs its
-  own copy to reconstruct ``care_bit_rows``. See this module's own "Open risk" note below on
-  the resulting drift exposure.
+  -- ``faultflow/scan/ring_generator.py``. As of faultflow commit ``26e1f96`` (branch
+  ``compress``, ``faultflow/runner/runner.py``'s ``scan_compress()``),
+  ``manifest["compression"]["polynomial"]`` now serializes the campaign's real polynomial
+  directly as ``{"width": int, "taps": [int, ...]}`` (straight from the real
+  ``CompressionMap.polynomial``, an ``LfsrPolynomial``) -- see :func:`polynomial_from_manifest`,
+  the preferred way to obtain ``poly``, for a manifest that carries this field. The curated
+  ``PRIMITIVE_POLYNOMIALS`` table and ``lookup_polynomial`` remain only as a FALLBACK, for a
+  manifest captured before this field existed (no ``"polynomial"`` key present); a dedicated
+  test (``test_faultflow_compression_polynomial_table.py``) still cross-checks that curated copy
+  against faultflow's own real table whenever a faultflow checkout is available, and separately
+  covers the manifest-driven path with a hand-built manifest so that coverage doesn't depend on
+  a checkout being present.
 - The GF(2) Gauss-Jordan solve -- ``src/core/scan/compression.cpp``'s ``solve_xor_broadcast``
   (a pure algorithm over plain ``vector<bool>`` rows, no faultflow/C++ dependency of any kind;
   confirmed reimplementable in pure Python, exactly what :func:`solve_xor_broadcast` here does).
@@ -37,21 +44,31 @@ exactly one reseed (the first of those edges) followed by ``max_chain_length - 1
 natural LFSR feedback stepping -- matching ``care_bit_rows``'s own ``state(0) == seed``
 convention precisely.
 
-**A genuine, flagged limitation of** :func:`solve_pattern_seed`: it treats EVERY specified
-position of a pattern's ``load_seqs`` as a hard constraint on the joint GF(2) solve, not just
-the subset faultflow's own ATPG-time check (``detection_pipeline.py``'s
-``_check_compression_satisfiable``, via ``faultflow/scan/care_bits.py``'s
-``extract_scan_care_bits``) proved necessary for fault detection. Confirmed directly against
-``care_bits.py``: faultflow's own extraction is a flip/re-simulate don't-care search requiring a
-live fault-detection oracle this module has no access to (and shouldn't attempt to rebuild --
-that's real ATPG machinery, out of scope for a pattern-translation layer). Solving against every
-specified position is therefore a conservative, ALWAYS-CORRECT-WHEN-IT-SUCCEEDS approach (any
-seed it finds exactly reproduces the pattern), but it can, in principle, report a pattern
-unsatisfiable that ATPG's own reduced care-bit solve would have accepted, if a don't-care
-position's arbitrary filled value happens not to lie on the same LFSR trajectory as the seed
-that satisfies the real care bits. Not resolved here -- would need either faultflow additionally
-exporting which positions were don't-care, or a live detection oracle, neither available to a
-pure pattern-translation module.
+**A limitation of** :func:`solve_pattern_seed`, **closed for a manifest that supplies**
+``load_care``: as of faultflow commit ``9b670df`` (branch ``compress``,
+``faultflow/scan/protocol.py``/``faultflow/scan/detection_pipeline.py``/
+``faultflow/scan/pattern_export.py``), an exported pattern dict may carry
+``"load_care": [[chain_id, cycle], ...] | None``. Present (a list), for a SAT-ATPG-accepted,
+compression-enabled candidate, it names exactly the ``(chain_id, cycle)`` positions
+``detection_pipeline.py``'s ``_check_compression_satisfiable`` (via
+``faultflow/scan/care_bits.py``'s ``extract_scan_care_bits``) proved necessary for the fault(s)
+that pattern detects -- every other specified ``load_seqs`` position is a genuine don't-care.
+:func:`solve_pattern_seed` takes this as its own ``load_care`` argument and, when given, builds
+the joint GF(2) system using ONLY those positions, so a don't-care position's arbitrary fill
+value can no longer cause a false "unsatisfiable" result.
+
+``load_care`` is ``null``/absent -- and :func:`solve_pattern_seed` falls back to its original,
+more conservative behavior of treating EVERY specified ``load_seqs`` position as a hard
+constraint -- for a manifest exported by an older faultflow version that predates this field, a
+random-fill pattern (not SAT-targeted, so ``extract_scan_care_bits`` never ran for it), or a
+non-compression campaign. Confirmed directly against ``care_bits.py``: faultflow's own
+extraction is a flip/re-simulate don't-care search requiring a live fault-detection oracle this
+module has no access to (and shouldn't attempt to rebuild -- that's real ATPG machinery, out of
+scope for a pattern-translation layer), so this fallback remains a conservative,
+ALWAYS-CORRECT-WHEN-IT-SUCCEEDS approach (any seed it finds exactly reproduces the pattern), but
+it can, in principle, report a pattern unsatisfiable that ATPG's own reduced care-bit solve
+would have accepted, if a don't-care position's arbitrary filled value happens not to lie on the
+same LFSR trajectory as the seed that satisfies the real care bits.
 """
 
 from __future__ import annotations
@@ -94,10 +111,12 @@ class LfsrPolynomial:
 
 # Curated maximal-length LFSR feedback polynomials -- ported verbatim from
 # faultflow/scan/ring_generator.py::PRIMITIVE_POLYNOMIALS (decades-old, public-domain,
-# never-patented tap sets; see that module's own docstring for the literature citations). A
-# dedicated cross-check test (test_faultflow_compression_polynomial_table.py) asserts this copy
-# matches faultflow's own real table at every available width, when a faultflow checkout is
-# present -- see this module's own docstring for why the two can otherwise drift.
+# never-patented tap sets; see that module's own docstring for the literature citations). Used
+# only as a FALLBACK now, via lookup_polynomial, for a manifest captured before faultflow started
+# serializing the real polynomial into manifest["compression"]["polynomial"] -- see
+# polynomial_from_manifest and this module's own docstring. A dedicated cross-check test
+# (test_faultflow_compression_polynomial_table.py) asserts this copy matches faultflow's own real
+# table at every available width, when a faultflow checkout is present.
 PRIMITIVE_POLYNOMIALS: dict[int, LfsrPolynomial] = {
     8: LfsrPolynomial(8, frozenset({4, 5, 6})),
     16: LfsrPolynomial(16, frozenset({4, 13, 15})),
@@ -116,6 +135,22 @@ def lookup_polynomial(width: int) -> LfsrPolynomial:
             f"supported widths: {sorted(PRIMITIVE_POLYNOMIALS)}"
         )
     return PRIMITIVE_POLYNOMIALS[width]
+
+
+def polynomial_from_manifest(compression: dict) -> LfsrPolynomial:
+    """Build the campaign's real :class:`LfsrPolynomial` from ``manifest["compression"]`` --
+    the preferred way to obtain ``poly``, ahead of :func:`lookup_polynomial`. As of faultflow
+    commit ``26e1f96`` (branch ``compress``, ``faultflow/runner/runner.py``'s
+    ``scan_compress()``), ``compression["polynomial"]`` carries ``{"width": int, "taps": [int,
+    ...]}`` straight from the real ``CompressionMap.polynomial`` (see this module's own
+    docstring) -- when present, that's used directly, with no curated-table lookup or drift risk
+    of any kind. Falls back to :func:`lookup_polynomial` on ``compression["num_channels"]`` for a
+    manifest captured before faultflow started serializing this field (no ``"polynomial"`` key
+    present)."""
+    polynomial = compression.get("polynomial")
+    if polynomial is None:
+        return lookup_polynomial(compression["num_channels"])
+    return LfsrPolynomial(polynomial["width"], frozenset(polynomial["taps"]))
 
 
 def _step(rows: list[int], poly: LfsrPolynomial) -> list[int]:
@@ -198,22 +233,31 @@ def solve_xor_broadcast(rows: List[int], rhs: List[bool], width: int) -> "int | 
 
 
 def solve_pattern_seed(
-    load_seqs: dict, rows: List[List[int]], width: int, pattern_index: int
+    load_seqs: dict,
+    rows: List[List[int]],
+    width: int,
+    pattern_index: int,
+    load_care: "set[tuple[int, int]] | None" = None,
 ) -> int:
-    """Build ONE joint GF(2) system across every chain/cycle a pattern's ``load_seqs``
-    specifies and solve once for a single ``width``-bit seed -- compression's load side is a
-    joint, all-or-nothing constraint (one shared LFSR state feeds every chain from one seed;
-    confirmed via ``detection_pipeline.py``'s own ``_check_compression_satisfiable``
-    docstring), never a per-chain-independent transform.
+    """Build ONE joint GF(2) system and solve once for a single ``width``-bit seed --
+    compression's load side is a joint, all-or-nothing constraint (one shared LFSR state feeds
+    every chain from one seed; confirmed via ``detection_pipeline.py``'s own
+    ``_check_compression_satisfiable`` docstring), never a per-chain-independent transform.
+
+    ``load_care``, when not ``None``, restricts the system to exactly the ``(chain_id, cycle)``
+    positions it names -- faultflow's own ATPG-proved care-bit subset (``ScanPattern.load_care``,
+    see this module's own docstring); every other specified ``load_seqs`` position is then a
+    genuine don't-care, left out of the solve entirely rather than treated as a hard constraint.
+    When ``None`` (a manifest exported before ``load_care`` existed, or a random-fill pattern),
+    every specified position is used, this function's original, more conservative behavior.
 
     Confirmed directly against ``faultflow/scan/care_bits.py::extract_scan_care_bits``: a
     compression-enabled campaign's ``load_seqs[chain_id]`` is indexed DIRECTLY by cycle
     (``range(max_chain_length)``, no front-padding-to-instrument-width stripping needed or
     applicable here, unlike :mod:`warptap.faultflow_retarget`'s raw-chain case) -- so
     ``rows[cycle][chain_id]`` (this module's own :func:`care_bit_rows` output) lines up 1:1 with
-    ``load_seqs[str(chain_id)][cycle]`` with no offset math. See this module's own docstring for
-    the real, flagged limitation of using every specified position as a hard constraint rather
-    than just the extracted care subset."""
+    ``load_seqs[str(chain_id)][cycle]`` with no offset math, and equally with ``load_care``'s own
+    ``(chain_id, cycle)`` pairs."""
     solver_rows: List[int] = []
     rhs: List[bool] = []
     for chain_key, bits in load_seqs.items():
@@ -225,10 +269,20 @@ def solve_pattern_seed(
                 "compression-enabled campaign"
             )
         for cycle, value in enumerate(bits):
+            if load_care is not None and (chain_id, cycle) not in load_care:
+                continue
             solver_rows.append(rows[cycle][chain_id])
             rhs.append(bool(value))
     seed = solve_xor_broadcast(solver_rows, rhs, width)
     if seed is None:
+        if load_care is not None:
+            raise FaultflowCompressionError(
+                f"pattern {pattern_index}: no {width}-bit seed jointly satisfies its "
+                "extracted load_care positions through this compression decompressor -- "
+                "faultflow's own ATPG already proved this exact care-bit subset satisfiable, "
+                "so this points at a data or polynomial/phase-shifter mismatch, not the "
+                "don't-care-position limitation"
+            )
         raise FaultflowCompressionError(
             f"pattern {pattern_index}: no {width}-bit seed jointly satisfies every "
             "specified load_seqs position through this compression decompressor -- see "
@@ -262,8 +316,10 @@ def retarget_compressed_faultflow_patterns(
 
     ``poly``/``phase_shifter_taps``/``max_chain_length`` come from
     ``manifest["compression"]`` (``phase_shifter_taps`` directly; ``poly`` via this module's own
-    :func:`lookup_polynomial` applied to ``manifest["compression"]["num_channels"]`` --
-    faultflow's manifest doesn't serialize the polynomial itself, see this module's docstring).
+    :func:`polynomial_from_manifest`, which reads the real
+    ``manifest["compression"]["polynomial"]`` field faultflow now serializes -- or falls back to
+    :func:`lookup_polynomial` on ``manifest["compression"]["num_channels"]`` for a manifest
+    captured before that field existed; see this module's docstring).
     ``clock_port``/``scan_enable_port`` must match ``manifest["compression"]["clock_port"]``/
     ``["scan_enable_port"]``.
 
@@ -277,9 +333,17 @@ def retarget_compressed_faultflow_patterns(
         load_seqs: dict = pattern.get("load_seqs", {})
         expected_unload: dict = pattern.get("expected_unload", {})
         capture_pi_values: dict = pattern.get("capture_pi_values", {})
+        load_care_raw = pattern.get("load_care")
+        load_care = (
+            {(int(chain), int(cycle)) for chain, cycle in load_care_raw}
+            if load_care_raw is not None
+            else None
+        )
 
         if load_seqs:
-            seed = solve_pattern_seed(load_seqs, rows, poly.width, pattern_index)
+            seed = solve_pattern_seed(
+                load_seqs, rows, poly.width, pattern_index, load_care
+            )
             pdl.iTarget(compression_channel_instrument)
             pdl.iWrite(seed)
             pdl.iApply()
@@ -329,6 +393,7 @@ __all__ = [
     "LfsrPolynomial",
     "PRIMITIVE_POLYNOMIALS",
     "lookup_polynomial",
+    "polynomial_from_manifest",
     "care_bit_rows",
     "solve_xor_broadcast",
     "solve_pattern_seed",

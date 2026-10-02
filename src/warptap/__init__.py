@@ -1,4 +1,4 @@
-"""warptap — inserts IEEE 1149.1 (JTAG/TAP) and IEEE 1687 (IJTAG/ICL+PDL) test-access
+"""warptap inserts IEEE 1149.1 (JTAG/TAP) and IEEE 1687 (IJTAG/ICL+PDL) test-access
 infrastructure into a design.
 
 This module re-exports the real entry points a caller actually needs -- everything else stays
@@ -9,6 +9,7 @@ example using these names.
 
 from __future__ import annotations
 
+from warptap.bsdl_emit import BsdlEmitError, to_bsdl
 from warptap.bsr_insert import BsrInsertError, insert_bsr
 from warptap.errors import WarptapError
 from warptap.faultflow_retarget import FaultflowRetargetError, retarget_faultflow_patterns
@@ -39,6 +40,20 @@ from warptap.pdl_verify import PDLVerifyError, ReadCheckResult, check_reads, cor
 from warptap.pipeline import TestAccessSpec, insert_test_access
 from warptap.sib_insert import SibInsertError, insert_sib_network
 from warptap.sib_plan import HierarchySpec, InstrumentSpec, build_sib_plan
+from warptap.tap_integrity import (
+    TMS_RESET_LEAD_IN,
+    TRST_LEAD_IN,
+    IntegrityFailure,
+    IntegrityProgram,
+    IntegrityResult,
+    IntegrityTest,
+    TapConfig,
+    TapIntegrityError,
+    TckCycle,
+    build_integrity_program,
+    check_integrity,
+    select_instruction,
+)
 from warptap.tap_ir import (
     GotoState,
     PulsePin,
@@ -53,7 +68,7 @@ from warptap.tap_ir_stil import TapIrStilError, to_stil
 from warptap.tap_ir_svf import TapIrSvfError, to_svf
 from warptap.yosys_io import YosysError, ingest, write_verilog_from_json
 
-__version__ = "0.0.2"
+__version__ = "0.0.3"
 
 __all__ = [
     "__version__",
@@ -70,6 +85,7 @@ __all__ = [
     "PDLError",
     "PDLVerifyError",
     "SibInsertError",
+    "TapIntegrityError",
     "TapIrStaplError",
     "TapIrStilError",
     "TapIrSvfError",
@@ -107,6 +123,9 @@ __all__ = [
     # ICL
     "to_icl",
     "import_icl",
+    # BSDL (TAP only)
+    "BsdlEmitError",
+    "to_bsdl",
     # OneHotDataGroup (ICL emit/import only -- never touches the scan chain)
     "OneHotDataGroup",
     "OneHotDataRegister",
@@ -124,6 +143,18 @@ __all__ = [
     "to_svf",
     "to_stapl",
     "to_stil",
+    # TAP / network integrity patterns
+    "IntegrityFailure",
+    "IntegrityProgram",
+    "IntegrityResult",
+    "IntegrityTest",
+    "TapConfig",
+    "TckCycle",
+    "TMS_RESET_LEAD_IN",
+    "TRST_LEAD_IN",
+    "build_integrity_program",
+    "check_integrity",
+    "select_instruction",
     # faultflow
     "retarget_faultflow_patterns",
 ]

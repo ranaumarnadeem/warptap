@@ -4,16 +4,17 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "warptap"
-version = "0.0.2"
+version = "0.0.3"
 description = "Insert IEEE 1149.1 (JTAG/TAP) and IEEE 1687 (IJTAG/ICL+PDL) test-access infrastructure into a design"
 readme = "README.md"
 requires-python = ">=3.10"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
-authors = [{ name = "ranaumarnadeem" }]
+authors = [{ name = "Rana Umar Nadeem", email = "rana.umar.nadeem21@gmail.com" }]
 keywords = [
     "jtag", "ijtag", "boundary-scan", "ieee-1149.1", "ieee-1687",
     "icl", "pdl", "dft", "test-access", "svf", "stapl", "stil",
+    "design-for-test", "tap-controller", "eda", "verilog", "open-source-hardware",
 ]
 classifiers = [
     "Development Status :: 3 - Alpha",
@@ -29,11 +30,20 @@ classifiers = [
 dependencies = []
 
 [project.optional-dependencies]
-dev = ["pytest>=8", "yowasp-yosys"]
+dev = [
+    "pytest>=8",
+    "yowasp-yosys",
+    # third_party/icl_parser's own imports; its generated parsers need exactly this runtime.
+    "antlr4-python3-runtime==4.7.2",
+    "z3-solver",
+    "sympy",
+    "networkx",
+]
 docs = ["mkdocs>=1.6", "mkdocs-material>=9.5", "mkdocstrings[python]>=1.0"]
 
 [project.urls]
 Homepage = "https://github.com/ranaumarnadeem/warptap"
+Documentation = "https://ranaumarnadeem.github.io/warptap/"
 Repository = "https://github.com/ranaumarnadeem/warptap"
 Changelog = "https://github.com/ranaumarnadeem/warptap/blob/main/CHANGELOG.md"
 

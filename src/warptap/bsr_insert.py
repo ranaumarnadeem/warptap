@@ -1,14 +1,14 @@
-"""Boundary-scan register insertion — the impure surgery phase (implementation_plan.md §7
+"""Boundary-scan register insertion: the impure surgery phase (implementation_plan.md §7
 Stage 3). Given a :class:`~warptap.bsr_plan.BsrPlan` for a target module, imports
 ``tap_core.v`` and the BC cell templates as hierarchical submodules (plan §4.2's "hand-author
-once, capture as JSON" mechanism realized as ordinary Yosys submodule instantiation — see
+once, capture as JSON" mechanism realized as ordinary Yosys submodule instantiation; see
 ``netlist.Netlist.add_module``'s docstring for why this is simpler than flattened cloning),
 instantiates one cell per :class:`~warptap.bsr_plan.BsrCell`, stitches them into a single
 shift chain, and wires the chain into ``tap_core``'s ``external_dr_tdo`` input.
 
 BIDIR/BC_7 cells reuse the target design's own existing tri-state driver for their port
 (``func_in``/enable), found by pattern-matching a ``$mux`` cell with one operand tied to the
-constant ``"z"`` — confirmed empirically that Yosys's default ``proc`` lowering of the standard
+constant ``"z"``: confirmed empirically that Yosys's default ``proc`` lowering of the standard
 ``assign io = enable ? drive_val : 1'bz;`` idiom produces exactly this shape, *not* a dedicated
 ``$tribuf`` cell (which only appears from passes this project's ingest pipeline doesn't run).
 """
@@ -33,8 +33,8 @@ _BC7_BIDIR = "bc7_bidir"
 
 class BsrInsertError(WarptapError):
     """Raised when the target design's structure doesn't match what a Stage 3
-    insertion step needs — e.g. no existing tri-state driver found for a bidir
-    port — rather than guessing and silently emitting something wrong."""
+    insertion step needs, e.g. no existing tri-state driver found for a bidir
+    port, rather than guessing and silently emitting something wrong."""
 
 
 def _find_existing_tristate_driver(
@@ -70,7 +70,7 @@ def _find_existing_tristate_driver(
     )
 
 # Must match rtl/tap_core.v's own parameter defaults: v1 never overrides them on the
-# hierarchical instance (plan §2 — avoids an unverified per-instance-parameter-override
+# hierarchical instance (plan §2: avoids an unverified per-instance-parameter-override
 # JSON round-trip risk), so these are the actual values in effect, not just a convenient
 # default to relax later.
 DEFAULT_IR_WIDTH = 4
@@ -83,8 +83,8 @@ def _import_template(netlist: Netlist, module_name: str, *, yosys_command: str |
     mod = netlist.add_module(module_name, raw["modules"][module_name])
     # Each template is ingested standalone (its own `hierarchy -top <name>` run), so
     # Yosys marks it `(* top = 1 *)` in its own JSON. Only the actual target design's
-    # top module should carry that marker once everything is merged into one netlist
-    # — multiple "top" modules is misleading and a plausible source of confusion for
+    # top module should carry that marker once everything is merged into one netlist:
+    # multiple "top" modules is misleading and a plausible source of confusion for
     # any later pass that doesn't pass an explicit `-top` override.
     mod.data.get("attributes", {}).pop("top", None)
     mod.set_module_attribute("keep_hierarchy", 1)
@@ -104,14 +104,14 @@ def insert_bsr(
     """Insert a TAP + boundary-scan chain into ``netlist``'s ``top`` module,
     matching ``plan`` (from ``bsr_plan.build_bsr_plan``). Adds five new top-level
     JTAG ports (tck/tms/tdi/trst_n/tdo). Every scanned port's *original* bits stay
-    fully wired to whatever originally drove/read them — output3 pins get
+    fully wired to whatever originally drove/read them: output3 pins get
     ``detach_port``-ed (the real pin becomes new bits driven through a tri-state
     buffer), but their old bits remain the cell's functional passthrough input, so
-    normal-mode (``trst_n`` asserted) behavior is provably unchanged — see
+    normal-mode (``trst_n`` asserted) behavior is provably unchanged; see
     ``tests/test_bsr_insert_equivalence.py``.
 
     ``ir_width``/``opcode_extest`` must match ``rtl/tap_core.v``'s actual compiled
-    parameters (its own defaults, currently — see the module-level constants above)
+    parameters (its own defaults, currently; see the module-level constants above)
     since this function never overrides them on the instance.
     """
     top_mod = netlist.module(top)
@@ -132,7 +132,7 @@ def insert_bsr(
 
     # Allocated up front (bit IDs, not drivers) so the chain-building loop below can
     # reference them before tap_core itself is instantiated at the end, once the
-    # chain's final `so` — tap_core's external_dr_tdo input — is actually known.
+    # chain's final `so`, tap_core's external_dr_tdo input, is actually known.
     tap_state_bits = top_mod.new_wire(4, name="warptap_tap_state")
     current_instruction_bits = top_mod.new_wire(ir_width, name="warptap_current_instruction")
     capture_dr_bits = top_mod.new_wire(1, name="warptap_capture_dr")
@@ -158,7 +158,7 @@ def insert_bsr(
 
     # A control cell is stitched *before* the output3/bidir cell it pairs with (plan
     # ordering), but a bidir pairing's func_in is the port's own pre-existing enable
-    # signal — only discoverable once the paired cell is reached and its tri-state
+    # signal, only discoverable once the paired cell is reached and its tri-state
     # driver is searched for. Look ahead once so the control cell's own add_cell call
     # can wire a harmless placeholder now and know to expect a real reconnect later,
     # rather than guessing the pairing's shape mid-loop.
@@ -201,7 +201,7 @@ def insert_bsr(
             # v1: plain output3 pairing has no pre-existing output-enable signal to
             # preserve, so func_in is the fixed constant 1 (stated explicitly, not
             # assumed). A bidir pairing DOES have one (the port's own original
-            # enable) but it isn't known yet — wire the same harmless placeholder
+            # enable) but it isn't known yet: wire the same harmless placeholder
             # and let the BIDIR branch below reconnect it once found.
             func_in_connection: list[Bit] = ["1"]
             top_mod.add_cell(
@@ -324,7 +324,7 @@ def insert_bsr(
             "current_instruction": current_instruction_bits,
             "capture_dr": capture_dr_bits, "shift_dr": shift_dr_bits,
             "update_dr": update_dr_bits,
-            "external_dr_tdo": prev_so,  # the chain's final `so` — "wire into the TAP's DR mux"
+            "external_dr_tdo": prev_so,  # the chain's final `so`: "wire into the TAP's DR mux"
         },
     )
     top_mod.set_keep(cell_name="warptap_tap_core")

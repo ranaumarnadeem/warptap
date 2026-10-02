@@ -1,5 +1,5 @@
 """Pure-Python tests for the BSR planning phase (implementation_plan.md §7 Stage 3, §3.1).
-No Yosys involved — synthetic Module JSON only, mirroring test_netlist_model.py's style."""
+No Yosys involved: synthetic Module JSON only, mirroring test_netlist_model.py's style."""
 
 from __future__ import annotations
 
@@ -88,7 +88,7 @@ def test_safe_value_zero_is_the_disabled_tristate_value():
     directly to its paired $tribuf's EN, no inversion), safe_value=0 preloaded into
     a control cell's po is exactly the value that disables (Z-states) its paired
     driver. This is an algebraic property of that specific wiring, not something
-    bsr_plan.py itself can vary — locked in here as documentation-as-test, with the
+    bsr_plan.py itself can vary: locked in here as documentation-as-test, with the
     real hardware-level proof in rtl/bc1_full.v's reset behavior and
     tests/test_bsr_insert_equivalence.py."""
     safe_value = 0

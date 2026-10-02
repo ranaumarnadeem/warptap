@@ -1,5 +1,5 @@
 """Unit tests for the Module/Netlist object-model layer (implementation_plan.md §4.2).
-Pure Python — no Yosys subprocess involved, these should run instantly."""
+Pure Python: no Yosys subprocess involved, these should run instantly."""
 
 from __future__ import annotations
 

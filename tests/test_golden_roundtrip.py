@@ -1,7 +1,7 @@
 """Golden-file round-trip regression test (implementation_plan.md §4.3, last bullet):
 ``write_json`` of an unmodified design -> warptap no-op pass -> ``read_json`` ->
 ``write_verilog``, diffed against reference. Required to pass before any real
-insertion logic is written — the schema has real edge cases (behavioral-process
+insertion logic is written: the schema has real edge cases (behavioral-process
 rejection, ``$mem`` representation, per-module bit-ID scoping) that fail silently if
 violated.
 

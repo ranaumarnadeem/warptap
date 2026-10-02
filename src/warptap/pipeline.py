@@ -18,8 +18,9 @@ from typing import List, Tuple, Union
 
 from warptap.icl_model import ModuleInstance, PhysicalGraph
 from warptap.netlist import Netlist
-from warptap.sib_insert import insert_sib_network
+from warptap.sib_insert import SibInsertError, insert_sib_network
 from warptap.sib_plan import HierarchySpec, InstrumentSpec, build_sib_plan
+from warptap.tap_model import IDCODE_VALUE, idcode_value_error, ijtag_access_opcode_error
 from warptap.yosys_io import ingest, write_verilog_from_json
 
 # Public alias for what build_sib_plan itself calls the private ``_Spec`` union
@@ -39,6 +40,10 @@ def insert_test_access(
     yosys_command: str | None = None,
     use_sv: bool = False,
     port_renames: dict[str, str] | None = None,
+    idcode_value: int = IDCODE_VALUE,
+    chip_reset: str | None = None,
+    chip_reset_active_low: bool = True,
+    ijtag_access_opcode: int | None = None,
 ) -> Tuple[str, PhysicalGraph, ModuleInstance]:
     """Ingest ``sources``, build the SIB/instrument network ``specs`` describes, insert it into
     ``top_module``, and return the synthesizable inserted Verilog text plus the
@@ -69,7 +74,26 @@ def insert_test_access(
     netlist's own ``tdi``/``tdo`` channel bus). Every ``InstrumentSpec.signal_bits`` referencing
     a renamed port must use the NEW (post-rename) name -- this function doesn't rewrite
     ``specs`` for the caller.
+
+    ``idcode_value`` is the inserted TAP's IDCODE (see
+    :func:`~warptap.sib_insert.insert_sib_network`): a 32-bit value with bit 0 set, else
+    :class:`~warptap.sib_insert.SibInsertError`, raised before anything is ingested. Give
+    :func:`~warptap.bsdl_emit.to_bsdl` the same value.
+
+    ``chip_reset``/``chip_reset_active_low`` make every WRITE instrument also clear on the
+    chip reset input (see :func:`~warptap.sib_insert.insert_sib_network`); off by default.
+
+    ``ijtag_access_opcode`` gives the network its own instruction, IJTAG_ACCESS, at that opcode,
+    and EXTEST/SAMPLE/PRELOAD then select BYPASS (see
+    :func:`~warptap.sib_insert.insert_sib_network`); off by default. An opcode it can't take
+    raises :class:`~warptap.sib_insert.SibInsertError` before anything is ingested.
     """
+    if problem := idcode_value_error(idcode_value):
+        raise SibInsertError(problem)
+    if ijtag_access_opcode is not None and (
+        problem := ijtag_access_opcode_error(ijtag_access_opcode)
+    ):
+        raise SibInsertError(problem)
     raw = ingest(sources, top_module, yosys_command=yosys_command, use_sv=use_sv)
     netlist = Netlist.from_json(raw)
     if port_renames:
@@ -77,7 +101,16 @@ def insert_test_access(
         for old_name, new_name in port_renames.items():
             top_mod.rename_port(old_name, new_name)
     graph, root = build_sib_plan(specs, top_name=top_module)
-    insert_sib_network(netlist, top_module, graph, yosys_command=yosys_command)
+    insert_sib_network(
+        netlist,
+        top_module,
+        graph,
+        idcode_value=idcode_value,
+        yosys_command=yosys_command,
+        chip_reset=chip_reset,
+        chip_reset_active_low=chip_reset_active_low,
+        ijtag_access_opcode=ijtag_access_opcode,
+    )
     inserted_verilog = write_verilog_from_json(
         netlist.to_json(), yosys_command=yosys_command
     )

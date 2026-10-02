@@ -13,7 +13,7 @@ def _default_yosys_command() -> str:
         return os.environ["WARPTAP_YOSYS_CMD"]
     if shutil.which("yosys"):
         return "yosys"
-    # No system Yosys on PATH — fall back to the yowasp-yosys console-script
+    # No system Yosys on PATH: fall back to the yowasp-yosys console-script
     # installed alongside this interpreter (e.g. in a dev venv), per
     # implementation_plan.md's note on using the WASM build for local dev/test.
     candidate = Path(sys.executable).with_name(
@@ -166,6 +166,23 @@ def autombist_generator(openmbist_dir: Path):
     return generate_from_config
 
 
+def _icl_parser_unavailable(message: str):
+    """``third_party/icl_parser`` is a submodule of this repo, pinned to a fork commit, and the
+    grammar/ICL/PDL tests that need it are part of the normal suite -- so a missing checkout or a
+    missing parser package is a setup error to fix, not an optional tool to skip past. Fails
+    with ``message`` (which says how to fix it). ``WARPTAP_ALLOW_MISSING_ICL_PARSER=1`` restores
+    the old skip for an environment that deliberately runs without it."""
+    if os.environ.get("WARPTAP_ALLOW_MISSING_ICL_PARSER") == "1":
+        pytest.skip(message)
+    pytest.fail(
+        f"{message} (set WARPTAP_ALLOW_MISSING_ICL_PARSER=1 to skip these tests instead)",
+        pytrace=False,
+    )
+
+
+_PARSER_PACKAGES = "pip install -e '.[dev]' (antlr4-python3-runtime==4.7.2, z3-solver, sympy, networkx)"
+
+
 def _default_icl_parser_dir() -> Path:
     if os.environ.get("WARPTAP_ICL_PARSER_DIR"):
         return Path(os.environ["WARPTAP_ICL_PARSER_DIR"])
@@ -181,9 +198,9 @@ def _default_icl_parser_dir() -> Path:
 def icl_parser_dir() -> Path:
     candidate = _default_icl_parser_dir()
     if not candidate.is_dir() or not any(candidate.iterdir()):
-        pytest.skip(
+        _icl_parser_unavailable(
             f"third_party/icl_parser not checked out at {candidate} -- run "
-            "`git submodule update --init third_party/icl_parser`"
+            "`git submodule update --init third_party/icl_parser` (once per clone or worktree)"
         )
     return candidate
 
@@ -197,19 +214,17 @@ def icl_parser_module(icl_parser_dir: Path):
     produced by -- ANTLR-generated code is not reliably forward/backward compatible across
     runtime versions), ``z3-solver``, ``sympy``, and ``networkx`` -- dev/test only, never a
     runtime dependency of warptap itself (``pyproject.toml``'s own ``dependencies = []`` stays
-    empty). Skips (not fails) when the submodule isn't checked out or any of those aren't
-    importable, matching every other external-tool fixture's "optional dependency" discipline
-    in this file."""
+    empty; they are in the ``dev`` extra). Fails when the submodule isn't checked out or any of
+    those aren't importable -- see ``_icl_parser_unavailable``."""
     src_dir = str(icl_parser_dir)
     if src_dir not in sys.path:
         sys.path.insert(0, src_dir)
     try:
         from src.ijtag import Ijtag
     except ImportError as exc:
-        pytest.skip(
+        _icl_parser_unavailable(
             f"icl_parser not importable from {src_dir}: {exc} -- run `git submodule update "
-            "--init third_party/icl_parser` and `pip install antlr4-python3-runtime==4.7.2 "
-            "z3-solver networkx` (sympy is a warptap dependency already)"
+            f"--init third_party/icl_parser` and `{_PARSER_PACKAGES}`"
         )
     return Ijtag
 
@@ -253,7 +268,8 @@ def pdl_parser_module(icl_parser_dir: Path):
     letting ANTLR print to stderr, matching this project's other external-tool fixtures'
     "return something a test can assert on directly" convention. Requires
     ``antlr4-python3-runtime==4.7.2`` (the same dependency ``icl_parser_module`` already needs)
-    -- skips (not fails) when the submodule isn't checked out or that package isn't importable.
+    -- fails when the submodule isn't checked out or that package isn't importable (see
+    ``_icl_parser_unavailable``).
     """
     src_dir = str(icl_parser_dir / "src" / "pdl_parser")
     if src_dir not in sys.path:
@@ -264,9 +280,9 @@ def pdl_parser_module(icl_parser_dir: Path):
         from pdlLexer import pdlLexer
         from pdlParser import pdlParser
     except ImportError as exc:
-        pytest.skip(
+        _icl_parser_unavailable(
             f"pdl parser not importable from {src_dir}: {exc} -- run `git submodule update "
-            "--init third_party/icl_parser` and `pip install antlr4-python3-runtime==4.7.2`"
+            f"--init third_party/icl_parser` and `{_PARSER_PACKAGES}`"
         )
 
     class _CollectingErrorListener(ErrorListener):
@@ -299,10 +315,9 @@ def pdl_lexer_parser_classes(icl_parser_dir: Path):
     ``warptap.pdl_import.import_pdl`` needs the real tree (to dispatch on which ``command``
     alternative matched and pull out each statement's own operands), so it takes these two
     classes as injected dependencies directly, the same way ``import_icl`` takes
-    ``icl_parser_module`` -- this fixture is what a test supplies them from. Same skip-if-not-
-    importable discipline as every other external-tool fixture in this file (not a hard
-    failure when the submodule isn't checked out or ``antlr4-python3-runtime`` isn't
-    installed)."""
+    ``icl_parser_module`` -- this fixture is what a test supplies them from. Fails when the
+    submodule isn't checked out or ``antlr4-python3-runtime`` isn't installed (see
+    ``_icl_parser_unavailable``)."""
     src_dir = str(icl_parser_dir / "src" / "pdl_parser")
     if src_dir not in sys.path:
         sys.path.insert(0, src_dir)
@@ -310,9 +325,9 @@ def pdl_lexer_parser_classes(icl_parser_dir: Path):
         from pdlLexer import pdlLexer
         from pdlParser import pdlParser
     except ImportError as exc:
-        pytest.skip(
+        _icl_parser_unavailable(
             f"pdl parser not importable from {src_dir}: {exc} -- run `git submodule update "
-            "--init third_party/icl_parser` and `pip install antlr4-python3-runtime==4.7.2`"
+            f"--init third_party/icl_parser` and `{_PARSER_PACKAGES}`"
         )
     return pdlLexer, pdlParser
 

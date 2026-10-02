@@ -11,14 +11,20 @@ from warptap.tap_fsm import TapState, next_state
 from warptap.tap_model import (
     CAPTURE_IR_PATTERN,
     IDCODE_VALUE,
+    BypassRegister,
+    IdcodeRegister,
     Instruction,
+    NETWORK_ACCESS_INSTRUCTION,
     OPCODE_EXTEST,
     OPCODE_IDCODE,
+    OPCODE_IJTAG_ACCESS,
     OPCODE_SAMPLE_PRELOAD,
     TapModel,
     TapModelError,
     bypass_opcode,
     decode_instruction,
+    ijtag_access_opcode_error,
+    network_access_instruction,
 )
 
 
@@ -35,11 +41,11 @@ def _reset_and_idle(model: TapModel) -> None:
 
 def _shift_ir_to_exit1(model: TapModel, opcode: int) -> None:
     """From RUN_TEST_IDLE, shift `opcode` into the instruction register and stop at
-    EXIT1_IR — deliberately *before* Update-IR, so a test can observe that
+    EXIT1_IR: deliberately *before* Update-IR, so a test can observe that
     `model.instruction` hasn't changed yet.
 
     Real JTAG hardware shifts on *every* cycle resident in Shift-IR, including the
-    cycle that exits via TMS=1 — the last bit and the exit transition happen on the
+    cycle that exits via TMS=1: the last bit and the exit transition happen on the
     same edge. So only `ir_width - 1` bits are fed while looping with TMS=0; the final
     bit rides the TMS=1 tick that actually leaves Shift-IR."""
     model.tick(tms=1)  # RUN_TEST_IDLE -> SELECT_DR_SCAN
@@ -61,7 +67,7 @@ def _shift_ir(model: TapModel, opcode: int) -> None:
 
 
 def _goto_shift_dr(model: TapModel) -> None:
-    """From RUN_TEST_IDLE to SHIFT_DR, performing Capture-DR on the way — the shared
+    """From RUN_TEST_IDLE to SHIFT_DR, performing Capture-DR on the way: the shared
     setup every DR end-to-end test builds on."""
     model.tick(tms=1)  # RUN_TEST_IDLE -> SELECT_DR_SCAN
     model.tick(tms=0)  # -> CAPTURE_DR
@@ -75,7 +81,7 @@ def test_capture_ir_pattern_lsbs_are_01():
 def test_capture_ir_pattern_equals_idcode_opcode():
     """Deliberate design choice (implementation_plan.md §7 Stage 2): if a shift
     sequence goes Capture-IR -> Update-IR without visiting Shift-IR, the captured
-    pattern becomes the new instruction, and this way that edge case lands on IDCODE —
+    pattern becomes the new instruction, and this way that edge case lands on IDCODE:
     the same safe default the reset rule already requires."""
     assert CAPTURE_IR_PATTERN == OPCODE_IDCODE
 
@@ -91,6 +97,54 @@ def test_default_on_reset_selects_idcode_when_available():
     model.instruction = Instruction.BYPASS  # perturb
     model.reset()
     assert model.instruction is Instruction.IDCODE
+
+
+@pytest.mark.parametrize(
+    "has_idcode, expected", [(True, Instruction.IDCODE), (False, Instruction.BYPASS)]
+)
+def test_test_logic_reset_reloads_the_reset_instruction(has_idcode, expected):
+    """IEEE 1149.1: Test-Logic-Reset reloads IDCODE (BYPASS without one), so five TMS=1
+    cycles deselect EXTEST without a TRST pin."""
+    model = TapModel(has_idcode=has_idcode)
+    _reset_and_idle(model)
+    _shift_ir(model, OPCODE_EXTEST)
+    assert model.instruction is Instruction.EXTEST
+    _reset_and_idle(model)
+    assert model.instruction is expected
+
+
+def test_test_logic_reset_reload_fires_departing_the_state():
+    """Old-state-gated like every other action (rtl/tap_core.v's case on the pre-edge
+    state): arriving in TEST_LOGIC_RESET changes nothing; the next edge reloads."""
+    model = TapModel(has_idcode=True)
+    _reset_and_idle(model)
+    _shift_ir(model, OPCODE_EXTEST)
+    for _ in range(3):  # RUN_TEST_IDLE -> SELECT_DR_SCAN -> SELECT_IR_SCAN -> TEST_LOGIC_RESET
+        model.tick(tms=1)
+    assert model.state is TapState.TEST_LOGIC_RESET
+    assert model.instruction is Instruction.EXTEST
+    model.tick(tms=1)
+    assert model.instruction is Instruction.IDCODE
+
+
+def test_builtin_registers_clear_on_reset():
+    """rtl/tap_core.v resets idcode_shift/bypass_bit on trst_n. Invisible at tdo (Capture-DR
+    always loads them first), so this checks the registers directly."""
+    idcode = IdcodeRegister()
+    idcode.capture()
+    idcode.reset()
+    assert [idcode.shift(0) for _ in range(32)] == [0] * 32
+    bypass = BypassRegister()
+    bypass.shift(1)
+    bypass.reset()
+    assert bypass.shift(0) == 0
+
+    model = TapModel(has_idcode=True)
+    _reset_and_idle(model)
+    _goto_shift_dr(model)  # IDCODE captured into the model's own register
+    model.reset()
+    builtin = model._data_registers[Instruction.IDCODE]
+    assert [builtin.shift(0) for _ in range(32)] == [0] * 32
 
 
 def test_default_on_reset_selects_bypass_when_idcode_not_configured():
@@ -209,3 +263,85 @@ def test_five_consecutive_tms1_cycles_reach_reset_from_any_state():
         for _ in range(5):
             state = next_state(state, 1)
         assert state is TapState.TEST_LOGIC_RESET, f"starting from {start.name}"
+
+
+def test_network_access_instruction_is_extest_and_decodes_from_its_opcode():
+    """The instruction named to consumers (ICL AccessLink, BSDL) as the one that reaches the
+    IJTAG network: rtl/tap_core.v routes external_dr_tdo for it, so it must be one of the
+    instructions with no built-in data register (EXTEST/SAMPLE_PRELOAD), never IDCODE/BYPASS."""
+    assert NETWORK_ACCESS_INSTRUCTION is Instruction.EXTEST
+    assert decode_instruction(OPCODE_EXTEST, 4) is NETWORK_ACCESS_INSTRUCTION
+    assert NETWORK_ACCESS_INSTRUCTION not in (Instruction.IDCODE, Instruction.BYPASS)
+
+
+# --- a dedicated IJTAG_ACCESS opcode ----------------------------------------------------------
+
+
+def test_ijtag_access_decodes_its_opcode_and_board_instructions_to_bypass():
+    """With an IJTAG_ACCESS opcode there is no boundary register for EXTEST or SAMPLE/PRELOAD
+    to select: both decode to BYPASS, like every unimplemented opcode."""
+    decoded = {
+        opcode: decode_instruction(opcode, 4, ijtag_access_opcode=OPCODE_IJTAG_ACCESS)
+        for opcode in range(16)
+    }
+    assert decoded.pop(OPCODE_IJTAG_ACCESS) is Instruction.IJTAG_ACCESS
+    assert decoded.pop(OPCODE_IDCODE) is Instruction.IDCODE
+    assert set(decoded.values()) == {Instruction.BYPASS}
+    assert OPCODE_EXTEST in decoded and OPCODE_SAMPLE_PRELOAD in decoded
+
+
+def test_without_ijtag_access_its_opcode_is_just_unimplemented():
+    assert decode_instruction(OPCODE_IJTAG_ACCESS, 4) is Instruction.BYPASS
+    assert network_access_instruction(None) is NETWORK_ACCESS_INSTRUCTION is Instruction.EXTEST
+    assert network_access_instruction(OPCODE_IJTAG_ACCESS) is Instruction.IJTAG_ACCESS
+
+
+def test_the_model_selects_bypass_for_extest_and_the_network_for_ijtag_access():
+    model = TapModel(has_idcode=True, ijtag_access_opcode=OPCODE_IJTAG_ACCESS)
+    assert model.network_instruction is Instruction.IJTAG_ACCESS
+    _reset_and_idle(model)
+    for board in (OPCODE_EXTEST, OPCODE_SAMPLE_PRELOAD):
+        _shift_ir(model, board)
+        assert model.instruction is Instruction.BYPASS
+        assert model.instruction_opcode() == bypass_opcode(4)
+    _shift_ir(model, OPCODE_IJTAG_ACCESS)
+    assert model.instruction is Instruction.IJTAG_ACCESS
+    assert model.instruction_opcode() == OPCODE_IJTAG_ACCESS
+    with pytest.raises(TapModelError, match="IJTAG_ACCESS"):
+        _goto_shift_dr(model)  # nothing registered for the network yet
+
+
+def test_the_suggested_opcode_is_two_bits_from_every_other_instruction():
+    """OPCODE_IJTAG_ACCESS's comment: the only 4-bit opcode at least two bits from each of
+    EXTEST, SAMPLE/PRELOAD, IDCODE and BYPASS."""
+    taken = (OPCODE_EXTEST, OPCODE_SAMPLE_PRELOAD, OPCODE_IDCODE, bypass_opcode(4))
+
+    def far(opcode: int) -> bool:
+        return all(bin(opcode ^ other).count("1") >= 2 for other in taken)
+
+    assert [opcode for opcode in range(16) if far(opcode)] == [OPCODE_IJTAG_ACCESS]
+
+
+@pytest.mark.parametrize(
+    ("opcode", "match"),
+    [
+        (OPCODE_EXTEST, "EXTEST"),
+        (OPCODE_SAMPLE_PRELOAD, "SAMPLE/PRELOAD"),
+        (OPCODE_IDCODE, "Capture-IR"),
+        (0b1111, "BYPASS"),
+        (0b10000, "does not fit"),
+        (-1, "does not fit"),
+        (True, "must be an int"),
+        (12.0, "must be an int"),
+    ],
+)
+def test_an_opcode_no_tap_can_give_ijtag_access_is_refused(opcode, match):
+    assert match in ijtag_access_opcode_error(opcode)
+    with pytest.raises(TapModelError, match=match):
+        TapModel(ijtag_access_opcode=opcode)
+
+
+def test_the_ijtag_access_opcode_follows_the_ir_width():
+    assert ijtag_access_opcode_error(0b11100, ir_width=5) is None
+    assert "BYPASS" in ijtag_access_opcode_error(0b11111, ir_width=5)
+    assert ijtag_access_opcode_error(0b1111, ir_width=5) is None

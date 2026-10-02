@@ -46,7 +46,7 @@ def run_yosys_script(
     directory every file path in ``script`` should be expressed relative to. This
     matters beyond tidiness: WASI-sandboxed Yosys builds (e.g. ``yowasp-yosys``, used
     for local dev/test per implementation_plan.md) only map the process's working
-    directory into their virtual filesystem — an absolute Windows path like
+    directory into their virtual filesystem: an absolute Windows path like
     ``C:\\Users\\...`` is not resolvable from inside that sandbox, only a bare
     relative filename is. A real ``yosys`` install has no such restriction, but
     writing every caller to use ``cwd``-relative paths keeps one code path that works
@@ -185,7 +185,7 @@ def synthesize(
     caller-supplied Yosys script fragment over it, returning the re-synthesized JSON.
 
     ``synth_script`` is whatever the target flow's own synthesis recipe is, plus
-    warptap's locked/preserving script fragment (plan §4.3) — this function doesn't
+    warptap's locked/preserving script fragment (plan §4.3): this function doesn't
     choose or embed a specific recipe, it just runs whatever it's given.
     """
     with tempfile.TemporaryDirectory(prefix="warptap-synth-") as tmpdir:

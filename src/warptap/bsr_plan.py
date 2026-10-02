@@ -1,6 +1,6 @@
 """Pure planning phase for boundary-scan register insertion (implementation_plan.md §7
 Stage 3, §3.1). Walks a target module's top-level ports and produces an ordered list of
-:class:`BsrCell` records — the ``(cell_number, cell_type, port_name, function, safe_value,
+:class:`BsrCell` records: the ``(cell_number, cell_type, port_name, function, safe_value,
 disable_cell_index)`` tuple §3.1 specifies, directly modeled on BSDL's own
 ``BOUNDARY_REGISTER`` attribute. No Yosys involved here; the impure surgery that actually
 inserts cells into a netlist lives in ``bsr_insert.py``.
@@ -34,7 +34,7 @@ class BsrCell(NamedTuple):
 
 class BsrPlan(NamedTuple):
     cells: list[BsrCell]
-    skipped_ports: list[str]  # excluded ports, never silently dropped — always echoed back
+    skipped_ports: list[str]  # excluded ports, never silently dropped: always echoed back
 
 
 def build_bsr_plan(
@@ -43,33 +43,33 @@ def build_bsr_plan(
     clock_ports: frozenset[str] = frozenset(),
     excluded_ports: frozenset[str] = frozenset(),
 ) -> BsrPlan:
-    """Walk ``module``'s top-level ports (declaration order — see ``Module.ports()``)
+    """Walk ``module``'s top-level ports (declaration order; see ``Module.ports()``)
     and build the BSR cell list.
 
     ``clock_ports``/``excluded_ports`` are explicit and mandatory to opt a port out
-    of scanning — Yosys JSON gives no reliable "this is a clock" signal on a plain
+    of scanning: Yosys JSON gives no reliable "this is a clock" signal on a plain
     port, so nothing is inferred by name or heuristic (matches the project's
     "document limitations loudly" discipline). An excluded port gets no cell and no
     ``cell_number`` at all: a clock pin never has a shift-register position.
 
     Every port is handled by exactly one of: skip, or one of the three direction
-    branches below — an unrecognized ``direction`` raises immediately rather than
+    branches below. An unrecognized ``direction`` raises immediately rather than
     silently dropping the port, which is what actually guarantees no port goes
     unaccounted for (an *inline* completeness guarantee, not a separate post-hoc
-    check — the latter would be dead code here, since this walk's own control flow
+    check; the latter would be dead code here, since this walk's own control flow
     already can't fall through without either skipping or emitting a cell for every
     port).
 
     ``safe_value`` is uniformly 0 in v1: under the mux polarity ``bsr_insert.py``
     wires (``pin_out = extest_mode ? po : func_in``, a control cell's ``pin_out``
     tied directly to its paired tri-state buffer's ``EN``, no inversion), ``po=0``
-    on a control cell *is* the value that disables (Z-states) its paired driver —
+    on a control cell *is* the value that disables (Z-states) its paired driver,
     so the uniform-0 default is the safe one by construction, not by coincidence
     (see ``tests/test_bsr_plan.py``'s dedicated proof of this equivalence).
 
     Control cells are always emitted immediately before the output3/bidir cell they
     gate (``disable_cell_index == cell_number - 1``), matching the convention real
-    BSDL files use (confirmed against a live-fetched Lattice ECP5 BSDL file) — not
+    BSDL files use (confirmed against a live-fetched Lattice ECP5 BSDL file): not
     an IEEE mandate, a de facto convention worth matching so warptap's own output
     looks normal to any real boundary-scan tool.
     """

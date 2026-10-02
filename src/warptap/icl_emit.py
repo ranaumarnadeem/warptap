@@ -61,13 +61,44 @@ separate, lower-level concern than what a network-topology description language 
 SIB's ``SI`` explicitly bound to the previous slot's ``SO`` (or the top module's own ``TDI``
 for the first slot) -- mirrors :mod:`warptap.sib_insert`'s own ``prev_so`` threading exactly.
 
-**``AccessLink ... Of STD_1149_1_2001`` binds the SIB chain to the real TAP**, confirmed real.
-v1 names ``EXTEST`` specifically: ``rtl/tap_core.v`` presents ``external_dr_tdo`` (where the
-SIB chain plugs in) at ``tdo`` for any instruction that decodes to neither ``IDCODE`` nor
-``BYPASS`` -- i.e. ``EXTEST`` or ``SAMPLE_PRELOAD`` are electrically identical paths, but only
-``EXTEST`` is named here, matching every existing cross-sim test's own
-``_select_extest_ops()`` convention; ``SAMPLE_PRELOAD``'s identical access is a known,
-undocumented-in-ICL simplification, not an oversight.
+**``AccessLink ... Of STD_1149_1_2001`` binds the SIB chain to the real TAP.** Its shape is
+``AccessLink <name> Of STD_1149_1_2001 { BSDLEntity <entity>; <INSTRUCTION> { ScanInterface {
+<instance>[.<scanIf>]; } } }``, where ``<INSTRUCTION>`` is a bare identifier naming an
+instruction in the BSDL file for ``<entity>``. Sources that confirmed it (read directly, not
+recalled): the vendored grammar (``third_party/icl_parser/src/icl_parser/icl.g4``, rules
+``accessLink1149_def``/``bsdl_instr_ref``/``bsdl_instr_name``); the IJTAG benchmark set's
+``ICL/Standard/E30.icl`` (whose header says it holds snippets from IEEE Std 1687 Annex E example
+E.30) and ``MultiCoreAccessLink.icl``; the MAST project's ICL grammar (its rules are labelled
+1687 section 6.4.16) and test files; and ASSET InterTech's IJTAG article, whose ``USER1`` block
+names the FPGA BSDL's own ``USER1`` instruction. **Not confirmed:** the normative IEEE 1687-2014
+clause text, which is paywalled and was not read.
+
+This emitter names ``EXTEST`` -- :data:`warptap.bsdl_emit.NETWORK_ACCESS_BSDL_INSTRUCTION`, the
+instruction :mod:`warptap.bsdl_emit` declares in the BSDL it writes. ``rtl/tap_core.v`` presents
+``external_dr_tdo`` (where the SIB chain plugs in) at ``tdo`` for any instruction that decodes to
+neither ``IDCODE`` nor ``BYPASS``, but :mod:`warptap.sib_insert` decodes ``EXTEST`` from the
+current instruction into every top-level SIB's ``select``, so the chain captures, shifts and
+updates only under ``EXTEST``; under ``SAMPLE``/``PRELOAD`` it reaches ``tdo`` but holds
+still. (An earlier version emitted the instruction name ``wdr_select`` and its
+docstrings claimed it named ``EXTEST``: ``wdr_select`` is the instruction name in the benchmark
+file whose shape this emitter copied, not part of ICL's syntax, and no TAP warptap inserts has
+an instruction of that name.) For a TAP inserted with ``ijtag_access_opcode``, ``to_icl(...,
+ijtag_access=True)`` names ``IJTAG_ACCESS`` instead
+(:data:`warptap.bsdl_emit.IJTAG_ACCESS_BSDL_INSTRUCTION`), the instruction the BSDL written
+with the same opcode declares; there, EXTEST and SAMPLE/PRELOAD select BYPASS.
+
+**Open question, deliberately not guessed at:** the ``ScanInterface { ... }`` list names only the
+chain's first slot, while the top-level slots' ``SEL`` ports are never bound in the ``Instance``
+statements. Every readable published example wires its listed instances implicitly, and none has
+an explicitly ``SI``/``SO``-chained sequence listed by its head only, so the sources do not say
+whether the list should name every top-level slot. That shape is unchanged from before.
+
+**The vendored raw ICL parser cannot check any ordinarily formatted AccessLink**: its
+``AccessLinkGeneric_def`` is a *lexer* rule (``icl.g4:395-396``), so ``AccessLink X Of
+STD_1149_1_2001 `` lexes as one token and every such block -- including the published ones above
+-- fails to parse. The claim in earlier versions of this docstring that the emitted block was
+"grammatically valid" was therefore never actually checked by that tool; the validation
+paragraph below covers ``include_access_link=False`` output only.
 
 **No confirmed real ICL mechanism exists for a READ instrument's fixed ``capture_value``
 stub** (a warptap-internal testing artifact with no real hardware counterpart) -- this
@@ -100,8 +131,10 @@ validation now passing for every network shape this emitter produces, width>1 in
 
 from __future__ import annotations
 
+import re
 from typing import List
 
+from warptap.bsdl_emit import IJTAG_ACCESS_BSDL_INSTRUCTION, NETWORK_ACCESS_BSDL_INSTRUCTION
 from warptap.errors import WarptapError
 from warptap.icl_model import (
     ChainSlot,
@@ -114,6 +147,8 @@ from warptap.icl_model import (
     validate_one_hot_data_group,
 )
 from warptap.tap_ports import TCK, TDI, TDO, TMS, TRST_N
+
+_ICL_IDENTIFIER = re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
 
 SIB_MODULE_TYPE = "warptap_sib"
 """The one fixed ICL module-type name every SIB instance is ``Instance ... Of`` -- exported
@@ -646,7 +681,12 @@ def _collect_scan_muxes(chain, seen: dict) -> None:
 
 
 def to_icl(
-    graph: PhysicalGraph, root: ModuleInstance, *, include_access_link: bool = True
+    graph: PhysicalGraph,
+    root: ModuleInstance,
+    *,
+    include_access_link: bool = True,
+    bsdl_entity_name: str | None = None,
+    ijtag_access: bool = False,
 ) -> str:
     """Render the complete ICL description of ``graph`` (from ``sib_plan.build_sib_plan``,
     ideally called with ``top_name`` set to the real target module's own name -- ``root.name``
@@ -659,23 +699,47 @@ def to_icl(
     module()`` per distinct instrument, then the top module -- a ``ScanInterface`` naming the
     five real JTAG pins (:mod:`warptap.tap_ports`), the SIB/mux/instrument ``Instance``
     statements (``render_sib_instances``), and (when ``include_access_link``) a trailing
-    ``AccessLink ... Of STD_1149_1_2001`` naming ``EXTEST`` (see module docstring for why).
-    The ``wdr_select`` clause's shape (``ScanInterface { <slot>; }``, no ``ActiveSignals``)
-    matches the confirmed real example directly (a real chip's ``MultiCoreAccessLink.icl``) --
-    ``ActiveSignals`` there names the ``wir_select`` clause's own IR-decode signal, a genuinely
-    different thing this v1 emitter doesn't need since it only ever describes one flat DR
-    chain, not IR-based multi-core selection. The chain's first slot works here whether it's a
-    SIB or a mux -- both module kinds declare the identically-shaped ``ScanInterface client
-    { Port SI; Port SEL; Port SO; }``, so ``wdr_select``'s reference is agnostic to which.
+    ``AccessLink warptap_tap Of STD_1149_1_2001`` block: ``BSDLEntity <entity>;`` then
+    ``EXTEST { ScanInterface { <first slot>; } }`` -- the instruction that selects the network
+    (:data:`warptap.bsdl_emit.NETWORK_ACCESS_BSDL_INSTRUCTION`), named exactly as
+    :func:`warptap.bsdl_emit.to_bsdl` declares it, so the ICL and the BSDL agree. The module
+    docstring lists the sources that confirmed this syntax, what is still unconfirmed, and the
+    open question about which slots the ``ScanInterface`` list should name. No
+    ``ActiveSignals`` clause: it names signals the AccessLink itself provides, and warptap's
+    network needs none. The chain's first slot works here whether it's a SIB or a mux -- both
+    module kinds declare the identically-shaped ``ScanInterface client { Port SI; Port SEL;
+    Port SO; }``.
 
-    ``include_access_link`` defaults to ``True`` (real, grammatically valid ICL, useful to any
-    consumer that implements it) but the vendored ``Honza255/icl_parser`` -- Stage 10's own
-    live-validation oracle -- has a confirmed real gap: its own processor raises "Not
+    ``bsdl_entity_name`` sets the ``BSDLEntity`` name (default: ``root.name``, the top module's
+    name); pass the same string given to :func:`warptap.bsdl_emit.to_bsdl` when the BSDL file's
+    entity isn't named after the top module. It must be an ICL identifier. An AccessLink needs
+    a scan interface to name, so ``include_access_link=True`` with an empty chain raises
+    :class:`IclEmitError` rather than emitting a block ICL's grammar rejects.
+
+    ``ijtag_access=True`` names ``IJTAG_ACCESS`` in the AccessLink instead of ``EXTEST``: pass
+    it for a TAP inserted with an ``ijtag_access_opcode``, whose BSDL (``to_bsdl`` given the same
+    opcode) declares that instruction.
+
+    ``include_access_link`` defaults to ``True``. ``include_access_link=False`` output is
+    unchanged by everything above (pinned byte-for-byte by ``tests/test_icl_emit_golden.py``).
+    The vendored ``Honza255/icl_parser`` -- Stage 10's own live-validation oracle -- raises "Not
     supported" for `AccessLink` regardless of what's inside it (verified directly against the
-    real library, not assumed). Callers validating against that specific tool should pass
-    ``include_access_link=False``; this is a real limitation of that one external tool, not of
-    the ICL this function emits, and is documented here rather than silently worked around.
+    real library, not assumed), and additionally mis-lexes an ordinarily formatted AccessLink
+    header (see the module docstring), so callers validating against that specific tool should
+    pass ``include_access_link=False``; that is a real limitation of that one external tool, not
+    of the ICL this function emits, and is documented here rather than silently worked around.
     Raises :class:`IclEmitError` for anything v1 can't represent."""
+    if include_access_link:
+        if not graph.chain:
+            raise IclEmitError(
+                "cannot emit an AccessLink for an empty chain: it must name at least one scan "
+                "interface, and there is none (pass include_access_link=False)"
+            )
+        if bsdl_entity_name is not None and not _ICL_IDENTIFIER.match(bsdl_entity_name):
+            raise IclEmitError(
+                f"bsdl_entity_name {bsdl_entity_name!r} is not an ICL identifier (a letter, then "
+                "letters, digits or underscores)"
+            )
     module_type_blocks = [render_sib_module_type()]
     seen_muxes: dict = {}
     _collect_scan_muxes(graph.chain, seen_muxes)
@@ -709,9 +773,11 @@ def to_icl(
     if include_access_link:
         top_lines.append("")
         top_lines.append("    AccessLink warptap_tap Of STD_1149_1_2001 {")
-        top_lines.append(f"        BSDLEntity {root.name};")
-        if first_slot is not None:
-            top_lines.append(f"        wdr_select {{ ScanInterface {{ {first_slot}; }} }}")
+        top_lines.append(f"        BSDLEntity {bsdl_entity_name or root.name};")
+        instruction = (
+            IJTAG_ACCESS_BSDL_INSTRUCTION if ijtag_access else NETWORK_ACCESS_BSDL_INSTRUCTION
+        )
+        top_lines.append(f"        {instruction} {{ ScanInterface {{ {first_slot}; }} }}")
         top_lines.append("    }")
     top_lines.append("}")
 
