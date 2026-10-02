@@ -1,0 +1,31 @@
+cff-version: 1.2.0
+message: "If you use warptap in academic or professional work, please cite it as below."
+title: warptap
+abstract: >-
+  An open-source Python library that inserts IEEE 1149.1 (JTAG/TAP) and
+  IEEE 1687 (IJTAG) test-access infrastructure into RTL before synthesis,
+  emits ICL and PDL, and generates SVF, STAPL and STIL test patterns.
+type: software
+authors:
+  - given-names: Rana Umar
+    family-names: Nadeem
+    email: rana.umar.nadeem21@gmail.com
+    orcid: "https://orcid.org/0009-0008-9880-0116"
+version: 0.0.3
+license: Apache-2.0
+repository-code: "https://github.com/ranaumarnadeem/warptap"
+url: "https://ranaumarnadeem.github.io/warptap/"
+keywords:
+  - JTAG
+  - IJTAG
+  - IEEE 1149.1
+  - IEEE 1687
+  - ICL
+  - PDL
+  - boundary scan
+  - design for test
+  - DFT
+  - SVF
+  - STIL
+  - open-source EDA
+# doi: add after minting a Zenodo DOI from a tagged GitHub release
