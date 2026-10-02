@@ -15,6 +15,7 @@ Design-for-test (DFT) instruments such as MBIST controllers, scan compression an
 ## Features
 
 - TAP controller and instruction register insertion (IEEE 1149.1), with a configurable IDCODE
+  and an optional dedicated IJTAG access instruction (`ijtag_access_opcode`)
 - IJTAG network insertion with SIBs and TDRs (IEEE 1687), including nested SIBs, multi-arm ScanMux and named sub-field addressing
 - Boundary-scan register insertion, as an alternative to the IJTAG network (a design gets one or the other)
 - ICL emission, and import of networks in warptap's own ICL shape
