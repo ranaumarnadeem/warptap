@@ -33,6 +33,9 @@ pip install warptap
 
 Needs a real `yosys` on `PATH` (shelled out to, never bundled).
 
+warptap is a Python library. A `warptap` CLI entry point exists but is not stable yet: today
+it only prints its version and help, with no subcommands.
+
 ## Development
 
 Requires a real `yosys` on `PATH` (this project shells out to it, the same way faultflow does
