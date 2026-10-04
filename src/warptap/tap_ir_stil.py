@@ -62,7 +62,7 @@ from __future__ import annotations
 import re
 from decimal import Decimal
 from fractions import Fraction
-from typing import Dict, List, NamedTuple, Optional, Tuple, Union
+from typing import Dict, Iterable, List, Mapping, NamedTuple, Optional, Tuple, Union
 
 from warptap.errors import WarptapError
 from warptap.tap_fsm import TapState, next_state
@@ -71,6 +71,7 @@ from warptap.tap_ir_play import navigation_tms, shift_tms
 from warptap.tap_ports import TCK, TDI, TDO, TMS
 
 _IrOp = Union[ShiftIR, ShiftDR, GotoState, Runtest, PulsePin]
+_TAP_PINS = (TCK, TMS, TDI, TDO)
 
 _JTAG_WFT = "jtag_wft"
 _JTAG_TIMING_DOMAIN = "tap_timing"
@@ -155,49 +156,82 @@ def _walk_cycles(ir_ops: List[_IrOp]) -> List[Union[_JtagCycle, _PulseCycle]]:
     return cycles
 
 
-def _collect_signals(cycles: List[Union[_JtagCycle, _PulseCycle]]) -> Tuple[List[str], List[str]]:
+class _Pins(NamedTuple):
+    """The DUT pins a caller declares beyond TCK/TMS/TDI/TDO."""
+
+    inputs: Dict[str, int]  # each with the value it holds
+    outputs: Tuple[str, ...]
+
+
+def _declared_pins(inputs: Optional[Mapping[str, int]], outputs: Iterable[str]) -> _Pins:
+    pins = _Pins(dict(inputs or {}), tuple(outputs))
+    for name in (*pins.inputs, *pins.outputs):
+        if name in _TAP_PINS:
+            raise TapIrStilError(f"{name!r} is a TAP pin; to_stil drives and compares it itself")
+    for name, value in pins.inputs.items():
+        if not isinstance(value, int) or value not in (0, 1):
+            raise TapIrStilError(f"inputs[{name!r}] is {value!r}; an input holds 0 or 1")
+    both = sorted(set(pins.inputs) & set(pins.outputs))
+    if both:
+        raise TapIrStilError(f"{both} declared both as inputs and as outputs")
+    return pins
+
+
+def _collect_signals(
+    cycles: List[Union[_JtagCycle, _PulseCycle]], pins: _Pins
+) -> Tuple[List[str], List[str]]:
     """(all_signals, pulse_ports) -- ``all_signals`` always starts with TCK/TMS/TDI/TDO, then
-    every distinct pulse port and ``hold_pins`` key, sorted for deterministic output.
-    ``pulse_ports`` is the distinct set of :class:`_PulseCycle.port` values, one
-    ``WaveformTable`` needed per entry."""
+    every declared input and output, distinct pulse port and ``hold_pins`` key, sorted for
+    deterministic output. ``pulse_ports`` is the distinct set of :class:`_PulseCycle.port`
+    values, one ``WaveformTable`` needed per entry."""
     pulse_ports: set = set()
-    extra_signals: set = set()
+    extra_signals: set = set(pins.inputs) | set(pins.outputs)
     for cycle in cycles:
         if isinstance(cycle, _PulseCycle):
             pulse_ports.add(cycle.port)
             extra_signals.add(cycle.port)
-            for name, _value in cycle.hold_pins:
+            for name, value in cycle.hold_pins:
+                if value not in (0, 1):
+                    raise TapIrStilError(f"PulsePin hold_pins[{name!r}] is {value!r}, not 0 or 1")
                 extra_signals.add(name)
-    all_signals = [TCK, TMS, TDI, TDO] + sorted(extra_signals)
+            for name in (cycle.port, *(name for name, _ in cycle.hold_pins)):
+                if name in _TAP_PINS or name in pins.outputs:
+                    raise TapIrStilError(
+                        f"PulsePin on {cycle.port!r} drives {name!r}, which is a TAP pin or "
+                        "a declared output"
+                    )
+    all_signals = list(_TAP_PINS) + sorted(extra_signals)
     return all_signals, sorted(pulse_ports)
 
 
-def _jtag_waveforms(all_signals: List[str], strobe: str, rise: str, fall: str) -> str:
+def _jtag_waveforms(all_signals: List[str], pins: _Pins, strobe: str, rise: str, fall: str) -> str:
     lines = ["    Waveforms {"]
     for sig in all_signals:
         if sig == TCK:
             lines.append(f"      {TCK} {{ 01 {{ '0ns' D; '{rise}' D/U; '{fall}' D; }}}}")
-        elif sig in (TMS, TDI):
+        elif sig in (TMS, TDI) or sig in pins.inputs:
             lines.append(f"      {sig} {{ 01 {{ '0ns' D/U; }}}}")
         elif sig == TDO:
             lines.append(f"      {TDO} {{ HLX {{ '0ns' X; '{strobe}' H/L/X; }}}}")
+        elif sig in pins.outputs:
+            lines.append(f"      {sig} {{ X {{ '0ns' X; }}}}")
         else:
-            # A PulsePin port or hold_pins signal, irrelevant while the JTAG table is
-            # selected -- held at whatever it last was (never driven for the first time
-            # under this table; every caller sequence starts inside jtag_wft's own reset
-            # lead-in, matching every prior emitter's own precondition).
+            # A PulsePin port or hold_pins signal the caller didn't declare in ``inputs``:
+            # held at whatever it last was, never driven by a JTAG cycle.
             lines.append(f"      {sig} {{ P {{ '0ns' P; }}}}")
     lines.append("    }")
     return "\n".join(lines)
 
 
-def _pulse_waveforms(target_port: str, all_signals: List[str], rise: str, fall: str) -> str:
+def _pulse_waveforms(
+    target_port: str, all_signals: List[str], pins: _Pins, rise: str, fall: str
+) -> str:
     lines = ["    Waveforms {"]
     for sig in all_signals:
         if sig in (TCK, TMS, TDI):
             lines.append(f"      {sig} {{ P {{ '0ns' P; }}}}")
-        elif sig == TDO:
-            lines.append(f"      {TDO} {{ X {{ '0ns' X; }}}}")
+        elif sig == TDO or sig in pins.outputs:
+            lines.append(f"      {sig} {{ X {{ '0ns' X; }}}}")
         elif sig == target_port:
             lines.append(f"      {sig} {{ 01 {{ '0ns' D; '{rise}' D/U; '{fall}' D; }}}}")
         else:
@@ -214,6 +248,8 @@ def to_stil(
     *,
     jtag_period: str = "100ns",
     pulse_periods: Optional[Dict[str, str]] = None,
+    inputs: Optional[Mapping[str, int]] = None,
+    outputs: Iterable[str] = (),
 ) -> str:
     """Render ``ir_ops`` as a complete STIL file: ``Signals``/``SignalGroups``/``Timing``
     (one ``WaveformTable`` for ordinary JTAG cycles, one more per distinct
@@ -226,6 +262,15 @@ def to_stil(
     edge times are written in the same unit. Raises :class:`TapIrStilError` for an
     unsupported op, a period it can't read, or a ``PulsePin`` target port missing from
     ``pulse_periods``.
+
+    **Pins.** TCK, TMS, TDI (``In``) and TDO (``Out``) are always declared. ``inputs``
+    declares the DUT's other inputs, each with the value (0 or 1) it holds: it is driven in
+    every vector, except where a ``PulsePin`` pulses it or lists it in ``hold_pins``.
+    ``outputs`` declares the DUT's other outputs: ``Out``, and never compared. A tester-ready
+    file declares every DUT pin this way. A ``PulsePin`` port or ``hold_pins`` key left out of
+    ``inputs`` is still declared ``In``, but only a pulse ever drives it: JTAG cycles hold
+    whatever it had (``P``), nothing before its first pulse. Naming a TAP pin, a pin in both,
+    or an output in a ``PulsePin`` raises :class:`TapIrStilError`.
 
     **Timing.** One ``jtag_wft`` vector is one TCK cycle of period ``T``:
 
@@ -246,8 +291,9 @@ def to_stil(
     A ``PulsePin``'s port has the same shape in its own period: low at 0, rising at T/2,
     falling at 3T/4. Its ``hold_pins`` change at 0, half a period before the rising edge."""
     pulse_periods = pulse_periods or {}
+    pins = _declared_pins(inputs, outputs)
     cycles = _walk_cycles(ir_ops)
-    all_signals, pulse_ports = _collect_signals(cycles)
+    all_signals, pulse_ports = _collect_signals(cycles, pins)
     for port in pulse_ports:
         if port not in pulse_periods:
             raise TapIrStilError(
@@ -258,7 +304,7 @@ def to_stil(
     strobe, rise, fall = _offsets(jtag_period, "jtag_period")
 
     signals_block = "Signals {\n" + "\n".join(
-        f"  {sig} {'Out' if sig == TDO else 'In'};" for sig in all_signals
+        f"  {sig} {'Out' if sig == TDO or sig in pins.outputs else 'In'};" for sig in all_signals
     ) + "\n}"
     group_expr = " + ".join(all_signals)
     signal_groups_block = f"SignalGroups {{\n  all_pins = '{group_expr}';\n}}"
@@ -266,14 +312,14 @@ def to_stil(
     timing_lines = [f"Timing {_JTAG_TIMING_DOMAIN} {{"]
     timing_lines.append(f"  WaveformTable {_JTAG_WFT} {{")
     timing_lines.append(f"    Period '{jtag_period}';")
-    timing_lines.append(_jtag_waveforms(all_signals, strobe, rise, fall))
+    timing_lines.append(_jtag_waveforms(all_signals, pins, strobe, rise, fall))
     timing_lines.append("  }")
     for port in pulse_ports:
         table_name = f"pulse_{port}_wft"
         _, port_rise, port_fall = _offsets(pulse_periods[port], f"pulse_periods[{port!r}]")
         timing_lines.append(f"  WaveformTable {table_name} {{")
         timing_lines.append(f"    Period '{pulse_periods[port]}';")
-        timing_lines.append(_pulse_waveforms(port, all_signals, port_rise, port_fall))
+        timing_lines.append(_pulse_waveforms(port, all_signals, pins, port_rise, port_fall))
         timing_lines.append("  }")
     timing_lines.append("}")
     timing_block = "\n".join(timing_lines)
@@ -290,25 +336,35 @@ def to_stil(
     current_wft: Optional[str] = None
     for cycle in cycles:
         if isinstance(cycle, _JtagCycle):
-            if current_wft != _JTAG_WFT:
-                pattern_lines.append(f"  W {_JTAG_WFT};")
-                current_wft = _JTAG_WFT
+            table_name = _JTAG_WFT
             tdo_char = "X" if cycle.tdo_compare is None else ("H" if cycle.tdo_compare else "L")
-            parts = [f"{TCK}=1; ", f"{TMS}={cycle.tms}; ", f"{TDI}={cycle.tdi}; ", f"{TDO}={tdo_char}; "]
-            parts.append(_hold_others_as_prior(all_signals))
-            pattern_lines.append(f"  V {{ {''.join(parts)}}}")
+            values = [(TCK, "1"), (TMS, str(cycle.tms)), (TDI, str(cycle.tdi)), (TDO, tdo_char)]
+            for sig in all_signals[len(_TAP_PINS):]:
+                if sig in pins.outputs:
+                    values.append((sig, "X"))
+                elif sig in pins.inputs:
+                    values.append((sig, str(pins.inputs[sig])))
+                else:
+                    values.append((sig, "P"))  # named only by a PulsePin: holds what it had
         else:
             table_name = f"pulse_{cycle.port}_wft"
-            if current_wft != table_name:
-                pattern_lines.append(f"  W {table_name};")
-                current_wft = table_name
             hold_map = dict(cycle.hold_pins)
-            parts = [f"{TCK}=P; {TMS}=P; {TDI}=P; {TDO}=X; {cycle.port}=1; "]
-            for sig in all_signals:
-                if sig in (TCK, TMS, TDI, TDO, cycle.port):
-                    continue
-                parts.append(f"{sig}={hold_map.get(sig, 0)}; ")
-            pattern_lines.append(f"  V {{ {''.join(parts)}}}")
+            values = [(TCK, "P"), (TMS, "P"), (TDI, "P"), (TDO, "X")]
+            for sig in all_signals[len(_TAP_PINS):]:
+                if sig == cycle.port:
+                    values.append((sig, "1"))
+                elif sig in pins.outputs:
+                    values.append((sig, "X"))
+                elif sig in hold_map:
+                    values.append((sig, str(hold_map[sig])))
+                elif sig in pins.inputs:
+                    values.append((sig, str(pins.inputs[sig])))
+                else:
+                    values.append((sig, "0"))
+        if current_wft != table_name:
+            pattern_lines.append(f"  W {table_name};")
+            current_wft = table_name
+        pattern_lines.append(f"  V {{ {''.join(f'{sig}={v}; ' for sig, v in values)}}}")
     pattern_lines.append("}")
     pattern_block = "\n".join(pattern_lines)
 
@@ -321,15 +377,3 @@ def to_stil(
         f"{exec_block}\n\n"
         f"{pattern_block}\n"
     )
-
-
-def _hold_others_as_prior(all_signals: List[str]) -> str:
-    """Every non-JTAG signal (a PulsePin port or hold_pins key), while the jtag_wft table is
-    selected, holds via 'P' -- irrelevant to this phase, matches the 'P' WFC declared for it
-    in :func:`_jtag_waveforms`."""
-    parts = []
-    for sig in all_signals:
-        if sig in (TCK, TMS, TDI, TDO):
-            continue
-        parts.append(f"{sig}=P; ")
-    return "".join(parts)

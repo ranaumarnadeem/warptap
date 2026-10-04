@@ -99,3 +99,12 @@ def test_fractional_edge_times_are_valid(semiate_stil_parser):
     text = to_stil([PulsePin("sysclk", 1)], jtag_period="50ns", pulse_periods={"sysclk": "0.1us"})
     assert "'12.5ns'" in text and "'0.075us'" in text
     _assert_valid(text, semiate_stil_parser)
+
+
+def test_declared_inputs_and_outputs_are_valid(semiate_stil_parser):
+    ops = [PulsePin("sysclk", 2, hold_pins=(("pi_a", 1),)), PulsePin("sysclk", 1)]
+    text = to_stil(
+        ops, pulse_periods={"sysclk": "20ns"},
+        inputs={"rst_n": 1, "sysclk": 0}, outputs=["status_out", "done"],
+    )
+    _assert_valid(text, semiate_stil_parser)

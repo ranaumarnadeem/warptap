@@ -173,3 +173,20 @@ def test_inserted_network_controls_fail(control, stil_replay, real_signal_networ
     if control == "0.0.3_timing":
         text = _with_0_0_3_timing(text)
     assert _replay_real_signal(stil_replay, path, text, **pins).mismatches
+
+
+@pytest.mark.parametrize("rst_n, passes", [(1, True), (0, False)])
+def test_declared_inputs_reach_the_dut_and_outputs_are_never_compared(
+    rst_n, passes, stil_replay, real_signal_network
+):
+    """rst_n held by the file, not by the harness: held high the write survives the pulses;
+    held low it clears ctrl_latched and the read fails. status_out is declared but adds no
+    compare."""
+    graph, root, path = real_signal_network
+    text = to_stil(
+        _write_pulse_read(graph, root), jtag_period="50ns", pulse_periods={"clk": "10ns"},
+        inputs={"rst_n": rst_n, "clk": 0, "ctrl_in": 0}, outputs=["status_out"],
+    )
+    result = stil_replay(text, [path], "real_signal", reset_pulse={"trst_n": 0})
+    assert result.compares == 1
+    assert (result.mismatches == []) is passes

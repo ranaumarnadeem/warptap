@@ -152,3 +152,45 @@ def test_edge_times_keep_the_period_unit_and_its_fractions():
 def test_a_period_that_is_not_a_positive_time_raises_named_error(period):
     with pytest.raises(TapIrStilError, match="jtag_period"):
         to_stil([], jtag_period=period)
+
+
+def _vectors(text: str) -> list[str]:
+    return [l.strip() for l in text.splitlines() if l.strip().startswith("V {")]
+
+
+def test_declared_inputs_hold_their_value_and_outputs_are_never_compared():
+    text = to_stil(
+        [Runtest(1), PulsePin("sysclk", 1)], pulse_periods={"sysclk": "20ns"},
+        inputs={"rst_n": 1, "test_mode": 0}, outputs=["status_out"],
+    )
+    assert "rst_n In;" in text and "test_mode In;" in text and "status_out Out;" in text
+    jtag_vector, pulse_vector = _vectors(text)
+    for vector in (jtag_vector, pulse_vector):
+        assert "rst_n=1;" in vector and "test_mode=0;" in vector and "status_out=X;" in vector
+    assert "status_out { X { '0ns' X; }}" in text
+
+
+def test_hold_pins_override_a_declared_input_for_the_pulse_only():
+    text = to_stil(
+        [PulsePin("sysclk", 1, hold_pins=(("test_mode", 1),)), Runtest(1)],
+        pulse_periods={"sysclk": "20ns"}, inputs={"test_mode": 0},
+    )
+    pulse_vector, jtag_vector = _vectors(text)
+    assert "test_mode=1;" in pulse_vector
+    assert "test_mode=0;" in jtag_vector
+
+
+@pytest.mark.parametrize(
+    "inputs, outputs, ops, match",
+    [
+        ({"tck": 1}, (), [], "TAP pin"),
+        ({}, ["tdo"], [], "TAP pin"),
+        ({"rst_n": 2}, (), [], "0 or 1"),
+        ({"rst_n": 1}, ["rst_n"], [], "both"),
+        ({}, ["status_out"], [PulsePin("sysclk", 1, (("status_out", 1),))], "declared output"),
+        ({}, (), [PulsePin("sysclk", 1, (("pi_a", 3),))], "0 or 1"),
+    ],
+)
+def test_bad_pin_declarations_raise_named_error(inputs, outputs, ops, match):
+    with pytest.raises(TapIrStilError, match=match):
+        to_stil(ops, pulse_periods={"sysclk": "20ns"}, inputs=inputs, outputs=outputs)
