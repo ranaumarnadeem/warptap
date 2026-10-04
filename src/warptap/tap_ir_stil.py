@@ -44,6 +44,11 @@ don't-compared (``X``) otherwise -- is a reasoned construction from STIL's own c
 primitives, not an established industry idiom, stated here rather than presented as settled
 convention.
 
+**Where each edge and strobe sits in a period** is :func:`to_stil`'s docstring. Semi-ATE-STIL's
+syntax and semantic checks cannot see it, so ``tests/test_tap_ir_stil_replay.py`` replays
+emitted files literally against ``rtl/tap_core.v`` and inserted designs in Icarus and counts
+TDO mismatches; it caught the 0.0.3 strobe, which compared TDO after the rising TCK edge.
+
 **One ``WaveformTable`` per distinct :class:`~warptap.tap_ir.PulsePin` target port**, each
 declaring hold/force/don't-compare WFCs for every OTHER known signal (TCK/TMS/TDI/TDO, every
 other pulse port, every ``hold_pins`` key seen anywhere in ``ir_ops``) -- the mechanism,
@@ -54,6 +59,9 @@ switched via a plain ``W <name>;`` statement.
 
 from __future__ import annotations
 
+import re
+from decimal import Decimal
+from fractions import Fraction
 from typing import Dict, List, NamedTuple, Optional, Tuple, Union
 
 from warptap.errors import WarptapError
@@ -70,20 +78,33 @@ _PATTERN_NAME = "warptap_pattern"
 _BURST_NAME = "warptap_burst"
 _EXEC_NAME = "warptap_exec"
 
-#: Fixed, small, unit-agnostic sub-cycle offsets for a WaveformTable's own internal edge
-#: placement -- deliberately NOT computed as a fraction of the caller's own period string
-#: (e.g. "50% of period"), since STIL's own time-expression grammar wasn't confirmed to
-#: support percentage-of-period arithmetic this session; a caller-supplied period large
-#: enough to fit both offsets (any real value above a few nanoseconds) is a reasonable, real
-#: STIL-authoring expectation, not a new burden this module introduces.
-_EDGE_OFFSET = "1ns"
-_COMPARE_OFFSET = "2ns"
+#: Where events sit in a period, as fractions of it; :func:`to_stil`'s docstring says why.
+#: Inputs change at 0, TDO is compared at a quarter, and a clock (TCK, or a PulsePin's port)
+#: rises at half and falls at three quarters, so it idles low between cycles.
+_STROBE_AT = Fraction(1, 4)
+_RISE_AT = Fraction(1, 2)
+_FALL_AT = Fraction(3, 4)
+_TIME = re.compile(r"(\d+(?:\.\d*)?|\.\d+)(fs|ps|ns|us|ms|s)")
 
 
 class TapIrStilError(WarptapError):
     """Raised when ``to_stil`` is given an op it can't render, or a ``pulse_periods`` mapping
     missing an entry for some :class:`~warptap.tap_ir.PulsePin` target this ``ir_ops`` list
     actually uses."""
+
+
+def _offsets(period: str, what: str) -> Tuple[str, str, str]:
+    """The strobe, rise and fall times within ``period``, written in its own unit."""
+    match = _TIME.fullmatch(period)
+    if match is None or Fraction(match.group(1)) == 0:
+        raise TapIrStilError(f"{what} {period!r} is not a positive time with a unit, e.g. '50ns'")
+    value, unit = Fraction(match.group(1)), match.group(2)
+
+    def at(fraction: Fraction) -> str:
+        scaled = value * fraction
+        return format((Decimal(scaled.numerator) / scaled.denominator).normalize(), "f") + unit
+
+    return at(_STROBE_AT), at(_RISE_AT), at(_FALL_AT)
 
 
 class _JtagCycle(NamedTuple):
@@ -151,15 +172,15 @@ def _collect_signals(cycles: List[Union[_JtagCycle, _PulseCycle]]) -> Tuple[List
     return all_signals, sorted(pulse_ports)
 
 
-def _jtag_waveforms(all_signals: List[str], pulse_ports: List[str]) -> str:
+def _jtag_waveforms(all_signals: List[str], strobe: str, rise: str, fall: str) -> str:
     lines = ["    Waveforms {"]
     for sig in all_signals:
         if sig == TCK:
-            lines.append(f"      {TCK} {{ 01 {{ '0ns' D; '{_EDGE_OFFSET}' U; }}}}")
+            lines.append(f"      {TCK} {{ 01 {{ '0ns' D; '{rise}' D/U; '{fall}' D; }}}}")
         elif sig in (TMS, TDI):
             lines.append(f"      {sig} {{ 01 {{ '0ns' D/U; }}}}")
         elif sig == TDO:
-            lines.append(f"      {TDO} {{ HLX {{ '0ns' X; '{_COMPARE_OFFSET}' H/L/X; }}}}")
+            lines.append(f"      {TDO} {{ HLX {{ '0ns' X; '{strobe}' H/L/X; }}}}")
         else:
             # A PulsePin port or hold_pins signal, irrelevant while the JTAG table is
             # selected -- held at whatever it last was (never driven for the first time
@@ -170,7 +191,7 @@ def _jtag_waveforms(all_signals: List[str], pulse_ports: List[str]) -> str:
     return "\n".join(lines)
 
 
-def _pulse_waveforms(target_port: str, all_signals: List[str]) -> str:
+def _pulse_waveforms(target_port: str, all_signals: List[str], rise: str, fall: str) -> str:
     lines = ["    Waveforms {"]
     for sig in all_signals:
         if sig in (TCK, TMS, TDI):
@@ -178,7 +199,7 @@ def _pulse_waveforms(target_port: str, all_signals: List[str]) -> str:
         elif sig == TDO:
             lines.append(f"      {TDO} {{ X {{ '0ns' X; }}}}")
         elif sig == target_port:
-            lines.append(f"      {sig} {{ 01 {{ '0ns' D; '{_EDGE_OFFSET}' U; }}}}")
+            lines.append(f"      {sig} {{ 01 {{ '0ns' D; '{rise}' D/U; '{fall}' D; }}}}")
         else:
             # Another pulse port, or a hold_pins signal -- given a real 0/1 WFC pair
             # (explicit force, not "hold whatever was prior") since a hold_pins value can
@@ -200,9 +221,30 @@ def to_stil(
     ``Pattern`` (block order matches this module's own empirically-confirmed requirement,
     see module docstring). ``jtag_period``/``pulse_periods`` are real caller inputs -- STIL
     always requires explicit timing, this project has no real frequency data to invent
-    (matches :mod:`warptap.tap_ir_stapl`'s own ``NOTE`` field discipline). Raises
-    :class:`TapIrStilError` for an unsupported op, or a ``PulsePin`` target port missing from
-    ``pulse_periods``."""
+    (matches :mod:`warptap.tap_ir_stapl`'s own ``NOTE`` field discipline). Each is a positive
+    number with a unit (``fs``, ``ps``, ``ns``, ``us``, ``ms`` or ``s``), e.g. ``'50ns'``; the
+    edge times are written in the same unit. Raises :class:`TapIrStilError` for an
+    unsupported op, a period it can't read, or a ``PulsePin`` target port missing from
+    ``pulse_periods``.
+
+    **Timing.** One ``jtag_wft`` vector is one TCK cycle of period ``T``:
+
+    - TMS and TDI change at 0;
+    - TDO is compared at T/4;
+    - TCK rises at T/2 and falls at 3T/4, so it idles low between cycles.
+
+    A vector's expected TDO bit is the one the TAP shows *before* that vector's rising edge,
+    the edge that shifts it out: :meth:`~warptap.tap_model.TapModel.tick` returns it before it
+    clocks, and ``ShiftIR``/``ShiftDR``'s ``tdo`` holds those bits. ``rtl/tap_core.v`` changes
+    TDO on the rising edge, so that bit is valid from the previous rise (-T/2) to this one
+    (T/2). A TAP that changes TDO on the falling edge, as IEEE 1149.1 requires, shows it from
+    the previous fall (-T/4) to this cycle's fall (3T/4). A strobe at T/4 lies inside both
+    windows and is at least T/4 from any TDO change in either. TMS and TDI get T/2 of setup
+    before the rise and T/2 of hold after it. Up to 0.0.3, TCK rose at 1ns and TDO was compared
+    at 2ns, after the rising edge, so on ``tap_core`` every compare checked the next bit.
+
+    A ``PulsePin``'s port has the same shape in its own period: low at 0, rising at T/2,
+    falling at 3T/4. Its ``hold_pins`` change at 0, half a period before the rising edge."""
     pulse_periods = pulse_periods or {}
     cycles = _walk_cycles(ir_ops)
     all_signals, pulse_ports = _collect_signals(cycles)
@@ -213,6 +255,7 @@ def to_stil(
                 "requires explicit per-signal timing, this project has no real period to "
                 "invent for it"
             )
+    strobe, rise, fall = _offsets(jtag_period, "jtag_period")
 
     signals_block = "Signals {\n" + "\n".join(
         f"  {sig} {'Out' if sig == TDO else 'In'};" for sig in all_signals
@@ -223,13 +266,14 @@ def to_stil(
     timing_lines = [f"Timing {_JTAG_TIMING_DOMAIN} {{"]
     timing_lines.append(f"  WaveformTable {_JTAG_WFT} {{")
     timing_lines.append(f"    Period '{jtag_period}';")
-    timing_lines.append(_jtag_waveforms(all_signals, pulse_ports))
+    timing_lines.append(_jtag_waveforms(all_signals, strobe, rise, fall))
     timing_lines.append("  }")
     for port in pulse_ports:
         table_name = f"pulse_{port}_wft"
+        _, port_rise, port_fall = _offsets(pulse_periods[port], f"pulse_periods[{port!r}]")
         timing_lines.append(f"  WaveformTable {table_name} {{")
         timing_lines.append(f"    Period '{pulse_periods[port]}';")
-        timing_lines.append(_pulse_waveforms(port, all_signals))
+        timing_lines.append(_pulse_waveforms(port, all_signals, port_rise, port_fall))
         timing_lines.append("  }")
     timing_lines.append("}")
     timing_block = "\n".join(timing_lines)

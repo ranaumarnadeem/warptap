@@ -133,3 +133,22 @@ def test_pulsepin_target_missing_from_pulse_periods_raises_named_error():
 def test_unsupported_op_raises_named_error():
     with pytest.raises(TapIrStilError, match="does not support"):
         to_stil(["not an op"])
+
+
+def test_tdo_is_compared_before_tck_rises_and_tck_idles_low():
+    """T/4 strobe, T/2 rise, 3T/4 fall (to_stil's docstring); the replay test proves it on RTL."""
+    text = to_stil([], jtag_period="100ns")
+    assert "tck { 01 { '0ns' D; '50ns' D/U; '75ns' D; }}" in text
+    assert "tdo { HLX { '0ns' X; '25ns' H/L/X; }}" in text
+
+
+def test_edge_times_keep_the_period_unit_and_its_fractions():
+    text = to_stil([PulsePin("sysclk", 1)], jtag_period="50ns", pulse_periods={"sysclk": "0.1us"})
+    assert "'12.5ns' H/L/X" in text
+    assert "sysclk { 01 { '0ns' D; '0.05us' D/U; '0.075us' D; }}" in text
+
+
+@pytest.mark.parametrize("period", ["50", "0ns", "fast", "50 ns"])
+def test_a_period_that_is_not_a_positive_time_raises_named_error(period):
+    with pytest.raises(TapIrStilError, match="jtag_period"):
+        to_stil([], jtag_period=period)

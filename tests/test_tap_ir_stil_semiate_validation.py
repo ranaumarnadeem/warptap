@@ -91,3 +91,11 @@ def test_two_distinct_pulse_ports_in_one_sequence_is_valid(semiate_stil_parser):
     ]
     text = to_stil(ops, pulse_periods={"sysclk_a": "20ns", "sysclk_b": "30ns"})
     _assert_valid(text, semiate_stil_parser)
+
+
+def test_fractional_edge_times_are_valid(semiate_stil_parser):
+    """A 50ns period puts the strobe at 12.5ns and the fall at 37.5ns; a 0.1us pulse period
+    keeps its own unit (0.05us, 0.075us)."""
+    text = to_stil([PulsePin("sysclk", 1)], jtag_period="50ns", pulse_periods={"sysclk": "0.1us"})
+    assert "'12.5ns'" in text and "'0.075us'" in text
+    _assert_valid(text, semiate_stil_parser)
