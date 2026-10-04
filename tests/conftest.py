@@ -339,8 +339,8 @@ def semiate_stil_parser():
     STIL syntax+semantic checker, despite its own README's "not yet ready for production"
     disclaimer (confirmed usable this session against real STIL text, including the
     multi-``WaveformTable`` mechanism :mod:`warptap.tap_ir_stil` depends on). Requires ``lark``
-    -- not declared as an install dependency by the package itself, so genuinely optional here
-    too. Dev/test only, never a runtime dependency of warptap itself. Skips (not fails) when
+    -- not declared as an install dependency by the package itself, so the dev extra lists
+    both. Dev/test only, never a runtime dependency of warptap itself. Skips (not fails) when
     either package isn't importable, matching ``icl_parser_module``'s own discipline.
 
     Real, empirically-confirmed usage note (not documented anywhere in the package itself):
@@ -354,3 +354,18 @@ def semiate_stil_parser():
             f"Semi-ATE-STIL/lark not importable: {exc} -- run `pip install Semi-ATE-STIL lark`"
         )
     return STILParser
+
+
+@pytest.fixture(scope="session")
+def stil_replay(semiate_stil_parser, iverilog_command, vvp_command):
+    """``tests/stil_replay.py``'s ``replay_stil`` with this run's Icarus commands: replays a
+    STIL file literally against RTL. Skips with the Semi-ATE-STIL and Icarus fixtures."""
+    from stil_replay import replay_stil
+
+    def replay(stil_text, verilog_files, top, **options):
+        return replay_stil(
+            stil_text, verilog_files, top,
+            iverilog_command=iverilog_command, vvp_command=vvp_command, **options,
+        )
+
+    return replay

@@ -38,6 +38,10 @@ dev = [
     "z3-solver",
     "sympy",
     "networkx",
+    # STIL checks: Semi-ATE-STIL parses, and its dump compiler feeds tests/stil_replay.py.
+    # It does not declare lark, which it imports.
+    "Semi-ATE-STIL==0.3.2",
+    "lark",
 ]
 docs = ["mkdocs>=1.6", "mkdocs-material>=9.5", "mkdocstrings[python]>=1.0"]
 
