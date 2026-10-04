@@ -118,6 +118,22 @@ def test_declared_inputs_and_outputs_are_valid(semiate_stil_parser):
     _assert_valid(text, semiate_stil_parser)
 
 
+def test_per_bit_names_are_valid_in_every_block(semiate_stil_parser):
+    """Quoted names in Signals, SignalGroups, both WaveformTables (one named after a per-bit
+    pulse port) and V statements."""
+    ops = [
+        SetPins((("func_addr[1]", 1),)),
+        PulsePin("clk[0]", 2, hold_pins=(("func_addr[0]", 1),)),
+        GotoState(TapState.TEST_LOGIC_RESET),
+    ]
+    text = to_stil(
+        ops, pulse_periods={"clk[0]": "10ns"},
+        inputs={"func_addr[0]": 0, "func_addr[1]": 0}, outputs=["func_dout[0]", "func_dout[1]"],
+    )
+    assert 'W "pulse_clk[0]_wft";' in text
+    _assert_valid(text, semiate_stil_parser)
+
+
 def test_a_reset_lead_in_driving_trst_is_valid(semiate_stil_parser):
     ops = [
         SetPins((("trst_n", 0), ("rst_n", 0))), GotoState(TapState.TEST_LOGIC_RESET),

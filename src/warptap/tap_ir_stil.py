@@ -86,6 +86,7 @@ _STROBE_AT = Fraction(1, 4)
 _RISE_AT = Fraction(1, 2)
 _FALL_AT = Fraction(3, 4)
 _TIME = re.compile(r"(\d+(?:\.\d*)?|\.\d+)(fs|ps|ns|us|ms|s)")
+_PLAIN_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
 
 class TapIrStilError(WarptapError):
@@ -106,6 +107,16 @@ def _offsets(period: str, what: str) -> Tuple[str, str, str]:
         return format((Decimal(scaled.numerator) / scaled.denominator).normalize(), "f") + unit
 
     return at(_STROBE_AT), at(_RISE_AT), at(_FALL_AT)
+
+
+def _stil_name(name: str) -> str:
+    """``name`` as STIL writes it: a plain identifier as is, anything else, such as the
+    per-bit name ``func_addr[0]``, in double quotes."""
+    if _PLAIN_NAME.fullmatch(name):
+        return name
+    if not name or '"' in name:
+        raise TapIrStilError(f"signal name {name!r} can't be written in STIL")
+    return f'"{name}"'
 
 
 class _JtagCycle(NamedTuple):
@@ -198,8 +209,9 @@ def _collect_signals(
 ) -> Tuple[List[str], List[str]]:
     """(all_signals, pulse_ports) -- ``all_signals`` always starts with TCK/TMS/TDI/TDO, then
     every declared input and output, distinct pulse port and ``hold_pins`` key, sorted for
-    deterministic output. ``pulse_ports`` is the distinct set of :class:`_PulseCycle.port`
-    values, one ``WaveformTable`` needed per entry."""
+    deterministic output, numbers by value (``bus[2]`` before ``bus[10]``). ``pulse_ports`` is
+    the distinct set of :class:`_PulseCycle.port` values, one ``WaveformTable`` needed per
+    entry."""
     pulse_ports: set = set()
     extra_signals: set = set(pins.inputs) | set(pins.outputs)
     for cycle in cycles:
@@ -216,8 +228,12 @@ def _collect_signals(
                         f"PulsePin on {cycle.port!r} drives {name!r}, which is a TAP pin or "
                         "a declared output"
                     )
-    all_signals = list(_TAP_PINS) + sorted(extra_signals)
+    all_signals = list(_TAP_PINS) + sorted(extra_signals, key=_natural_key)
     return all_signals, sorted(pulse_ports)
+
+
+def _natural_key(name: str) -> List[Union[str, int]]:
+    return [int(part) if part.isdigit() else part for part in re.split(r"(\d+)", name)]
 
 
 def _jtag_waveforms(all_signals: List[str], pins: _Pins, strobe: str, rise: str, fall: str) -> str:
@@ -226,15 +242,15 @@ def _jtag_waveforms(all_signals: List[str], pins: _Pins, strobe: str, rise: str,
         if sig == TCK:
             lines.append(f"      {TCK} {{ 01 {{ '0ns' D; '{rise}' D/U; '{fall}' D; }}}}")
         elif sig in (TMS, TDI) or sig in pins.inputs:
-            lines.append(f"      {sig} {{ 01 {{ '0ns' D/U; }}}}")
+            lines.append(f"      {_stil_name(sig)} {{ 01 {{ '0ns' D/U; }}}}")
         elif sig == TDO:
             lines.append(f"      {TDO} {{ HLX {{ '0ns' X; '{strobe}' H/L/X; }}}}")
         elif sig in pins.outputs:
-            lines.append(f"      {sig} {{ X {{ '0ns' X; }}}}")
+            lines.append(f"      {_stil_name(sig)} {{ X {{ '0ns' X; }}}}")
         else:
             # A PulsePin port or hold_pins signal the caller didn't declare in ``inputs``:
             # held at whatever it last was, never driven by a JTAG cycle.
-            lines.append(f"      {sig} {{ P {{ '0ns' P; }}}}")
+            lines.append(f"      {_stil_name(sig)} {{ P {{ '0ns' P; }}}}")
     lines.append("    }")
     return "\n".join(lines)
 
@@ -245,15 +261,15 @@ def _pulse_waveforms(
     lines = ["    Waveforms {"]
     for sig in all_signals:
         if sig in (TCK, TMS, TDI):
-            lines.append(f"      {sig} {{ P {{ '0ns' P; }}}}")
+            lines.append(f"      {_stil_name(sig)} {{ P {{ '0ns' P; }}}}")
         elif sig == TDO or sig in pins.outputs:
-            lines.append(f"      {sig} {{ X {{ '0ns' X; }}}}")
+            lines.append(f"      {_stil_name(sig)} {{ X {{ '0ns' X; }}}}")
         elif sig == target_port:
-            lines.append(f"      {sig} {{ 01 {{ '0ns' D; '{rise}' D/U; '{fall}' D; }}}}")
+            lines.append(f"      {_stil_name(sig)} {{ 01 {{ '0ns' D; '{rise}' D/U; '{fall}' D; }}}}")
         else:
             # Any other input: forced to a hold_pins or declared value, or held where it was
             # (P) when this pulse doesn't list it and the caller didn't declare it.
-            lines.append(f"      {sig} {{ 01P {{ '0ns' D/U/P; }}}}")
+            lines.append(f"      {_stil_name(sig)} {{ 01P {{ '0ns' D/U/P; }}}}")
     lines.append("    }")
     return "\n".join(lines)
 
@@ -287,7 +303,9 @@ def to_stil(
     cycles and other pulses hold whatever it had (``P``), and nothing drives it before. Up to
     0.0.3 a ``PulsePin`` drove every such pin it did not list to 0, which asserts an
     active-low reset. Naming a TAP pin, a pin in both, or an output in a ``PulsePin`` raises
-    :class:`TapIrStilError`.
+    :class:`TapIrStilError`. A bus is one signal per bit, named like ``func_addr[0]``; a name
+    that is not a plain identifier is written in double quotes, as STIL requires, in every
+    block and in a ``PulsePin``'s ``WaveformTable`` name.
 
     **Reset lead-in.** :class:`~warptap.tap_ir.SetPins` changes declared inputs from the next
     vector on, so a pattern can reset the TAP itself, e.g. with ``inputs={"trst_n": 1, ...}``::
@@ -336,9 +354,10 @@ def to_stil(
     strobe, rise, fall = _offsets(jtag_period, "jtag_period")
 
     signals_block = "Signals {\n" + "\n".join(
-        f"  {sig} {'Out' if sig == TDO or sig in pins.outputs else 'In'};" for sig in all_signals
+        f"  {_stil_name(sig)} {'Out' if sig == TDO or sig in pins.outputs else 'In'};"
+        for sig in all_signals
     ) + "\n}"
-    group_expr = " + ".join(all_signals)
+    group_expr = " + ".join(_stil_name(sig) for sig in all_signals)
     signal_groups_block = f"SignalGroups {{\n  all_pins = '{group_expr}';\n}}"
 
     timing_lines = [f"Timing {_JTAG_TIMING_DOMAIN} {{"]
@@ -347,7 +366,7 @@ def to_stil(
     timing_lines.append(_jtag_waveforms(all_signals, pins, strobe, rise, fall))
     timing_lines.append("  }")
     for port in pulse_ports:
-        table_name = f"pulse_{port}_wft"
+        table_name = _stil_name(f"pulse_{port}_wft")
         _, port_rise, port_fall = _offsets(pulse_periods[port], f"pulse_periods[{port!r}]")
         timing_lines.append(f"  WaveformTable {table_name} {{")
         timing_lines.append(f"    Period '{pulse_periods[port]}';")
@@ -380,7 +399,7 @@ def to_stil(
                 else:
                     values.append((sig, "P"))  # named only by a PulsePin: holds what it had
         else:
-            table_name = f"pulse_{cycle.port}_wft"
+            table_name = _stil_name(f"pulse_{cycle.port}_wft")
             hold_map = dict(cycle.hold_pins)
             values = [(TCK, "P"), (TMS, "P"), (TDI, "P"), (TDO, "X")]
             for sig in all_signals[len(_TAP_PINS):]:
@@ -399,7 +418,8 @@ def to_stil(
         if current_wft != table_name:
             pattern_lines.append(f"  W {table_name};")
             current_wft = table_name
-        pattern_lines.append(f"  V {{ {''.join(f'{sig}={v}; ' for sig, v in values)}}}")
+        vector = "".join(f"{_stil_name(sig)}={v}; " for sig, v in values)
+        pattern_lines.append(f"  V {{ {vector}}}")
     pattern_lines.append("}")
     pattern_block = "\n".join(pattern_lines)
 

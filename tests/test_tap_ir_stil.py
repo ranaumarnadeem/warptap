@@ -219,6 +219,25 @@ def test_setpins_changes_a_declared_input_from_the_next_vector_on():
     assert all("rst_n=1;" in v for v in _vectors(text))
 
 
+def test_per_bit_names_are_quoted_everywhere_and_sorted_by_bit():
+    text = to_stil(
+        [Runtest(1), PulsePin("clk[0]", 1)], pulse_periods={"clk[0]": "10ns"},
+        inputs={f"addr[{i}]": i % 2 for i in (10, 2, 0)}, outputs=["dout[1]"],
+    )
+    assert '"addr[0]" In;\n  "addr[2]" In;\n  "addr[10]" In;' in text
+    assert "'tck + tms + tdi + tdo + \"addr[0]\" + \"addr[2]\" + \"addr[10]\"" in text
+    assert "\"addr[10]\" { 01 { '0ns' D/U; }}" in text
+    assert 'WaveformTable "pulse_clk[0]_wft" {' in text and 'W "pulse_clk[0]_wft";' in text
+    jtag_vector, pulse_vector = _vectors(text)
+    assert '"addr[0]"=0; "addr[2]"=0; "addr[10]"=0;' in jtag_vector
+    assert '"clk[0]"=1;' in pulse_vector and '"dout[1]"=X;' in pulse_vector
+
+
+def test_a_name_with_a_double_quote_raises_named_error():
+    with pytest.raises(TapIrStilError, match="can't be written in STIL"):
+        to_stil([], inputs={'bad"name': 0})
+
+
 def test_the_documented_reset_lead_in_asserts_trst_over_five_tms_1_cycles():
     lead_in = [
         SetPins((("trst_n", 0),)), GotoState(TapState.TEST_LOGIC_RESET),

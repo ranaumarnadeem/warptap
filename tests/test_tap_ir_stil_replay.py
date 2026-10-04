@@ -260,3 +260,65 @@ def test_idcode_reads_back_after_the_lead_in_with_trst_low_from_time_zero(stil_r
     result = stil_replay(text, [_TAP_CORE], "tap_core", initial={"trst_n": 0})
     assert result.compares == 32
     assert result.mismatches == []
+
+
+_COUNT = InstrumentSpec(
+    "count_read", width=8, capture_value=0, direction=InstrumentDirection.READ,
+    signal_bits=tuple(SignalBinding("count_out", i) for i in range(8)),
+)
+
+
+@pytest.fixture(scope="module")
+def counter_network(fixtures_dir, yosys_command, tmp_path_factory):
+    """stil_counter.v with an 8-bit READ instrument on count_out: every clk pulse adds the
+    4-bit input step to the count."""
+    graph, root = build_sib_plan([_COUNT], top_name="stil_counter")
+    raw = ingest([fixtures_dir / "stil_counter.v"], "stil_counter", yosys_command=yosys_command)
+    netlist = Netlist.from_json(raw)
+    insert_sib_network(netlist, "stil_counter", graph, yosys_command=yosys_command)
+    path = tmp_path_factory.mktemp("stil-replay") / "stil_counter_inserted.v"
+    path.write_text(
+        write_verilog_from_json(netlist.to_json(), yosys_command=yosys_command), encoding="utf-8"
+    )
+    return graph, root, path
+
+
+def _bits(name: str, width: int, value: int) -> dict:
+    return {f"{name}[{i}]": (value >> i) & 1 for i in range(width)}
+
+
+def _count_text(graph, root, *, step: int, pulses: int, expected: int, run_test: int = 0) -> str:
+    """Every stil_counter pin declared, step held per bit; the TRST lead-in also clears the
+    count through rst_n."""
+    pdl = PDLInterpreter(graph, root)
+    if run_test:
+        pdl.iRunLoop(run_test)
+    pdl.iRunLoop(pulses, sck_port="clk")
+    pdl.iTarget("count_read")
+    pdl.iRead(expected)
+    pdl.iApply()
+    ops = _TRST_LEAD_IN + select_instruction(OPCODE_EXTEST) + pdl.program
+    return to_stil(
+        ops, jtag_period="50ns", pulse_periods={"clk": "10ns"},
+        inputs={"trst_n": 1, "rst_n": 1, "clk": 0, **_bits("step", 4, step)},
+        outputs=[f"count_out[{i}]" for i in range(8)],
+    )
+
+
+def _replay_counter(stil_replay, path, text):
+    return stil_replay(text, [path], "stil_counter", initial={"trst_n": 0, "rst_n": 0})
+
+
+@pytest.mark.parametrize("swap", [False, True], ids=["as_emitted", "step_0_and_3_swapped"])
+def test_per_bit_inputs_reach_their_own_bits(swap, stil_replay, counter_network):
+    """step = 0101 held per bit, three pulses: the count reads back 15. With the STIL names of
+    step[0] and step[3] swapped the DUT sees 1100 and counts 36, so the read fails."""
+    graph, root, path = counter_network
+    text = _count_text(graph, root, step=0b0101, pulses=3, expected=15)
+    assert '"step[0]"=1; "step[1]"=0; "step[2]"=1; "step[3]"=0;' in text
+    if swap:
+        text = text.replace('"step[0]"', "SWAP").replace('"step[3]"', '"step[0]"')
+        text = text.replace("SWAP", '"step[3]"')
+    result = _replay_counter(stil_replay, path, text)
+    assert result.compares == 8
+    assert (result.mismatches == []) is not swap
