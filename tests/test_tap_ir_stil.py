@@ -87,11 +87,29 @@ def test_shiftir_uses_same_vector_shape_as_shiftdr():
     assert ir_vectors == dr_vectors
 
 
-def test_runtest_produces_one_idle_vector_per_cycle():
-    text = to_stil([Runtest(5)])
+def test_runtest_is_one_idle_vector_looped_count_times():
+    text = to_stil([ShiftDR(bits=1, tdi=0), Runtest(5)])
     vector_lines = [l for l in text.splitlines() if l.strip().startswith("V {")]
-    assert len(vector_lines) == 5
-    assert all("tms=0; tdi=0;" in l for l in vector_lines)
+    assert len(vector_lines) == 2
+    assert "  Loop 5 {\n    V { tck=1; tms=0; tdi=0; tdo=X; }\n  }\n" in text
+
+
+def test_a_loop_that_would_open_the_pattern_starts_with_one_plain_vector():
+    """Semi-ATE-STIL's compiler rejects a Loop with no vector before it."""
+    text = to_stil([Runtest(5), PulsePin("sysclk", 1000)], pulse_periods={"sysclk": "10ns"})
+    pattern = text.split("Pattern warptap_pattern {\n")[1]
+    assert pattern.startswith(
+        "  W jtag_wft;\n  V { tck=1; tms=0; tdi=0; tdo=X; sysclk=P; }\n  Loop 4 {"
+    )
+    assert "  W pulse_sysclk_wft;\n  Loop 1000 {\n    V { tck=P;" in pattern
+
+
+def test_a_count_of_one_or_zero_is_not_a_loop():
+    text = to_stil(
+        [Runtest(1), Runtest(0), PulsePin("sysclk", 1)], pulse_periods={"sysclk": "10ns"}
+    )
+    assert "Loop" not in text
+    assert len([l for l in text.splitlines() if l.strip().startswith("V {")]) == 2
 
 
 def test_pulsepin_declares_its_own_signal_and_waveformtable():

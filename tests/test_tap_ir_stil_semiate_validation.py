@@ -25,7 +25,7 @@ from warptap.icl_model import InstrumentDirection, SignalBinding
 from warptap.pdl_interpreter import PDLInterpreter
 from warptap.sib_plan import InstrumentSpec, build_sib_plan
 from warptap.tap_fsm import TapState
-from warptap.tap_ir import GotoState, PulsePin, SetPins
+from warptap.tap_ir import GotoState, PulsePin, Runtest, SetPins
 from warptap.tap_ir_stil import to_stil
 
 
@@ -131,6 +131,15 @@ def test_per_bit_names_are_valid_in_every_block(semiate_stil_parser):
         inputs={"func_addr[0]": 0, "func_addr[1]": 0}, outputs=["func_dout[0]", "func_dout[1]"],
     )
     assert 'W "pulse_clk[0]_wft";' in text
+    _assert_valid(text, semiate_stil_parser)
+
+
+def test_loops_are_valid(semiate_stil_parser):
+    """A run that opens the pattern (one plain V, then the Loop), a PulsePin loop right after
+    a W switch, and a Runtest loop back in jtag_wft."""
+    ops = [Runtest(1000), PulsePin("clk", 4096, hold_pins=(("rst_n", 1),)), Runtest(64)]
+    text = to_stil(ops, pulse_periods={"clk": "10ns"}, inputs={"rst_n": 1})
+    assert "Loop 999 {" in text and "Loop 4096 {" in text and "Loop 64 {" in text
     _assert_valid(text, semiate_stil_parser)
 
 

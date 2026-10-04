@@ -36,6 +36,7 @@ from warptap.sib_plan import InstrumentSpec, build_sib_plan
 from warptap.tap_fsm import TapState
 from warptap.tap_integrity import select_instruction
 from warptap.tap_ir import GotoState, PulsePin, Runtest, SetPins, ShiftDR, ShiftIR, bits_from_int
+from warptap.tap_ir_play import to_cycles
 from warptap.tap_ir_stil import to_stil
 from warptap.tap_model import CAPTURE_IR_PATTERN, IDCODE_VALUE, OPCODE_EXTEST
 from warptap.yosys_io import ingest, write_verilog_from_json
@@ -287,9 +288,9 @@ def _bits(name: str, width: int, value: int) -> dict:
     return {f"{name}[{i}]": (value >> i) & 1 for i in range(width)}
 
 
-def _count_text(graph, root, *, step: int, pulses: int, expected: int, run_test: int = 0) -> str:
-    """Every stil_counter pin declared, step held per bit; the TRST lead-in also clears the
-    count through rst_n."""
+def _count_ops(graph, root, *, pulses: int, expected: int, run_test: int = 0) -> list:
+    """The TRST lead-in (which also clears the count through rst_n), ``run_test`` TCK cycles,
+    ``pulses`` clk pulses, then a read of the count."""
     pdl = PDLInterpreter(graph, root)
     if run_test:
         pdl.iRunLoop(run_test)
@@ -297,7 +298,12 @@ def _count_text(graph, root, *, step: int, pulses: int, expected: int, run_test:
     pdl.iTarget("count_read")
     pdl.iRead(expected)
     pdl.iApply()
-    ops = _TRST_LEAD_IN + select_instruction(OPCODE_EXTEST) + pdl.program
+    return _TRST_LEAD_IN + select_instruction(OPCODE_EXTEST) + pdl.program
+
+
+def _count_text(graph, root, *, step: int, **count) -> str:
+    """Every stil_counter pin declared, step held per bit."""
+    ops = _count_ops(graph, root, **count)
     return to_stil(
         ops, jtag_period="50ns", pulse_periods={"clk": "10ns"},
         inputs={"trst_n": 1, "rst_n": 1, "clk": 0, **_bits("step", 4, step)},
@@ -322,3 +328,20 @@ def test_per_bit_inputs_reach_their_own_bits(swap, stil_replay, counter_network)
     result = _replay_counter(stil_replay, path, text)
     assert result.compares == 8
     assert (result.mismatches == []) is not swap
+
+
+@pytest.mark.parametrize("edit", [False, True], ids=["as_emitted", "loop_37_edited_to_36"])
+def test_loops_replay_with_their_full_count(edit, stil_replay, counter_network):
+    """1000 TCK cycles in Run-Test/Idle and 37 clk pulses, each one Loop: the replay applies
+    every cycle and the count reads back 37. Edited to Loop 36, it reads 36 and fails."""
+    graph, root, path = counter_network
+    count = dict(pulses=37, expected=37, run_test=1000)
+    text = _count_text(graph, root, step=1, **count)
+    assert "  Loop 1000 {" in text and "  Loop 37 {" in text
+    if edit:
+        text = text.replace("Loop 37 {", "Loop 36 {")
+    result = _replay_counter(stil_replay, path, text)
+    ops = _count_ops(graph, root, **count)
+    jtag_ops = [op for op in ops if not isinstance(op, (SetPins, PulsePin))]
+    assert result.vectors == len(to_cycles(jtag_ops)) + (36 if edit else 37)
+    assert (result.mismatches == []) is not edit

@@ -124,16 +124,19 @@ class _JtagCycle(NamedTuple):
     tdi: int
     tdo_compare: Optional[int]  # None = don't-compare this cycle
     static: Tuple[Tuple[str, int], ...]  # declared inputs' values, after any SetPins
+    repeat: int = 1  # identical consecutive cycles: a Runtest's count
 
 
 class _PulseCycle(NamedTuple):
     port: str
     hold_pins: Tuple[Tuple[str, int], ...]
     static: Tuple[Tuple[str, int], ...]
+    repeat: int = 1  # the PulsePin's count
 
 
 def _walk_cycles(ir_ops: List[_IrOp], pins: "_Pins") -> List[Union[_JtagCycle, _PulseCycle]]:
-    """One record per emitted STIL vector -- reuses the exact navigation/shift logic
+    """One record per emitted STIL vector, or per run of identical ones (a ``Runtest`` or a
+    ``PulsePin``, ``repeat`` long) -- reuses the exact navigation/shift logic
     :mod:`warptap.tap_ir_play` already established, extended to also carry per-cycle
     TDO-compare information (:func:`~warptap.tap_ir_play.to_cycles` deliberately doesn't,
     being send-only), :class:`~warptap.tap_ir.PulsePin` cycles, and the values
@@ -147,6 +150,12 @@ def _walk_cycles(ir_ops: List[_IrOp], pins: "_Pins") -> List[Union[_JtagCycle, _
         nonlocal state
         cycles.append(_JtagCycle(tms, tdi, tdo_compare, snapshot))
         state = next_state(state, tms)
+
+    def settle(count: int) -> None:
+        """Advance ``state`` by ``count`` TMS=0 cycles: it stops changing within three."""
+        nonlocal state
+        for _ in range(min(count, 3)):
+            state = next_state(state, 0)
 
     for op in ir_ops:
         if isinstance(op, GotoState):
@@ -162,11 +171,12 @@ def _walk_cycles(ir_ops: List[_IrOp], pins: "_Pins") -> List[Union[_JtagCycle, _
                     compare = tdo_bits[i]
                 jtag_tick(tms, tdi_bit, compare)
         elif isinstance(op, Runtest):
-            for _ in range(op.count):
-                jtag_tick(0, 0)
+            if op.count > 0:
+                cycles.append(_JtagCycle(0, 0, None, snapshot, op.count))
+                settle(op.count)
         elif isinstance(op, PulsePin):
-            for _ in range(op.count):
-                cycles.append(_PulseCycle(op.port, op.hold_pins, snapshot))
+            if op.count > 0:
+                cycles.append(_PulseCycle(op.port, op.hold_pins, snapshot, op.count))
         elif isinstance(op, SetPins):
             for name, value in op.pins:
                 if name not in pins.inputs:
@@ -322,6 +332,12 @@ def to_stil(
     the SIB network, which only TRST resets. Without either, the ops must start where the TAP
     already is: in Run-Test/Idle.
 
+    **Loops.** A ``Runtest`` or ``PulsePin`` with ``count`` above 1 is one ``V`` inside
+    ``Loop count { ... }``, so an MBIST run loop of thousands of cycles is one statement. When
+    such a run opens the pattern, its first cycle is written as a plain ``V`` and the rest
+    loop: Semi-ATE-STIL's compiler, like a tester that loads the loop count on the vector
+    before the loop, needs a vector first.
+
     **Timing.** One ``jtag_wft`` vector is one TCK cycle of period ``T``:
 
     - TMS and TDI change at 0;
@@ -418,8 +434,17 @@ def to_stil(
         if current_wft != table_name:
             pattern_lines.append(f"  W {table_name};")
             current_wft = table_name
-        vector = "".join(f"{_stil_name(sig)}={v}; " for sig, v in values)
-        pattern_lines.append(f"  V {{ {vector}}}")
+        vector = "V { " + "".join(f"{_stil_name(sig)}={v}; " for sig, v in values) + "}"
+        repeat = cycle.repeat
+        if repeat > 1 and cycle is cycles[0]:
+            # A Loop that opens the pattern is valid STIL, but Semi-ATE-STIL's compiler, like
+            # a tester that loads the loop count on the vector before, needs a vector first.
+            pattern_lines.append(f"  {vector}")
+            repeat -= 1
+        if repeat == 1:
+            pattern_lines.append(f"  {vector}")
+        else:
+            pattern_lines += [f"  Loop {repeat} {{", f"    {vector}", "  }"]
     pattern_lines.append("}")
     pattern_block = "\n".join(pattern_lines)
 
