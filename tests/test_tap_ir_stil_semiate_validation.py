@@ -101,6 +101,13 @@ def test_fractional_edge_times_are_valid(semiate_stil_parser):
     _assert_valid(text, semiate_stil_parser)
 
 
+def test_a_pulse_holding_the_pins_it_does_not_list_is_valid(semiate_stil_parser):
+    ops = [PulsePin("clk", 1, hold_pins=(("rst_n", 1),)), PulsePin("clk", 1)]
+    text = to_stil(ops, pulse_periods={"clk": "10ns"})
+    assert "rst_n=P;" in text.split("rst_n=1;")[1]
+    _assert_valid(text, semiate_stil_parser)
+
+
 def test_declared_inputs_and_outputs_are_valid(semiate_stil_parser):
     ops = [PulsePin("sysclk", 2, hold_pins=(("pi_a", 1),)), PulsePin("sysclk", 1)]
     text = to_stil(

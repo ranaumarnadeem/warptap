@@ -180,6 +180,16 @@ def test_hold_pins_override_a_declared_input_for_the_pulse_only():
     assert "test_mode=0;" in jtag_vector
 
 
+def test_a_pulse_holds_the_pins_it_does_not_list_instead_of_driving_0():
+    text = to_stil(
+        [PulsePin("sysclk_a", 1, hold_pins=(("pi_x", 1),)), PulsePin("sysclk_b", 1)],
+        pulse_periods={"sysclk_a": "20ns", "sysclk_b": "20ns"},
+    )
+    _, b_vector = _vectors(text)
+    assert "pi_x=P;" in b_vector and "sysclk_a=P;" in b_vector
+    assert "=0;" not in b_vector
+
+
 @pytest.mark.parametrize(
     "inputs, outputs, ops, match",
     [

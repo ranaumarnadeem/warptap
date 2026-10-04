@@ -235,10 +235,9 @@ def _pulse_waveforms(
         elif sig == target_port:
             lines.append(f"      {sig} {{ 01 {{ '0ns' D; '{rise}' D/U; '{fall}' D; }}}}")
         else:
-            # Another pulse port, or a hold_pins signal -- given a real 0/1 WFC pair
-            # (explicit force, not "hold whatever was prior") since a hold_pins value can
-            # be driven for the first time exactly during a pulse phase.
-            lines.append(f"      {sig} {{ 01 {{ '0ns' D/U; }}}}")
+            # Any other input: forced to a hold_pins or declared value, or held where it was
+            # (P) when this pulse doesn't list it and the caller didn't declare it.
+            lines.append(f"      {sig} {{ 01P {{ '0ns' D/U/P; }}}}")
     lines.append("    }")
     return "\n".join(lines)
 
@@ -268,9 +267,11 @@ def to_stil(
     every vector, except where a ``PulsePin`` pulses it or lists it in ``hold_pins``.
     ``outputs`` declares the DUT's other outputs: ``Out``, and never compared. A tester-ready
     file declares every DUT pin this way. A ``PulsePin`` port or ``hold_pins`` key left out of
-    ``inputs`` is still declared ``In``, but only a pulse ever drives it: JTAG cycles hold
-    whatever it had (``P``), nothing before its first pulse. Naming a TAP pin, a pin in both,
-    or an output in a ``PulsePin`` raises :class:`TapIrStilError`.
+    ``inputs`` is still declared ``In``, but only a pulse that names it ever drives it: JTAG
+    cycles and other pulses hold whatever it had (``P``), and nothing drives it before. Up to
+    0.0.3 a ``PulsePin`` drove every such pin it did not list to 0, which asserts an
+    active-low reset. Naming a TAP pin, a pin in both, or an output in a ``PulsePin`` raises
+    :class:`TapIrStilError`.
 
     **Timing.** One ``jtag_wft`` vector is one TCK cycle of period ``T``:
 
@@ -360,7 +361,9 @@ def to_stil(
                 elif sig in pins.inputs:
                     values.append((sig, str(pins.inputs[sig])))
                 else:
-                    values.append((sig, "0"))
+                    # Not listed, not declared: hold its prior value. Forcing 0 here would
+                    # assert any active-low reset another PulsePin's hold_pins named.
+                    values.append((sig, "P"))
         if current_wft != table_name:
             pattern_lines.append(f"  W {table_name};")
             current_wft = table_name

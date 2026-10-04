@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from typing import Optional
 
 import pytest
 
@@ -34,7 +35,7 @@ from warptap.sib_insert import insert_sib_network
 from warptap.sib_plan import InstrumentSpec, build_sib_plan
 from warptap.tap_fsm import TapState
 from warptap.tap_integrity import select_instruction
-from warptap.tap_ir import GotoState, Runtest, ShiftDR, ShiftIR, bits_from_int
+from warptap.tap_ir import GotoState, PulsePin, Runtest, ShiftDR, ShiftIR, bits_from_int
 from warptap.tap_ir_stil import to_stil
 from warptap.tap_model import CAPTURE_IR_PATTERN, IDCODE_VALUE, OPCODE_EXTEST
 from warptap.yosys_io import ingest, write_verilog_from_json
@@ -132,13 +133,18 @@ def real_signal_network(fixtures_dir, yosys_command, tmp_path_factory):
     return graph, root, path
 
 
-def _write_pulse_read(graph, root, *, expected: int = 1, pulses: int = 2) -> list:
-    """Write ctrl_in=1, clock it into ctrl_latched with ``pulses`` clk pulses, read status_out."""
+def _write_pulse_read(
+    graph, root, *, expected: int = 1, pulses: int = 2, pulse_ops: Optional[list] = None
+) -> list:
+    """Write ctrl_in=1, clock it into ctrl_latched with ``pulses`` clk pulses (or
+    ``pulse_ops``), read status_out."""
     pdl = PDLInterpreter(graph, root)
     pdl.iTarget("ctrl_write")
     pdl.iWrite(1)
     pdl.iApply()
-    if pulses:
+    if pulse_ops is not None:
+        pdl.program.extend(pulse_ops)
+    elif pulses:
         pdl.iRunLoop(pulses, sck_port="clk")
     pdl.iTarget("status_read")
     pdl.iRead(expected)
@@ -187,6 +193,28 @@ def test_declared_inputs_reach_the_dut_and_outputs_are_never_compared(
         _write_pulse_read(graph, root), jtag_period="50ns", pulse_periods={"clk": "10ns"},
         inputs={"rst_n": rst_n, "clk": 0, "ctrl_in": 0}, outputs=["status_out"],
     )
+    result = stil_replay(text, [path], "real_signal", reset_pulse={"trst_n": 0})
+    assert result.compares == 1
+    assert (result.mismatches == []) is passes
+
+
+@pytest.mark.parametrize("unlisted, passes", [("held", True), ("forced_0_as_in_0.0.3", False)])
+def test_a_pulse_leaves_a_pin_it_does_not_list_where_it_was(
+    unlisted, passes, stil_replay, real_signal_network
+):
+    """rst_n is undeclared and driven only by the first pulse's hold_pins. The second pulse
+    doesn't list it, so it stays 1 and the read passes. Driven 0 there instead, as 0.0.3 did,
+    the pulse resets ctrl_latched and the read fails."""
+    graph, root, path = real_signal_network
+    pulse_ops = [PulsePin("clk", 1, hold_pins=(("rst_n", 1),)), PulsePin("clk", 1)]
+    text = to_stil(_write_pulse_read(graph, root, pulse_ops=pulse_ops), jtag_period="50ns",
+                   pulse_periods={"clk": "10ns"})
+    if unlisted != "held":
+        lines = text.splitlines()
+        pulse_lines = [i for i, l in enumerate(lines) if "clk=1;" in l]
+        assert "rst_n=1;" in lines[pulse_lines[0]] and "rst_n=P;" in lines[pulse_lines[1]]
+        lines[pulse_lines[1]] = lines[pulse_lines[1]].replace("rst_n=P;", "rst_n=0;")
+        text = "\n".join(lines) + "\n"
     result = stil_replay(text, [path], "real_signal", reset_pulse={"trst_n": 0})
     assert result.compares == 1
     assert (result.mismatches == []) is passes
