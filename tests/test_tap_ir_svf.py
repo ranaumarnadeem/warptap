@@ -23,6 +23,12 @@ def test_gotostate_ops_are_dropped():
     assert svf == "ENDIR IDLE;\nENDDR IDLE;\n"
 
 
+def test_a_goto_test_logic_reset_becomes_state_reset():
+    """A reset SIR/SDR navigation never performs, so dropping it would lose it."""
+    ops = [GotoState(TapState.TEST_LOGIC_RESET), GotoState(TapState.RUN_TEST_IDLE)]
+    assert to_svf(ops) == "ENDIR IDLE;\nENDDR IDLE;\nSTATE RESET;\n"
+
+
 def test_sdr_emits_tdi_only_when_tdo_mask_absent():
     ops = [ShiftDR(bits=8, tdi=0x41)]
     svf = to_svf(ops)
@@ -101,6 +107,14 @@ def test_irunloop_sck_produced_pulsepin_is_rejected():
     pdl.iRunLoop(3, sck_port="sysclk")
     with pytest.raises(TapIrSvfError, match="does not support"):
         to_svf(pdl.program)
+
+
+def test_setpins_is_rejected():
+    """Only to_stil drives pins other than TCK/TMS/TDI."""
+    from warptap.tap_ir import SetPins
+
+    with pytest.raises(TapIrSvfError, match="does not support"):
+        to_svf([SetPins((("trst_n", 0),))])
 
 
 def test_svf_state_names_match_spec_table_for_every_state():

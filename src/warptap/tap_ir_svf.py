@@ -22,7 +22,8 @@ redundant, not merely an optimization -- this module emits a single ``ENDIR IDLE
 ``ENDDR IDLE;`` header instead (SVF's own default, per spec p.8, but stated explicitly here to
 match this stage's "always emit every field, no sticky-default optimization yet" discipline),
 which is exactly what every ``GotoState(RUN_TEST_IDLE)`` in this project's own ops already
-wants.
+wants. The one exception is ``GotoState(TEST_LOGIC_RESET)``, a reset that ``SIR``/``SDR``
+navigation never performs: it becomes ``STATE RESET;``.
 
 **Deliberately emits every ``TDI``/``TDO``/``MASK`` field on every ``SIR``/``SDR``** -- SVF's
 own field "stickiness" (reusing the last value for an omitted field) is a real, legal
@@ -41,6 +42,7 @@ from __future__ import annotations
 from typing import List, Union
 
 from warptap.errors import WarptapError
+from warptap.tap_fsm import TapState
 from warptap.tap_ir import TAP_STATE_NAMES, GotoState, Runtest, ShiftDR, ShiftIR
 
 _IrOp = Union[ShiftIR, ShiftDR, GotoState, Runtest]
@@ -77,7 +79,9 @@ def to_svf(ir_ops: List[_IrOp]) -> str:
     lines: List[str] = ["ENDIR IDLE;", "ENDDR IDLE;"]
     for op in ir_ops:
         if isinstance(op, GotoState):
-            continue  # SIR/SDR's own automatic navigation makes this redundant; see docstring
+            if op.state is TapState.TEST_LOGIC_RESET:
+                lines.append("STATE RESET;")
+            continue  # SIR/SDR's own automatic navigation makes the rest redundant; see docstring
         elif isinstance(op, ShiftIR):
             lines.append(_scan_line("SIR", op))
         elif isinstance(op, ShiftDR):

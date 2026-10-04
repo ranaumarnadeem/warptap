@@ -1,89 +1,102 @@
-# tapestry
+# warptap
 
-[WIP] A python package to add JTAG, IJTAG and TAP in DFT-inserted circuitry and do ICL and
-PDL — package/CLI name is `warptap`.
+[![PyPI](https://img.shields.io/pypi/v/warptap)](https://pypi.org/project/warptap/)
+[![Docs](https://img.shields.io/badge/docs-github%20pages-2ea44f)](https://ranaumarnadeem.github.io/warptap/)
+[![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 
-## Usage
+**warptap is an open-source Python library that inserts IEEE 1149.1 (JTAG/TAP) and IEEE 1687 (IJTAG) test-access networks into RTL before synthesis, emits ICL and PDL, and generates SVF, STAPL and STIL patterns to drive them.**
 
-warptap is a library, not (yet) a CLI tool: `pip install warptap`, then call its functions
-from your own build/generation pipeline — there's no daemon or service, each call does one
-piece of work and returns. The core pipeline is: insert a JTAG/IJTAG test-access network into
-your design, then either drive it (`PDLInterpreter`) and emit a real ATE pattern file, or hand
-the inserted netlist on to your own normal synthesis flow.
+Design-for-test (DFT) instruments such as MBIST controllers, scan compression and on-chip monitors need a standard access path from the chip pins. Commercial flows (Tessent IJTAG, Modus) do this; warptap does it in open source. You describe which control and status signals need access, warptap inserts a TAP controller, Segment Insertion Bits (SIBs) and Test Data Registers, returns synthesizable Verilog, and gives you an Instrument Connectivity Language (ICL) model plus a Procedural Description Language (PDL) interpreter to read and write those signals.
 
-The example below mirrors a real integration shape: a generator (e.g. an MBIST wrapper
-generator) produces RTL with real control/status ports, then warptap wraps a subset of them
-with JTAG/IJTAG access before synthesis.
+- Documentation: https://ranaumarnadeem.github.io/warptap/
+- PyPI: `pip install warptap`
+- Status: alpha (0.0.x). APIs may change between releases.
 
-```python
-from warptap import (
-    InstrumentSpec, InstrumentDirection, SignalBinding,
-    insert_test_access, PDLInterpreter, to_svf,
-)
+## Features
 
-# One instrument per real signal you want write/read access to -- mix WRITE (control) and
-# READ (status) freely in one network.
-specs = [
-    InstrumentSpec(
-        "self_repair_start", width=1, capture_value=0,
-        direction=InstrumentDirection.WRITE,
-        signal_bits=(SignalBinding("self_repair_start"),),
-    ),
-    InstrumentSpec(
-        "self_repair_busy", width=1, capture_value=0,
-        direction=InstrumentDirection.READ,
-        signal_bits=(SignalBinding("self_repair_busy"),),
-    ),
-]
+- TAP controller and instruction register insertion (IEEE 1149.1), with a configurable IDCODE
+  and an optional dedicated IJTAG access instruction (`ijtag_access_opcode`)
+- IJTAG network insertion with SIBs and TDRs (IEEE 1687), including nested SIBs, multi-arm ScanMux and named sub-field addressing
+- Boundary-scan register insertion, as an alternative to the IJTAG network (a design gets one or the other)
+- ICL emission, and import of networks in warptap's own ICL shape
+- TAP-only BSDL emission, matching the instruction the ICL `AccessLink` names
+- PDL emission, import and an in-Python PDL interpreter
+- Pattern output: SVF, STAPL (with CRC16) and STIL
+- TAP and IJTAG network-integrity test programs, with the TDO they expect
+- Retargeting of faultflow scan patterns, including compressed and compacted scan
+- Pre-synthesis RTL insertion, so the result goes through your normal synthesis flow
 
-# Ingest your generated/hand-written RTL, insert the TAP + IJTAG network, get back
-# synthesizable Verilog plus everything needed to drive it. From here, feed the returned
-# Verilog into your own normal synthesis flow instead of the original sources.
-inserted_verilog, graph, root = insert_test_access(
-    ["mem_subsystem_mbist.sv"], "mem_subsystem_mbist", specs,
-)
+## Install
 
-# Drive it: write self_repair_start, wait for it to settle, read self_repair_busy.
-pdl = PDLInterpreter(graph, root)
-pdl.iTarget("self_repair_start")
-pdl.iWrite(1)
-pdl.iApply()
-pdl.iRunLoop(10)
-pdl.iTarget("self_repair_busy")
-pdl.iRead(1)
-pdl.iApply()
-
-# Emit a real ATE pattern file from the same ops.
-print(to_svf(pdl.program))
+```bash
+pip install warptap
 ```
 
-`to_stapl`/`to_stil` render the identical `pdl.program` as STAPL/STIL instead; `to_icl`
-describes the inserted network's own topology as real ICL text; `retarget_faultflow_patterns`
-remaps a faultflow `--export-patterns` JSON export through the same network. Every exception
-this library raises subclasses `WarptapError`.
+Needs a real `yosys` on `PATH` (shelled out to, never bundled).
 
-Nested SIB networks, multi-arm ScanMux, named sub-field addressing, and ICL/PDL import are also
-supported — see [the docs](https://ranaumarnadeem.github.io/warptap/) for the full API.
+warptap is a Python library. A `warptap` CLI entry point exists but is not stable yet: today
+it only prints its version and help, with no subcommands.
+
+## Part of an open-source DFT toolchain
+
+| Tool | What it does |
+|---|---|
+| [faultflow](https://github.com/ranaumarnadeem/faultflow) | ATPG and fault simulation for Yosys gate-level netlists |
+| [OpenTestability](https://github.com/ranaumarnadeem/OpenTestability) | SCOAP/COP testability analysis and test point insertion |
+| [autoMBIST](https://github.com/ranaumarnadeem/autoMBIST) | MBIST, BIRA and BISR generation for OpenRAM memories |
+| **warptap** | JTAG/IJTAG test-access insertion, ICL and PDL |
+
+warptap is the access layer: autoMBIST's MBIST controllers become instruments on a
+warptap-inserted IJTAG network, and faultflow's scan patterns, compressed and compacted ones
+included, are retargeted through it.
+
+## FAQ
+
+**Is there an open-source alternative to Tessent IJTAG?**
+warptap covers IJTAG network insertion, ICL and PDL generation, and PDL execution for open flows,
+for the networks it inserts itself. It is not a general IEEE 1687 tool: ICL import recognizes
+only warptap's own network shape, and it does not retarget PDL across arbitrary third-party ICL
+hierarchies.
+
+**Can I use warptap with Yosys and OpenROAD / LibreLane?**
+warptap runs Yosys itself and returns plain Verilog, which you synthesize like any other source,
+so it fits a Yosys-based flow. The test suite synthesizes the inserted Verilog with Yosys; it
+does not run OpenROAD or LibreLane.
+
+**Which pattern formats can it produce for a tester?**
+SVF, STAPL and STIL. It also writes a TAP-only BSDL file describing the TAP it inserts.
+
+**Does it work on gate-level netlists?**
+Yes, if Yosys can read the netlist: give it interface-only (`(* blackbox *)`) declarations for the
+library cells. The test suite inserts a network into a sky130 gate-level netlist this way. The
+TAP, SIBs and instrument registers warptap adds are generic logic, not mapped to your cell
+library, so the result still needs synthesis or technology mapping.
 
 ## Development
 
-Requires a real `yosys` on `PATH` (this project shells out to it, same as faultflow does for
-its own Yosys usage — it's never bundled). On Windows, run everything through WSL, which
-already has `yosys`/`python3`/`pytest` installed system-wide; only the package itself needs an
-editable install, and system `pip` there is externally-managed (PEP 668), so that install goes
-through a small local venv:
+Requires a real `yosys` on `PATH` (this project shells out to it, the same way faultflow does
+for its own Yosys usage; it is never bundled). On Windows, run everything through WSL; system `pip`
+there is externally-managed (PEP 668), so install into a local venv:
 
 ```bash
-wsl bash -lc "cd /mnt/c/path/to/tapestry && python3 -m venv --system-site-packages .venv && ./.venv/bin/pip install -e ."
-wsl bash -lc "cd /mnt/c/path/to/tapestry && ./.venv/bin/python -m pytest"
+git clone --recurse-submodules https://github.com/ranaumarnadeem/warptap.git
+cd warptap
+python3 -m venv .venv && ./.venv/bin/pip install -e '.[dev]'
+./.venv/bin/python -m pytest
 ```
 
-`--system-site-packages` lets the venv see WSL's system-installed `pytest` instead of
-reinstalling it. If a real `yosys` isn't available at all, `WARPTAP_YOSYS_CMD` can point at any
-Yosys-compatible executable — `tests/conftest.py` falls back to a pip-installed
+`third_party/icl_parser` is a git submodule (an ICL/PDL parser the grammar and import tests run
+against). In an existing clone, and in every `git worktree`, run
+`git submodule update --init third_party/icl_parser` first. The `dev` extra installs its Python
+dependencies (`antlr4-python3-runtime==4.7.2`, `z3-solver`, `sympy`, `networkx`). Without the
+submodule or those packages the parser tests fail with that instruction;
+`WARPTAP_ALLOW_MISSING_ICL_PARSER=1` makes them skip instead.
+
+If a real `yosys` isn't available at all, `WARPTAP_YOSYS_CMD` can point at any
+Yosys-compatible executable, and `tests/conftest.py` falls back to a pip-installed
 `yowasp-yosys` (WASM build, see the `dev` extra) if nothing is found on `PATH`.
 
 Some tests also cross-simulate hand-authored RTL against its Python behavioral-model
 counterpart using Icarus Verilog (`iverilog`/`vvp`, already present in the documented WSL
-environment). There's no WASM fallback for these — if neither is on `PATH` nor pointed at via
+environment). There's no WASM fallback for these: if neither is on `PATH` nor pointed at via
 `WARPTAP_IVERILOG_CMD`/`WARPTAP_VVP_CMD`, those tests skip cleanly rather than failing.

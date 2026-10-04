@@ -1,11 +1,11 @@
 # Multi-arm ScanMux
 
 A real IEEE 1687 `ScanMux` selects one of several arms into the live scan chain based on a
-select value — only the matched arm's own content is actually shiftable; every other arm stays
+select value: only the matched arm's own content is actually shiftable; every other arm stays
 physically detached until it's selected. `ScanMuxNode`/`ScanArm` model this directly.
 
 Unlike `HierarchySpec`/`InstrumentSpec`, `build_sib_plan` doesn't construct a `ScanMuxNode`
-yet — build the `PhysicalGraph` (and its matching `ModuleInstance` tree) directly instead:
+yet: build the `PhysicalGraph` (and its matching `ModuleInstance` tree) directly instead:
 
 ```python
 from warptap import (
@@ -37,13 +37,13 @@ root = ModuleInstance("top", children=(ModuleInstance("arm1"), ModuleInstance("a
 ```
 
 Each `ScanArm`'s own `values` is the select value(s) that route to it (`arm1` at select=1,
-`arm2` at select=2); an arm gates exactly one of `instrument`/`nested` — the same leaf-or-
+`arm2` at select=2); an arm gates exactly one of `instrument`/`nested`: the same leaf-or-
 hierarchy shape a plain `SibNode` has, so a mux arm can gate a further nested sub-network
 instead of a single instrument, just like `HierarchySpec` does.
 
 ## Driving it
 
-Targeting `arm1` then `arm2` retargets the mux directly from one arm to the other — no
+Targeting `arm1` then `arm2` retargets the mux directly from one arm to the other: no
 intermediate "close everything" step:
 
 ```python
@@ -63,5 +63,5 @@ pdl.iRead(0b110)
 pdl.iApply()
 ```
 
-A written value survives being switched away from and back, on real hardware — confirmed by
+A written value survives being switched away from and back, on real hardware: confirmed by
 cross-simulating this exact scenario against real RTL.

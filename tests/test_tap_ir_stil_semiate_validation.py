@@ -24,7 +24,8 @@ from pathlib import Path
 from warptap.icl_model import InstrumentDirection, SignalBinding
 from warptap.pdl_interpreter import PDLInterpreter
 from warptap.sib_plan import InstrumentSpec, build_sib_plan
-from warptap.tap_ir import PulsePin
+from warptap.tap_fsm import TapState
+from warptap.tap_ir import GotoState, PulsePin, Runtest, SetPins
 from warptap.tap_ir_stil import to_stil
 
 
@@ -91,3 +92,60 @@ def test_two_distinct_pulse_ports_in_one_sequence_is_valid(semiate_stil_parser):
     ]
     text = to_stil(ops, pulse_periods={"sysclk_a": "20ns", "sysclk_b": "30ns"})
     _assert_valid(text, semiate_stil_parser)
+
+
+def test_fractional_edge_times_are_valid(semiate_stil_parser):
+    """A 50ns period puts the strobe at 12.5ns and the fall at 37.5ns; a 0.1us pulse period
+    keeps its own unit (0.05us, 0.075us)."""
+    text = to_stil([PulsePin("sysclk", 1)], jtag_period="50ns", pulse_periods={"sysclk": "0.1us"})
+    assert "'12.5ns'" in text and "'0.075us'" in text
+    _assert_valid(text, semiate_stil_parser)
+
+
+def test_a_pulse_holding_the_pins_it_does_not_list_is_valid(semiate_stil_parser):
+    ops = [PulsePin("clk", 1, hold_pins=(("rst_n", 1),)), PulsePin("clk", 1)]
+    text = to_stil(ops, pulse_periods={"clk": "10ns"})
+    assert "rst_n=P;" in text.split("rst_n=1;")[1]
+    _assert_valid(text, semiate_stil_parser)
+
+
+def test_declared_inputs_and_outputs_are_valid(semiate_stil_parser):
+    ops = [PulsePin("sysclk", 2, hold_pins=(("pi_a", 1),)), PulsePin("sysclk", 1)]
+    text = to_stil(
+        ops, pulse_periods={"sysclk": "20ns"},
+        inputs={"rst_n": 1, "sysclk": 0}, outputs=["status_out", "done"],
+    )
+    _assert_valid(text, semiate_stil_parser)
+
+
+def test_per_bit_names_are_valid_in_every_block(semiate_stil_parser):
+    """Quoted names in Signals, SignalGroups, both WaveformTables (one named after a per-bit
+    pulse port) and V statements."""
+    ops = [
+        SetPins((("func_addr[1]", 1),)),
+        PulsePin("clk[0]", 2, hold_pins=(("func_addr[0]", 1),)),
+        GotoState(TapState.TEST_LOGIC_RESET),
+    ]
+    text = to_stil(
+        ops, pulse_periods={"clk[0]": "10ns"},
+        inputs={"func_addr[0]": 0, "func_addr[1]": 0}, outputs=["func_dout[0]", "func_dout[1]"],
+    )
+    assert 'W "pulse_clk[0]_wft";' in text
+    _assert_valid(text, semiate_stil_parser)
+
+
+def test_loops_are_valid(semiate_stil_parser):
+    """A run that opens the pattern (one plain V, then the Loop), a PulsePin loop right after
+    a W switch, and a Runtest loop back in jtag_wft."""
+    ops = [Runtest(1000), PulsePin("clk", 4096, hold_pins=(("rst_n", 1),)), Runtest(64)]
+    text = to_stil(ops, pulse_periods={"clk": "10ns"}, inputs={"rst_n": 1})
+    assert "Loop 999 {" in text and "Loop 4096 {" in text and "Loop 64 {" in text
+    _assert_valid(text, semiate_stil_parser)
+
+
+def test_a_reset_lead_in_driving_trst_is_valid(semiate_stil_parser):
+    ops = [
+        SetPins((("trst_n", 0), ("rst_n", 0))), GotoState(TapState.TEST_LOGIC_RESET),
+        SetPins((("trst_n", 1), ("rst_n", 1))), GotoState(TapState.RUN_TEST_IDLE),
+    ]
+    _assert_valid(to_stil(ops, inputs={"trst_n": 1, "rst_n": 1}), semiate_stil_parser)

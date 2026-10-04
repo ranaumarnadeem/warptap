@@ -2,9 +2,9 @@
 §3.2). Two genuinely separate structures, confirmed independently by real ICL sources and by
 Honza255/icl_parser's own design:
 
-  1. :class:`PhysicalGraph` — the physical shift-topology graph. What actually sits on the scan
+  1. :class:`PhysicalGraph`: the physical shift-topology graph. What actually sits on the scan
      path, in TDI-to-TDO order, and which SIB gates which nested segment.
-  2. :class:`ModuleInstance` — the module-instantiation tree. Pure lexical containment, used
+  2. :class:`ModuleInstance`: the module-instantiation tree. Pure lexical containment, used
      only for dotted-address resolution (``top.wrapper.instrument``), never for shift-order
      math. A SIB's own instance name normally does NOT appear in the dotted address of the
      instrument it gates -- confirmed against real ICL examples that SIB and instrument are
@@ -67,6 +67,10 @@ class InstrumentNode(NamedTuple):
     direction: InstrumentDirection = InstrumentDirection.READ
     signal_bits: tuple[SignalBinding, ...] = ()  # () or exactly `width` long
     aliases: tuple[Alias, ...] = ()  # named sub-fields PDL's iWrite/iRead can address by name
+    # READ only: capture through a two-TCK-flop synchronizer (rtl/bc1_shift_only_sync.v), for
+    # a signal from another clock domain. A capture then shows the signal as it was two TCK
+    # edges earlier.
+    capture_sync: bool = False
 
 
 class SibNode(NamedTuple):

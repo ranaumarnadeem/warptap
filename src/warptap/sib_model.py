@@ -19,9 +19,10 @@ which is fine at this project's scale.
 always-block (capture and shift too), so it must stay asserted for a parent's entire open
 window, not flicker with the parent's own ``shift_ff`` while it mirrors varying content
 mid-shift. Every recursive method below threads a ``parent_open`` flag downward for exactly
-this reason -- ``True`` unconditionally at the top level (every top-level slot's own ``select``
-is hardwired to constant 1), a parent's own ``sib_po`` (or, for a mux parent, whether its own
-currently-matched arm is the one being walked) one level down.
+this reason -- ``True`` at the top level (every top-level slot's own ``select`` is the TAP's
+EXTEST decode, and ``TapModel`` drives this register only under EXTEST), a parent's own
+``sib_po`` (or, for a mux parent, whether its own currently-matched arm is the one being
+walked) one level down.
 
 **A mux arm generalizes this the same way ``rtl/scan_mux_cell.v`` does** (multi-arm ScanMux
 plan Phase 0/3): ``sib_shift_ff``/``sib_po`` become ``shift_ff``/``po`` lists of
@@ -210,6 +211,33 @@ class SibNetworkRegister:
                         for k in range(slot.width):
                             slot.inst_shift_ff[k] = (slot.capture_value >> k) & 1
 
+    def capture_unselected(self) -> None:
+        """Capture-DR under an instruction that doesn't select the network (SAMPLE/PRELOAD,
+        IDCODE, BYPASS): ``tap_core`` raises ``capture_dr`` for every instruction's DR scan
+        and neither ``instrument_write.v`` nor ``bc1_shift_only.v`` gates it on ``select``,
+        so every instrument leaf still captures, as in :meth:`capture`; every SIB and mux,
+        unselected, keeps its state."""
+        self._capture_leaves(self._slots)
+
+    def _capture_leaves(self, slots: List) -> None:
+        for slot in slots:
+            if isinstance(slot, _MuxSlotState):
+                for arm in slot.arms:
+                    if arm.children is not None:
+                        self._capture_leaves(arm.children)
+                    elif arm.direction is InstrumentDirection.WRITE:
+                        arm.inst_shift_ff = list(arm.inst_po)
+                    else:
+                        arm.inst_shift_ff = [
+                            (arm.capture_value >> k) & 1 for k in range(arm.width)
+                        ]
+            elif slot.children is not None:
+                self._capture_leaves(slot.children)
+            elif slot.direction is InstrumentDirection.WRITE:
+                slot.inst_shift_ff = list(slot.inst_po)
+            else:
+                slot.inst_shift_ff = [(slot.capture_value >> k) & 1 for k in range(slot.width)]
+
     def update(self) -> None:
         """A slot's own ``sib_po <= sib_shift_ff`` commit (or a mux's whole ``po <= shift_ff``
         list) happens only while its own ``select`` is live (``parent_open``), matching
@@ -366,3 +394,12 @@ class SibNetworkRegister:
             self._write(ref, incoming)
             incoming = val
         return tdo
+
+    def tail(self) -> int:
+        """The bit at the network's TDO end -- what the next ``shift`` presents at TDO --
+        without shifting. ``tap_core`` puts it on TDO under SAMPLE/PRELOAD too, which doesn't
+        select the network."""
+        layout = self._live_layout()
+        if not layout:
+            raise ValueError("an empty network has no tail")
+        return self._read(layout[-1])

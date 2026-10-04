@@ -32,6 +32,7 @@ class InstrumentSpec(NamedTuple):
     direction: InstrumentDirection = InstrumentDirection.READ
     signal_bits: tuple[SignalBinding, ...] = ()
     aliases: tuple[Alias, ...] = ()  # named sub-fields PDL's iWrite/iRead can address (Stage 15)
+    capture_sync: bool = False  # READ only: a two-TCK-flop synchronizer before capture
 
 
 class HierarchySpec(NamedTuple):
@@ -67,6 +68,7 @@ def _build_node(spec: _Spec) -> tuple[SibNode, list[ModuleInstance]]:
         direction=spec.direction,
         signal_bits=spec.signal_bits,
         aliases=spec.aliases,
+        capture_sync=spec.capture_sync,
     )
     node = SibNode(sib_name=f"sib_{spec.name}", instrument=instrument)
     return node, [ModuleInstance(name=spec.name)]

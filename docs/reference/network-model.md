@@ -1,6 +1,6 @@
 # Network Model
 
-The physical shift-topology graph and its node types — see also [Nested SIB
+The physical shift-topology graph and its node types; see also [Nested SIB
 networks](../guide/nested-sib-networks.md) and [Multi-arm ScanMux](../guide/scan-mux.md) for
 how these compose.
 

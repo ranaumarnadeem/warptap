@@ -4,7 +4,7 @@
 pip install warptap
 ```
 
-warptap also needs a real [Yosys](https://github.com/YosysHQ/yosys) — it shells out to it for
+warptap also needs a real [Yosys](https://github.com/YosysHQ/yosys): it shells out to it for
 netlist ingest and re-emission, and never bundles it. If nothing is found on `PATH`, set
 `WARPTAP_YOSYS_CMD` to point at any Yosys-compatible executable, or install the `yowasp-yosys`
 WASM build as a fallback.
@@ -21,7 +21,7 @@ with JTAG/IJTAG access before synthesis.
 
 ### 1. Declare the instruments
 
-One `InstrumentSpec` per real signal you want write/read access to — mix `WRITE` (control) and
+One `InstrumentSpec` per real signal you want write/read access to: mix `WRITE` (control) and
 `READ` (status) freely in one network. Each one's `signal_bits` names
 the real host port (and, for a multi-bit signal, the specific bit) it binds to.
 
@@ -57,12 +57,15 @@ inserted_verilog, graph, root = insert_test_access(
 )
 ```
 
+The TAP's IDCODE defaults to a placeholder; pass `idcode_value=` (32 bits, bit 0 set) to use
+your own, and give [`to_bsdl`](reference/bsdl.md) the same value.
+
 ### 3. Drive it
 
 `PDLInterpreter` is a small state machine over four commands: `iTarget` selects which
 instrument the next command addresses, `iWrite`/`iRead` queue a value to write or an expected
 value to check, and `iApply` actually emits the scan operations that retarget the network to
-that instrument and shift the value through. `iRunLoop` advances time — by default in
+that instrument and shift the value through. `iRunLoop` advances time: by default in
 Run-Test/Idle (`-tck`), or, given a real functional-clock port name, by pulsing that clock
 directly instead (see [System-clock pulsing](guide/sck-clock-pulsing.md)).
 
@@ -79,13 +82,15 @@ pdl.iApply()
 
 ### 4. Emit a pattern file
 
-Every op `PDLInterpreter` recorded is sitting in `pdl.program` — render it as whichever ATE
-format you need:
+Every op `PDLInterpreter` recorded is sitting in `pdl.program`. It holds data-register scans
+only, so put the instruction load in front: the network moves only while EXTEST is loaded, and
+every reset loads IDCODE. Then render it as whichever ATE format you need:
 
 ```python
-from warptap import to_svf
+from warptap import select_instruction, to_svf
+from warptap.tap_model import OPCODE_EXTEST
 
-print(to_svf(pdl.program))
+print(to_svf(select_instruction(OPCODE_EXTEST) + pdl.program))
 ```
 
 `to_stapl`/`to_stil` render the identical `pdl.program` as STAPL/STIL instead. `to_icl`

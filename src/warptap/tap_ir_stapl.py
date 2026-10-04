@@ -18,7 +18,8 @@ state into the shift state, shift, return to whatever ``IRSTOP``/``DRSTOP`` curr
 specifies" sequence -- ``IRSTOP``/``DRSTOP`` are STAPL's own sticky-end-state directives,
 directly analogous to SVF's ``ENDIR``/``ENDDR``, confirmed to default to ``IDLE`` the same
 way. This module emits an explicit ``IRSTOP IDLE;``/``DRSTOP IDLE;`` header, matching every
-``GotoState(RUN_TEST_IDLE)`` this project's own ops already target.
+``GotoState(RUN_TEST_IDLE)`` this project's own ops already target. As in SVF,
+``GotoState(TEST_LOGIC_RESET)`` is the exception and becomes ``STATE RESET;``.
 
 **Bit-encoding**: STAPL's own array-index convention (JESD71 §6.4/§8.8 -- "array index 0
 corresponds to the rightmost character... shifted in increasing order of the array index," an
@@ -73,6 +74,7 @@ from typing import List, Union
 
 from warptap.errors import WarptapError
 from warptap.stapl_crc16 import stapl_file_crc
+from warptap.tap_fsm import TapState
 from warptap.tap_ir import TAP_STATE_NAMES, GotoState, Runtest, ShiftDR, ShiftIR
 
 _IrOp = Union[ShiftIR, ShiftDR, GotoState, Runtest]
@@ -164,7 +166,9 @@ def to_stapl(
     compare_count = 0
     for op in ir_ops:
         if isinstance(op, GotoState):
-            continue  # IRSCAN/DRSCAN's own automatic navigation makes this redundant
+            if op.state is TapState.TEST_LOGIC_RESET:
+                lines.append("  STATE RESET;")
+            continue  # IRSCAN/DRSCAN's own automatic navigation makes the rest redundant
         elif isinstance(op, (ShiftIR, ShiftDR)):
             command = "IRSCAN" if isinstance(op, ShiftIR) else "DRSCAN"
             if (op.tdo is None) != (op.mask is None):

@@ -180,16 +180,16 @@ def test_to_icl_access_link_optional():
     assert "AccessLink" not in without_link
 
 
-def test_to_icl_access_link_wdr_select_has_no_activesignals():
-    """Confirmed real: ActiveSignals belongs to wir_select (naming the IR-decode signal), not
-    wdr_select -- an earlier draft of this emitter incorrectly copied it into wdr_select too."""
+def test_to_icl_access_link_instruction_block_has_no_activesignals():
+    """ActiveSignals names signals the AccessLink itself provides (the benchmark's ``toSWIR``);
+    warptap's network needs none, so the instruction block carries only a ScanInterface."""
     graph = PhysicalGraph(
         chain=(SibNode(sib_name="sib_a", instrument=_read_instrument(name="a", width=1)),)
     )
     root = ModuleInstance(name="chip", children=(ModuleInstance(name="a"),))
     text = to_icl(graph, root, include_access_link=True)
-    wdr_line = next(line for line in text.splitlines() if "wdr_select" in line)
-    assert "ActiveSignals" not in wdr_line
+    instruction_line = next(line for line in text.splitlines() if "EXTEST {" in line)
+    assert "ActiveSignals" not in instruction_line
 
 
 def test_to_icl_each_distinct_instrument_type_rendered_once():
@@ -246,3 +246,70 @@ def test_instrument_with_no_aliases_renders_no_alias_declaration_at_all():
     instrument = _read_instrument(name="sensor_a", width=3)
     text = render_instrument_module(instrument)
     assert "Alias" not in text
+
+
+def _one_sib_graph():
+    return PhysicalGraph(
+        chain=(SibNode(sib_name="sib_a", instrument=_read_instrument(name="a", width=1)),)
+    )
+
+
+def test_to_icl_access_link_names_the_network_instruction_not_wdr_select():
+    from warptap.bsdl_emit import NETWORK_ACCESS_BSDL_INSTRUCTION
+
+    text = to_icl(_one_sib_graph(), ModuleInstance(name="chip"), include_access_link=True)
+    assert f"{NETWORK_ACCESS_BSDL_INSTRUCTION} {{ ScanInterface {{ warptap_sib_a; }} }}" in text
+    assert NETWORK_ACCESS_BSDL_INSTRUCTION == "EXTEST"
+    assert "wdr_select" not in text
+
+
+def test_to_icl_access_link_names_ijtag_access_for_a_tap_with_it():
+    root = ModuleInstance(name="chip")
+    text = to_icl(_one_sib_graph(), root, include_access_link=True, ijtag_access=True)
+    assert "IJTAG_ACCESS { ScanInterface { warptap_sib_a; } }" in text
+    assert "EXTEST" not in text
+    default = to_icl(_one_sib_graph(), root, include_access_link=True)
+    assert text == default.replace("EXTEST {", "IJTAG_ACCESS {")  # nothing else changes
+
+
+def test_to_icl_bsdl_entity_defaults_to_the_top_module_name():
+    text = to_icl(_one_sib_graph(), ModuleInstance(name="my_chip"), include_access_link=True)
+    assert "BSDLEntity my_chip;" in text
+
+
+def test_to_icl_bsdl_entity_name_overrides_only_the_bsdl_entity():
+    text = to_icl(
+        _one_sib_graph(),
+        ModuleInstance(name="my_chip"),
+        include_access_link=True,
+        bsdl_entity_name="my_chip_tap",
+    )
+    assert "BSDLEntity my_chip_tap;" in text
+    assert "Module my_chip {" in text
+
+
+def test_to_icl_bsdl_entity_name_has_no_effect_without_the_access_link():
+    root = ModuleInstance(name="chip")
+    plain = to_icl(_one_sib_graph(), root, include_access_link=False)
+    named = to_icl(_one_sib_graph(), root, include_access_link=False, bsdl_entity_name="other")
+    assert plain == named
+
+
+@pytest.mark.parametrize("bad", ["", "1chip", "my-chip", "has space", "a.b"])
+def test_to_icl_invalid_bsdl_entity_name_raises_a_named_error(bad):
+    with pytest.raises(IclEmitError, match="bsdl_entity_name"):
+        to_icl(
+            _one_sib_graph(), ModuleInstance(name="chip"), include_access_link=True,
+            bsdl_entity_name=bad,
+        )
+
+
+def test_to_icl_access_link_on_an_empty_chain_raises_a_named_error():
+    with pytest.raises(IclEmitError, match="empty chain"):
+        to_icl(PhysicalGraph(chain=()), ModuleInstance(name="chip"), include_access_link=True)
+
+
+def test_to_icl_empty_chain_without_the_access_link_still_renders():
+    text = to_icl(PhysicalGraph(chain=()), ModuleInstance(name="chip"), include_access_link=False)
+    assert "Module chip {" in text
+    assert "AccessLink" not in text

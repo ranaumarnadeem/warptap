@@ -8,7 +8,13 @@
 // (pure functions of `state`, identical regardless of which instruction is active), but this
 // module owns no data register for them -- external_dr_tdo is the port Stage 3's
 // boundary-scan register plugs into. This module's FSM/IR/mux logic never needs to change
-// when that happens.
+// when that happens. Because the strobes fire for every instruction's DR scan, a register
+// plugged into external_dr_tdo must gate itself on `current_instruction` (sib_insert.py
+// decodes EXTEST for the SIB network).
+//
+// The instruction resets to IDCODE (BYPASS without HAS_IDCODE) both on trst_n and in
+// Test-Logic-Reset, as IEEE 1149.1 requires, so five TMS=1 cycles deselect any test-mode
+// instruction without a TRST pin. Every register here is reset by trst_n.
 module tap_core #(
     parameter IR_WIDTH = 4,
     parameter [IR_WIDTH-1:0] OPCODE_EXTEST = 4'b0000,
@@ -96,8 +102,14 @@ module tap_core #(
             state <= TEST_LOGIC_RESET;
             ir_shift <= {IR_WIDTH{1'b0}};
             current_instruction_r <= HAS_IDCODE ? OPCODE_IDCODE : BYPASS_OPCODE;
+            // Invisible at tdo (Capture-DR always loads them before a shift), but without a
+            // reset these two start unknown and feed the tdo mux.
+            idcode_shift <= 32'b0;
+            bypass_bit <= 1'b0;
         end else begin
             case (state)
+                TEST_LOGIC_RESET:
+                    current_instruction_r <= HAS_IDCODE ? OPCODE_IDCODE : BYPASS_OPCODE;
                 CAPTURE_IR: ir_shift <= CAPTURE_IR_PATTERN;
                 SHIFT_IR:   ir_shift <= {tdi, ir_shift[IR_WIDTH-1:1]};
                 UPDATE_IR: begin

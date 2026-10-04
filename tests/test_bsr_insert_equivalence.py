@@ -2,7 +2,7 @@
 a specific, provable claim, not a hand-wave. Holding `trst_n=0` for a whole simulation forces
 `current_instruction` to its fixed reset default (rtl/tap_core.v), which forces
 `extest_mode=0` at every cycle regardless of tck/tms/tdi activity, which forces
-`pin_out=func_in` unconditionally on every inserted cell (rtl/bc1_full.v) — i.e. with `trst_n`
+`pin_out=func_in` unconditionally on every inserted cell (rtl/bc1_full.v): i.e. with `trst_n`
 held asserted, the inserted design must be cycle-for-cycle identical to the pre-insertion
 design for the same clk/rst_n/a/b stimulus. This test drives the same stimulus through both
 and asserts `y` matches every cycle.

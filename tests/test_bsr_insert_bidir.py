@@ -26,7 +26,7 @@ def _decode_int_attr(value) -> int:
 def _parse_bit(token: str) -> int | str:
     """A `%0d`-displayed net can print the literal character 'z'/'x' instead of a
     decimal digit when tri-stated/undefined (e.g. `sensed_r`'s DFF output before
-    its first real clock edge, or `io` while genuinely undriven) — expected here,
+    its first real clock edge, or `io` while genuinely undriven): expected here,
     not a parsing edge case to special-case away."""
     return token if token in ("z", "x") else int(token)
 

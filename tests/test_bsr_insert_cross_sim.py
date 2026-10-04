@@ -1,7 +1,7 @@
 """RTL/Python cross-simulation for the inserted boundary-scan chain (implementation_plan.md §7
 Stage 3, testing strategy item 3): drives identical stimulus through the real inserted RTL
 (via Icarus) and through TapModel + BoundaryScanRegister (registered as EXTEST's data
-register — precisely the extension point tap_model.TapModelError already names), asserting
+register: precisely the extension point tap_model.TapModelError already names), asserting
 identical per-cycle traces. Mirrors tests/test_tap_fsm_cross_sim.py's shape.
 """
 
@@ -25,8 +25,8 @@ IR_WIDTH = 4
 
 class _TrivialFunctionalModel:
     """Minimal Python mirror of the fixture's own functional logic
-    (``always @(posedge clk or negedge rst_n) q <= !rst_n ? 0 : a & b; assign y = q;``)
-    — needed so the OUTPUT3 cell's ``func_in`` (plan §3 step 6) can be fed a live
+    (``always @(posedge clk or negedge rst_n) q <= !rst_n ? 0 : a & b; assign y = q;``),
+    needed so the OUTPUT3 cell's ``func_in`` (plan §3 step 6) can be fed a live
     value each cycle, matching what the real RTL's ``y_pre_bsr`` net carries."""
 
     def __init__(self):
@@ -41,13 +41,13 @@ class _TrivialFunctionalModel:
 
 def _directed_stimulus() -> list[tuple[int, int, int, int, int, int]]:
     """(tms, tdi, trst_n, rst_n, a, b) per cycle: reset, select EXTEST via a real
-    IR shift (last bit rides the Shift-IR exit edge — the exact timing lesson from
+    IR shift (last bit rides the Shift-IR exit edge: the exact timing lesson from
     Stage 2's cross-sim work: every cycle resident in Shift-IR/Shift-DR shifts,
     including the cycle that exits), shift a deliberately-chosen pattern through
     the 4-cell chain (cell0=a, cell1=b, cell2=y_oe/control, cell3=y/output3) so
     that after Update-DR the control cell's po=1 (driver enabled) and the output3
     cell's po=1. Note `y` genuinely floats to "z" for the cycles between EXTEST
-    becoming selected and this Update-DR committing po=1 — the control cell's
+    becoming selected and this Update-DR committing po=1: the control cell's
     reset value (safe_value=0) keeps the driver disabled by default, so there's a
     real window where nothing drives the pin yet. That's expected, not a bug (see
     _parse_bit/pin_drive_value); `y` settles to a concrete 1 only afterward."""
@@ -137,7 +137,7 @@ def run_on_python(plan, stimulus) -> list[tuple]:
 
 def _parse_bit(token: str) -> int | str:
     """`y`'s $display("%0d", y) prints the literal character 'z' (or 'x') instead
-    of a decimal digit when the net is tri-stated/undefined — genuinely expected
+    of a decimal digit when the net is tri-stated/undefined: genuinely expected
     here: `y` floats to "z" whenever EXTEST is selected but its control cell's
     committed enable (`po`) hasn't been set yet (still disabled from reset, per
     safe_value=0's whole purpose), not a parsing edge case to work around."""
@@ -150,7 +150,7 @@ def render_stimulus_file(stimulus) -> str:
 
 def build_plan_and_insert(fixtures_dir, yosys_command):
     """Builds the BsrPlan once from the real ingested netlist and inserts it,
-    returning (netlist, plan) — the SAME plan object is later handed to the Python
+    returning (netlist, plan): the SAME plan object is later handed to the Python
     model too, so there is exactly one plan-construction path, not two that could
     silently diverge."""
     raw = ingest([fixtures_dir / "trivial.v"], "trivial", yosys_command=yosys_command)

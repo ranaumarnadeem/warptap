@@ -9,7 +9,7 @@ from __future__ import annotations
 import pytest
 
 from warptap.tap_fsm import TapState
-from warptap.tap_ir import GotoState, PulsePin, Runtest, ShiftDR, ShiftIR
+from warptap.tap_ir import GotoState, PulsePin, Runtest, SetPins, ShiftDR, ShiftIR
 from warptap.tap_ir_stil import TapIrStilError, to_stil
 
 
@@ -87,11 +87,29 @@ def test_shiftir_uses_same_vector_shape_as_shiftdr():
     assert ir_vectors == dr_vectors
 
 
-def test_runtest_produces_one_idle_vector_per_cycle():
-    text = to_stil([Runtest(5)])
+def test_runtest_is_one_idle_vector_looped_count_times():
+    text = to_stil([ShiftDR(bits=1, tdi=0), Runtest(5)])
     vector_lines = [l for l in text.splitlines() if l.strip().startswith("V {")]
-    assert len(vector_lines) == 5
-    assert all("tms=0; tdi=0;" in l for l in vector_lines)
+    assert len(vector_lines) == 2
+    assert "  Loop 5 {\n    V { tck=1; tms=0; tdi=0; tdo=X; }\n  }\n" in text
+
+
+def test_a_loop_that_would_open_the_pattern_starts_with_one_plain_vector():
+    """Semi-ATE-STIL's compiler rejects a Loop with no vector before it."""
+    text = to_stil([Runtest(5), PulsePin("sysclk", 1000)], pulse_periods={"sysclk": "10ns"})
+    pattern = text.split("Pattern warptap_pattern {\n")[1]
+    assert pattern.startswith(
+        "  W jtag_wft;\n  V { tck=1; tms=0; tdi=0; tdo=X; sysclk=P; }\n  Loop 4 {"
+    )
+    assert "  W pulse_sysclk_wft;\n  Loop 1000 {\n    V { tck=P;" in pattern
+
+
+def test_a_count_of_one_or_zero_is_not_a_loop():
+    text = to_stil(
+        [Runtest(1), Runtest(0), PulsePin("sysclk", 1)], pulse_periods={"sysclk": "10ns"}
+    )
+    assert "Loop" not in text
+    assert len([l for l in text.splitlines() if l.strip().startswith("V {")]) == 2
 
 
 def test_pulsepin_declares_its_own_signal_and_waveformtable():
@@ -133,3 +151,116 @@ def test_pulsepin_target_missing_from_pulse_periods_raises_named_error():
 def test_unsupported_op_raises_named_error():
     with pytest.raises(TapIrStilError, match="does not support"):
         to_stil(["not an op"])
+
+
+def test_tdo_is_compared_before_tck_rises_and_tck_idles_low():
+    """T/4 strobe, T/2 rise, 3T/4 fall (to_stil's docstring); the replay test proves it on RTL."""
+    text = to_stil([], jtag_period="100ns")
+    assert "tck { 01 { '0ns' D; '50ns' D/U; '75ns' D; }}" in text
+    assert "tdo { HLX { '0ns' X; '25ns' H/L/X; }}" in text
+
+
+def test_edge_times_keep_the_period_unit_and_its_fractions():
+    text = to_stil([PulsePin("sysclk", 1)], jtag_period="50ns", pulse_periods={"sysclk": "0.1us"})
+    assert "'12.5ns' H/L/X" in text
+    assert "sysclk { 01 { '0ns' D; '0.05us' D/U; '0.075us' D; }}" in text
+
+
+@pytest.mark.parametrize("period", ["50", "0ns", "fast", "50 ns"])
+def test_a_period_that_is_not_a_positive_time_raises_named_error(period):
+    with pytest.raises(TapIrStilError, match="jtag_period"):
+        to_stil([], jtag_period=period)
+
+
+def _vectors(text: str) -> list[str]:
+    return [l.strip() for l in text.splitlines() if l.strip().startswith("V {")]
+
+
+def test_declared_inputs_hold_their_value_and_outputs_are_never_compared():
+    text = to_stil(
+        [Runtest(1), PulsePin("sysclk", 1)], pulse_periods={"sysclk": "20ns"},
+        inputs={"rst_n": 1, "test_mode": 0}, outputs=["status_out"],
+    )
+    assert "rst_n In;" in text and "test_mode In;" in text and "status_out Out;" in text
+    jtag_vector, pulse_vector = _vectors(text)
+    for vector in (jtag_vector, pulse_vector):
+        assert "rst_n=1;" in vector and "test_mode=0;" in vector and "status_out=X;" in vector
+    assert "status_out { X { '0ns' X; }}" in text
+
+
+def test_hold_pins_override_a_declared_input_for_the_pulse_only():
+    text = to_stil(
+        [PulsePin("sysclk", 1, hold_pins=(("test_mode", 1),)), Runtest(1)],
+        pulse_periods={"sysclk": "20ns"}, inputs={"test_mode": 0},
+    )
+    pulse_vector, jtag_vector = _vectors(text)
+    assert "test_mode=1;" in pulse_vector
+    assert "test_mode=0;" in jtag_vector
+
+
+def test_a_pulse_holds_the_pins_it_does_not_list_instead_of_driving_0():
+    text = to_stil(
+        [PulsePin("sysclk_a", 1, hold_pins=(("pi_x", 1),)), PulsePin("sysclk_b", 1)],
+        pulse_periods={"sysclk_a": "20ns", "sysclk_b": "20ns"},
+    )
+    _, b_vector = _vectors(text)
+    assert "pi_x=P;" in b_vector and "sysclk_a=P;" in b_vector
+    assert "=0;" not in b_vector
+
+
+@pytest.mark.parametrize(
+    "inputs, outputs, ops, match",
+    [
+        ({"tck": 1}, (), [], "TAP pin"),
+        ({}, ["tdo"], [], "TAP pin"),
+        ({"rst_n": 2}, (), [], "0 or 1"),
+        ({"rst_n": 1}, ["rst_n"], [], "both"),
+        ({}, ["status_out"], [PulsePin("sysclk", 1, (("status_out", 1),))], "declared output"),
+        ({}, (), [PulsePin("sysclk", 1, (("pi_a", 3),))], "0 or 1"),
+        ({}, (), [SetPins((("trst_n", 0),))], "not one of to_stil's inputs"),
+        ({"trst_n": 1}, (), [SetPins((("trst_n", 2),))], "0 or 1"),
+    ],
+)
+def test_bad_pin_declarations_raise_named_error(inputs, outputs, ops, match):
+    with pytest.raises(TapIrStilError, match=match):
+        to_stil(ops, pulse_periods={"sysclk": "20ns"}, inputs=inputs, outputs=outputs)
+
+
+def test_setpins_changes_a_declared_input_from_the_next_vector_on():
+    ops = [
+        Runtest(1), SetPins((("trst_n", 0),)), Runtest(1),
+        PulsePin("sysclk", 1), SetPins((("trst_n", 1),)), Runtest(1),
+    ]
+    text = to_stil(ops, pulse_periods={"sysclk": "20ns"}, inputs={"trst_n": 1, "rst_n": 1})
+    values = [v.split("trst_n=")[1][0] for v in _vectors(text)]
+    assert values == ["1", "0", "0", "1"]
+    assert all("rst_n=1;" in v for v in _vectors(text))
+
+
+def test_per_bit_names_are_quoted_everywhere_and_sorted_by_bit():
+    text = to_stil(
+        [Runtest(1), PulsePin("clk[0]", 1)], pulse_periods={"clk[0]": "10ns"},
+        inputs={f"addr[{i}]": i % 2 for i in (10, 2, 0)}, outputs=["dout[1]"],
+    )
+    assert '"addr[0]" In;\n  "addr[2]" In;\n  "addr[10]" In;' in text
+    assert "'tck + tms + tdi + tdo + \"addr[0]\" + \"addr[2]\" + \"addr[10]\"" in text
+    assert "\"addr[10]\" { 01 { '0ns' D/U; }}" in text
+    assert 'WaveformTable "pulse_clk[0]_wft" {' in text and 'W "pulse_clk[0]_wft";' in text
+    jtag_vector, pulse_vector = _vectors(text)
+    assert '"addr[0]"=0; "addr[2]"=0; "addr[10]"=0;' in jtag_vector
+    assert '"clk[0]"=1;' in pulse_vector and '"dout[1]"=X;' in pulse_vector
+
+
+def test_a_name_with_a_double_quote_raises_named_error():
+    with pytest.raises(TapIrStilError, match="can't be written in STIL"):
+        to_stil([], inputs={'bad"name': 0})
+
+
+def test_the_documented_reset_lead_in_asserts_trst_over_five_tms_1_cycles():
+    lead_in = [
+        SetPins((("trst_n", 0),)), GotoState(TapState.TEST_LOGIC_RESET),
+        SetPins((("trst_n", 1),)), GotoState(TapState.RUN_TEST_IDLE),
+    ]
+    vectors = _vectors(to_stil(lead_in, inputs={"trst_n": 1}))
+    seen = [("tms=1;" in v, "trst_n=0;" in v) for v in vectors]
+    assert seen == [(True, True)] * 5 + [(False, False)]
