@@ -80,6 +80,17 @@ def test_write_only_svf_is_grammatically_clean_through_real_openocd(openocd_comm
     assert "with 0 errors" in output
 
 
+def test_a_tms_reset_lead_in_is_grammatically_clean_through_real_openocd(openocd_command):
+    ops = [GotoState(TapState.TEST_LOGIC_RESET), GotoState(TapState.RUN_TEST_IDLE)]
+    svf = to_svf(ops + _realistic_write_ops())
+    assert "STATE RESET;" in svf
+    output = run_svf_via_openocd(svf, tap_irlen=IR_WIDTH, openocd_command=openocd_command)
+
+    assert "fail to run command" not in output
+    assert "svf file programmed successfully" in output
+    assert "with 0 errors" in output
+
+
 def test_read_svf_grammar_is_correct_even_though_content_cant_match_a_fake_chip(
     openocd_command,
 ):

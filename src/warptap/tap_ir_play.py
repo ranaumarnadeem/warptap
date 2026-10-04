@@ -20,7 +20,9 @@ navigation-step logic (:func:`navigation_tms`) rather than duplicating it:
 
 Both preconditions: the caller must already have the TAP resident in ``RUN_TEST_IDLE`` before
 the first op (a reset + settle lead-in, same discipline every prior stage's stimulus already
-follows) -- neither function drives a reset itself.
+follows) -- neither function drives a reset itself. The exception is a TMS reset:
+``GotoState(TEST_LOGIC_RESET)`` is five TMS=1 cycles from any state, and a following
+``GotoState(RUN_TEST_IDLE)`` settles, so ops that start with those two need no lead-in.
 
 ``navigation_tms``/``shift_tms`` are public (Stage 13): :mod:`warptap.tap_ir_stil` became a
 second real consumer of this exact per-cycle navigation logic, needing its own walker since
@@ -43,6 +45,8 @@ _IrOp = Union[ShiftIR, ShiftDR, GotoState, Runtest]
 _GOTO_SHIFT_DR_TMS = (1, 0, 0)  # RUN_TEST_IDLE -> SELECT_DR_SCAN -> CAPTURE_DR -> SHIFT_DR
 _GOTO_SHIFT_IR_TMS = (1, 1, 0, 0)  # RUN_TEST_IDLE -> ... -> SELECT_IR_SCAN -> CAPTURE_IR -> SHIFT_IR
 _EXIT_TO_IDLE_TMS = (1, 0)  # EXIT1_x -> UPDATE_x -> RUN_TEST_IDLE
+_RESET_TMS = (1, 1, 1, 1, 1)  # any state, even an unknown one -> TEST_LOGIC_RESET
+_RESET_TO_IDLE_TMS = (0,)  # TEST_LOGIC_RESET -> RUN_TEST_IDLE
 
 
 class TapIrPlayError(WarptapError):
@@ -52,7 +56,11 @@ class TapIrPlayError(WarptapError):
 
 def navigation_tms(from_state: TapState, to_state: TapState) -> Tuple[int, ...]:
     """The tms sequence (tdi held at 0 throughout) needed to walk from ``from_state`` to
-    ``to_state`` -- only the specific transitions ``PDLInterpreter.iApply`` actually emits."""
+    ``to_state`` -- only the specific transitions ``PDLInterpreter.iApply`` actually emits,
+    plus a reset: Test-Logic-Reset is always five TMS=1 cycles, which reach it from any state,
+    even one the caller can't know, and Run-Test/Idle is one TMS=0 cycle from there."""
+    if to_state is TapState.TEST_LOGIC_RESET:
+        return _RESET_TMS
     if to_state is TapState.SHIFT_DR:
         if from_state is not TapState.RUN_TEST_IDLE:
             raise TapIrPlayError(f"cannot navigate to SHIFT_DR from {from_state}")
@@ -64,6 +72,8 @@ def navigation_tms(from_state: TapState, to_state: TapState) -> Tuple[int, ...]:
     if to_state is TapState.RUN_TEST_IDLE:
         if from_state is TapState.RUN_TEST_IDLE:
             return ()
+        if from_state is TapState.TEST_LOGIC_RESET:
+            return _RESET_TO_IDLE_TMS
         if from_state in (TapState.EXIT1_DR, TapState.EXIT1_IR):
             return _EXIT_TO_IDLE_TMS
         raise TapIrPlayError(f"cannot navigate to RUN_TEST_IDLE from {from_state}")

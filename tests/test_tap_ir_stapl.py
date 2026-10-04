@@ -55,6 +55,12 @@ def test_gotostate_ops_are_dropped():
     assert "IRSCAN" not in stapl
 
 
+def test_a_goto_test_logic_reset_becomes_state_reset():
+    ops = [GotoState(TapState.TEST_LOGIC_RESET), GotoState(TapState.RUN_TEST_IDLE), ShiftIR(4, 1)]
+    stapl = to_stapl(ops, **_KWARGS)
+    assert "  DRSTOP IDLE;\n  STATE RESET;\n  IRSCAN 4" in stapl
+
+
 def test_irscan_and_drscan_render_bits_and_hex():
     ops = [ShiftIR(bits=8, tdi=0x41), ShiftDR(bits=16, tdi=0x1)]
     stapl = to_stapl(ops, **_KWARGS)
