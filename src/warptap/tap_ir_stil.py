@@ -37,9 +37,10 @@ Guide's own condensed worked example omits several of these):
 **No real, independent-tool-confirmed convention exists for encoding a JTAG SIR/SDR-style scan
 operation as STIL vectors** -- this session's own research found no public example (an EDA
 vendor's own IJTAG-to-STIL translator was cited as existing, but its actual per-cycle
-convention isn't public). This emitter's own convention -- one ``V{}`` per TCK edge; TMS/TDI
-driven via :func:`warptap.tap_ir_play.navigation_tms`/:func:`~warptap.tap_ir_play.shift_tms`;
-TDO compared (``H``/``L``) when a bit falls within a ``ShiftIR``/``ShiftDR``'s own ``mask``,
+convention isn't public). This emitter's own convention -- one ``V{}`` per TCK cycle (a
+``Runtest`` or ``PulsePin`` run is one ``V{}`` in a ``Loop``); TMS/TDI driven via
+:func:`warptap.tap_ir_play.navigation_tms`/:func:`~warptap.tap_ir_play.shift_tms`; TDO
+compared (``H``/``L``) when a bit falls within a ``ShiftIR``/``ShiftDR``'s own ``mask``,
 don't-compared (``X``) otherwise -- is a reasoned construction from STIL's own confirmed
 primitives, not an established industry idiom, stated here rather than presented as settled
 convention.
@@ -47,11 +48,12 @@ convention.
 **Where each edge and strobe sits in a period** is :func:`to_stil`'s docstring. Semi-ATE-STIL's
 syntax and semantic checks cannot see it, so ``tests/test_tap_ir_stil_replay.py`` replays
 emitted files literally against ``rtl/tap_core.v`` and inserted designs in Icarus and counts
-TDO mismatches; it caught the 0.0.3 strobe, which compared TDO after the rising TCK edge.
+TDO mismatches; it fails on the 0.0.3 strobe, which compared TDO after the rising TCK edge.
 
 **One ``WaveformTable`` per distinct :class:`~warptap.tap_ir.PulsePin` target port**, each
 declaring hold/force/don't-compare WFCs for every OTHER known signal (TCK/TMS/TDI/TDO, every
-other pulse port, every ``hold_pins`` key seen anywhere in ``ir_ops``) -- the mechanism,
+other pulse port, every ``hold_pins`` key seen anywhere in ``ir_ops``, every declared input and
+output) -- the mechanism,
 confirmed empirically against ``Semi-ATE-STIL``, that lets an independently-timed functional
 clock pulse coexist with the TAP's own JTAG-speed ``WaveformTable`` in one ``Pattern``,
 switched via a plain ``W <name>;`` statement.
