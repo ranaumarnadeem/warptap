@@ -275,7 +275,8 @@ def _pulse_waveforms(
         elif sig == TDO or sig in pins.outputs:
             lines.append(f"      {_stil_name(sig)} {{ X {{ '0ns' X; }}}}")
         elif sig == target_port:
-            lines.append(f"      {_stil_name(sig)} {{ 01 {{ '0ns' D; '{rise}' D/U; '{fall}' D; }}}}")
+            pulse = f"01 {{ '0ns' D; '{rise}' D/U; '{fall}' D; }}"
+            lines.append(f"      {_stil_name(sig)} {{ {pulse}}}")
         else:
             # Any other input: forced to a hold_pins or declared value, or held where it was
             # (P) when this pulse doesn't list it and the caller didn't declare it.

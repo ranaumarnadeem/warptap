@@ -262,4 +262,5 @@ def test_the_documented_reset_lead_in_asserts_trst_over_five_tms_1_cycles():
         SetPins((("trst_n", 1),)), GotoState(TapState.RUN_TEST_IDLE),
     ]
     vectors = _vectors(to_stil(lead_in, inputs={"trst_n": 1}))
-    assert [("tms=1;" in v, "trst_n=0;" in v) for v in vectors] == [(True, True)] * 5 + [(False, False)]
+    seen = [("tms=1;" in v, "trst_n=0;" in v) for v in vectors]
+    assert seen == [(True, True)] * 5 + [(False, False)]

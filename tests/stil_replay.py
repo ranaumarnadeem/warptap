@@ -73,7 +73,9 @@ def _unquote(name: str) -> str:
     return name[1:-1] if len(name) >= 2 and name[0] == name[-1] == '"' else name
 
 
-def _compile(stil_text: str) -> Tuple[Dict[str, str], Dict[str, int], Path, tempfile.TemporaryDirectory]:
+def _compile(
+    stil_text: str,
+) -> Tuple[Dict[str, str], Dict[str, int], Path, tempfile.TemporaryDirectory]:
     tmp = tempfile.TemporaryDirectory(prefix="warptap-stil-replay-")
     stil_path = Path(tmp.name) / "pattern.stil"
     stil_path.write_text(stil_text, encoding="utf-8")
@@ -231,11 +233,12 @@ def _testbench(
         lines.append(f"    reg {name} = 1'b{value};")
     for name, active in reset_pulse.items():
         lines.append(f"    reg {name} = 1'b{1 - active};")
-    connections = [f".{base}({base})" for base in ports] + [f".{n}({n})" for n in (*tie, *reset_pulse)]
+    connections = [f".{name}({name})" for name in (*ports, *tie, *reset_pulse)]
     lines.append(f"    {top} dut ({', '.join(connections)});")
     lines += [
         "    function reg level(input integer v);",
-        "        case (v) 0: level = 1'b0; 1: level = 1'b1; 2: level = 1'bz; default: level = 1'bx;",
+        "        case (v)",
+        "            0: level = 1'b0; 1: level = 1'b1; 2: level = 1'bz; default: level = 1'bx;",
         "        endcase",
         "    endfunction",
         "    reg [63:0] at;",
@@ -263,7 +266,8 @@ def _testbench(
     for idx, name in enumerate(order):
         if types[name] == "In":
             base, bit = _split(name)
-            lines.append(f"                    {idx}: {base if bit is None else f'{base}[{bit}]'} = level(val);")
+            target = base if bit is None else f"{base}[{bit}]"
+            lines.append(f"                    {idx}: {target} = level(val);")
     lines += [
         "                endcase",
         "            end else begin",
@@ -272,7 +276,8 @@ def _testbench(
     for idx, name in enumerate(order):
         if types[name] == "Out":
             base, bit = _split(name)
-            lines.append(f"                    {idx}: got = {base if bit is None else f'{base}[{bit}]'};")
+            source = base if bit is None else f"{base}[{bit}]"
+            lines.append(f"                    {idx}: got = {source};")
     lines += [
         "                endcase",
         "                compares = compares + 1;",
@@ -319,7 +324,9 @@ def replay_stil(
                 raise ValueError(f"WaveformTable {wft} has no WFC {wfc!r} for {name}")
             for kind, offset in waveform:
                 if not 0 <= offset < period:
-                    raise ValueError(f"{name} event {kind} at {offset}fs is outside the {period}fs period")
+                    raise ValueError(
+                        f"{name} event {kind} at {offset}fs is outside the {period}fs period"
+                    )
                 if kind in _DRIVES:
                     if types[name] != "In":
                         raise ValueError(f"drive event {kind} on output {name}")

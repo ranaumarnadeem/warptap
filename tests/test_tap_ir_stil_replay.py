@@ -105,7 +105,7 @@ def test_a_wrong_expected_bit_fails_at_that_bit_only(stil_replay):
     text = to_stil(_idcode_ops(IDCODE_VALUE ^ 1 << 7), jtag_period="50ns")
     result = stil_replay(text, [_TAP_CORE], "tap_core", **_TAP_CORE_PINS)
     assert len(result.mismatches) == 1
-    assert "expected 1, got 0" in result.mismatches[0] or "expected 0, got 1" in result.mismatches[0]
+    assert re.search(r"expected (0, got 1|1, got 0)$", result.mismatches[0])
 
 
 def test_0_0_3_timing_compares_each_bit_against_the_next_one(stil_replay):
@@ -160,7 +160,9 @@ def _replay_real_signal(stil_replay, path, text, **pins):
 
 def test_write_pulse_read_through_an_inserted_network(stil_replay, real_signal_network):
     graph, root, path = real_signal_network
-    text = to_stil(_write_pulse_read(graph, root), jtag_period="50ns", pulse_periods={"clk": "10ns"})
+    text = to_stil(
+        _write_pulse_read(graph, root), jtag_period="50ns", pulse_periods={"clk": "10ns"}
+    )
     result = _replay_real_signal(stil_replay, path, text)
     assert result.compares > 0
     assert result.mismatches == []
