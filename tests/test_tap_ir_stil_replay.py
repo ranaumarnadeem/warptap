@@ -35,7 +35,7 @@ from warptap.sib_insert import insert_sib_network
 from warptap.sib_plan import InstrumentSpec, build_sib_plan
 from warptap.tap_fsm import TapState
 from warptap.tap_integrity import select_instruction
-from warptap.tap_ir import GotoState, PulsePin, Runtest, ShiftDR, ShiftIR, bits_from_int
+from warptap.tap_ir import GotoState, PulsePin, Runtest, SetPins, ShiftDR, ShiftIR, bits_from_int
 from warptap.tap_ir_stil import to_stil
 from warptap.tap_model import CAPTURE_IR_PATTERN, IDCODE_VALUE, OPCODE_EXTEST
 from warptap.yosys_io import ingest, write_verilog_from_json
@@ -134,10 +134,11 @@ def real_signal_network(fixtures_dir, yosys_command, tmp_path_factory):
 
 
 def _write_pulse_read(
-    graph, root, *, expected: int = 1, pulses: int = 2, pulse_ops: Optional[list] = None
+    graph, root, *, expected: int = 1, pulses: int = 2, pulse_ops: Optional[list] = None,
+    lead_in: list = _SETTLE,
 ) -> list:
-    """Write ctrl_in=1, clock it into ctrl_latched with ``pulses`` clk pulses (or
-    ``pulse_ops``), read status_out."""
+    """After ``lead_in``, write ctrl_in=1, clock it into ctrl_latched with ``pulses`` clk
+    pulses (or ``pulse_ops``), read status_out."""
     pdl = PDLInterpreter(graph, root)
     pdl.iTarget("ctrl_write")
     pdl.iWrite(1)
@@ -149,7 +150,7 @@ def _write_pulse_read(
     pdl.iTarget("status_read")
     pdl.iRead(expected)
     pdl.iApply()
-    return _SETTLE + select_instruction(OPCODE_EXTEST) + pdl.program
+    return lead_in + select_instruction(OPCODE_EXTEST) + pdl.program
 
 
 def _replay_real_signal(stil_replay, path, text, **pins):
@@ -218,3 +219,44 @@ def test_a_pulse_leaves_a_pin_it_does_not_list_where_it_was(
     result = stil_replay(text, [path], "real_signal", reset_pulse={"trst_n": 0})
     assert result.compares == 1
     assert (result.mismatches == []) is passes
+
+
+#: Every real_signal pin declared, so the harness ties and resets nothing.
+_REAL_SIGNAL_PINS = {
+    "inputs": {"trst_n": 1, "rst_n": 1, "clk": 0, "ctrl_in": 0}, "outputs": ["status_out"],
+}
+_TRST_LEAD_IN = [
+    SetPins((("trst_n", 0), ("rst_n", 0))), GotoState(TapState.TEST_LOGIC_RESET),
+    SetPins((("trst_n", 1), ("rst_n", 1))), GotoState(TapState.RUN_TEST_IDLE),
+]
+_TMS_ONLY_LEAD_IN = [GotoState(TapState.TEST_LOGIC_RESET), GotoState(TapState.RUN_TEST_IDLE)]
+
+
+@pytest.mark.parametrize(
+    "lead_in, passes", [(_TRST_LEAD_IN, True), (_TMS_ONLY_LEAD_IN, False)], ids=["trst", "tms_only"]
+)
+def test_a_reset_lead_in_in_the_file_resets_the_network(
+    lead_in, passes, stil_replay, real_signal_network
+):
+    """trst_n and rst_n are 0 from time zero, so they never fall: only TCK edges while TRST is
+    low reset the TAP and the SIB network, and the lead-in gives five. A TMS-only reset
+    leaves the network's cells unknown, so the read fails."""
+    graph, root, path = real_signal_network
+    ops = _write_pulse_read(graph, root, lead_in=lead_in)
+    text = to_stil(ops, jtag_period="50ns", pulse_periods={"clk": "10ns"}, **_REAL_SIGNAL_PINS)
+    initial = {"trst_n": 0, "rst_n": 0} if passes else {"trst_n": 1, "rst_n": 1}
+    result = stil_replay(text, [path], "real_signal", initial=initial)
+    assert result.compares == 1
+    assert (result.mismatches == []) is passes
+
+
+def test_idcode_reads_back_after_the_lead_in_with_trst_low_from_time_zero(stil_replay):
+    lead_in = [
+        SetPins((("trst_n", 0),)), GotoState(TapState.TEST_LOGIC_RESET),
+        SetPins((("trst_n", 1),)), GotoState(TapState.RUN_TEST_IDLE),
+    ]
+    text = to_stil(lead_in + _idcode_ops()[len(_SETTLE):], jtag_period="50ns",
+                   inputs={"trst_n": 1, "external_dr_tdo": 0})
+    result = stil_replay(text, [_TAP_CORE], "tap_core", initial={"trst_n": 0})
+    assert result.compares == 32
+    assert result.mismatches == []

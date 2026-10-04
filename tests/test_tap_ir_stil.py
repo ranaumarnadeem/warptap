@@ -9,7 +9,7 @@ from __future__ import annotations
 import pytest
 
 from warptap.tap_fsm import TapState
-from warptap.tap_ir import GotoState, PulsePin, Runtest, ShiftDR, ShiftIR
+from warptap.tap_ir import GotoState, PulsePin, Runtest, SetPins, ShiftDR, ShiftIR
 from warptap.tap_ir_stil import TapIrStilError, to_stil
 
 
@@ -199,8 +199,30 @@ def test_a_pulse_holds_the_pins_it_does_not_list_instead_of_driving_0():
         ({"rst_n": 1}, ["rst_n"], [], "both"),
         ({}, ["status_out"], [PulsePin("sysclk", 1, (("status_out", 1),))], "declared output"),
         ({}, (), [PulsePin("sysclk", 1, (("pi_a", 3),))], "0 or 1"),
+        ({}, (), [SetPins((("trst_n", 0),))], "not one of to_stil's inputs"),
+        ({"trst_n": 1}, (), [SetPins((("trst_n", 2),))], "0 or 1"),
     ],
 )
 def test_bad_pin_declarations_raise_named_error(inputs, outputs, ops, match):
     with pytest.raises(TapIrStilError, match=match):
         to_stil(ops, pulse_periods={"sysclk": "20ns"}, inputs=inputs, outputs=outputs)
+
+
+def test_setpins_changes_a_declared_input_from_the_next_vector_on():
+    ops = [
+        Runtest(1), SetPins((("trst_n", 0),)), Runtest(1),
+        PulsePin("sysclk", 1), SetPins((("trst_n", 1),)), Runtest(1),
+    ]
+    text = to_stil(ops, pulse_periods={"sysclk": "20ns"}, inputs={"trst_n": 1, "rst_n": 1})
+    values = [v.split("trst_n=")[1][0] for v in _vectors(text)]
+    assert values == ["1", "0", "0", "1"]
+    assert all("rst_n=1;" in v for v in _vectors(text))
+
+
+def test_the_documented_reset_lead_in_asserts_trst_over_five_tms_1_cycles():
+    lead_in = [
+        SetPins((("trst_n", 0),)), GotoState(TapState.TEST_LOGIC_RESET),
+        SetPins((("trst_n", 1),)), GotoState(TapState.RUN_TEST_IDLE),
+    ]
+    vectors = _vectors(to_stil(lead_in, inputs={"trst_n": 1}))
+    assert [("tms=1;" in v, "trst_n=0;" in v) for v in vectors] == [(True, True)] * 5 + [(False, False)]

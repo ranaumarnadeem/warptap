@@ -109,6 +109,14 @@ def test_irunloop_sck_produced_pulsepin_is_rejected():
         to_svf(pdl.program)
 
 
+def test_setpins_is_rejected():
+    """Only to_stil drives pins other than TCK/TMS/TDI."""
+    from warptap.tap_ir import SetPins
+
+    with pytest.raises(TapIrSvfError, match="does not support"):
+        to_svf([SetPins((("trst_n", 0),))])
+
+
 def test_svf_state_names_match_spec_table_for_every_state():
     """Regression-locks the SVF Specification Rev. E p.6 state-name table (verbatim,
     quoted under the spec's own no-cost-copying grant) for every one of the 16 states --

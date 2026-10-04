@@ -66,11 +66,11 @@ from typing import Dict, Iterable, List, Mapping, NamedTuple, Optional, Tuple, U
 
 from warptap.errors import WarptapError
 from warptap.tap_fsm import TapState, next_state
-from warptap.tap_ir import GotoState, PulsePin, Runtest, ShiftDR, ShiftIR, bits_from_int
+from warptap.tap_ir import GotoState, PulsePin, Runtest, SetPins, ShiftDR, ShiftIR, bits_from_int
 from warptap.tap_ir_play import navigation_tms, shift_tms
 from warptap.tap_ports import TCK, TDI, TDO, TMS
 
-_IrOp = Union[ShiftIR, ShiftDR, GotoState, Runtest, PulsePin]
+_IrOp = Union[ShiftIR, ShiftDR, GotoState, Runtest, PulsePin, SetPins]
 _TAP_PINS = (TCK, TMS, TDI, TDO)
 
 _JTAG_WFT = "jtag_wft"
@@ -89,9 +89,9 @@ _TIME = re.compile(r"(\d+(?:\.\d*)?|\.\d+)(fs|ps|ns|us|ms|s)")
 
 
 class TapIrStilError(WarptapError):
-    """Raised when ``to_stil`` is given an op it can't render, or a ``pulse_periods`` mapping
-    missing an entry for some :class:`~warptap.tap_ir.PulsePin` target this ``ir_ops`` list
-    actually uses."""
+    """Raised when ``to_stil`` is given an op it can't render, a period it can't read, a
+    ``pulse_periods`` mapping missing an entry for some :class:`~warptap.tap_ir.PulsePin`
+    target this ``ir_ops`` list actually uses, or a pin it can't declare or drive as asked."""
 
 
 def _offsets(period: str, what: str) -> Tuple[str, str, str]:
@@ -112,24 +112,29 @@ class _JtagCycle(NamedTuple):
     tms: int
     tdi: int
     tdo_compare: Optional[int]  # None = don't-compare this cycle
+    static: Tuple[Tuple[str, int], ...]  # declared inputs' values, after any SetPins
 
 
 class _PulseCycle(NamedTuple):
     port: str
     hold_pins: Tuple[Tuple[str, int], ...]
+    static: Tuple[Tuple[str, int], ...]
 
 
-def _walk_cycles(ir_ops: List[_IrOp]) -> List[Union[_JtagCycle, _PulseCycle]]:
+def _walk_cycles(ir_ops: List[_IrOp], pins: "_Pins") -> List[Union[_JtagCycle, _PulseCycle]]:
     """One record per emitted STIL vector -- reuses the exact navigation/shift logic
     :mod:`warptap.tap_ir_play` already established, extended to also carry per-cycle
     TDO-compare information (:func:`~warptap.tap_ir_play.to_cycles` deliberately doesn't,
-    being send-only) and :class:`~warptap.tap_ir.PulsePin` cycles."""
+    being send-only), :class:`~warptap.tap_ir.PulsePin` cycles, and the values
+    :class:`~warptap.tap_ir.SetPins` gives the declared inputs."""
     state = TapState.RUN_TEST_IDLE
     cycles: List[Union[_JtagCycle, _PulseCycle]] = []
+    static = dict(pins.inputs)
+    snapshot = tuple(static.items())
 
     def jtag_tick(tms: int, tdi: int, tdo_compare: Optional[int] = None) -> None:
         nonlocal state
-        cycles.append(_JtagCycle(tms, tdi, tdo_compare))
+        cycles.append(_JtagCycle(tms, tdi, tdo_compare, snapshot))
         state = next_state(state, tms)
 
     for op in ir_ops:
@@ -150,7 +155,18 @@ def _walk_cycles(ir_ops: List[_IrOp]) -> List[Union[_JtagCycle, _PulseCycle]]:
                 jtag_tick(0, 0)
         elif isinstance(op, PulsePin):
             for _ in range(op.count):
-                cycles.append(_PulseCycle(op.port, op.hold_pins))
+                cycles.append(_PulseCycle(op.port, op.hold_pins, snapshot))
+        elif isinstance(op, SetPins):
+            for name, value in op.pins:
+                if name not in pins.inputs:
+                    raise TapIrStilError(
+                        f"SetPins drives {name!r}, which is not one of to_stil's inputs: "
+                        "declare it there with the value it holds before this op"
+                    )
+                if value not in (0, 1):
+                    raise TapIrStilError(f"SetPins gives {name!r} the value {value!r}, not 0 or 1")
+                static[name] = value
+            snapshot = tuple(static.items())
         else:
             raise TapIrStilError(f"to_stil() does not support op {op!r}")
     return cycles
@@ -273,6 +289,21 @@ def to_stil(
     active-low reset. Naming a TAP pin, a pin in both, or an output in a ``PulsePin`` raises
     :class:`TapIrStilError`.
 
+    **Reset lead-in.** :class:`~warptap.tap_ir.SetPins` changes declared inputs from the next
+    vector on, so a pattern can reset the TAP itself, e.g. with ``inputs={"trst_n": 1, ...}``::
+
+        [SetPins((("trst_n", 0),)),             # assert TRST
+         GotoState(TapState.TEST_LOGIC_RESET),  # five TCK cycles with TMS=1
+         SetPins((("trst_n", 1),)),             # release TRST
+         GotoState(TapState.RUN_TEST_IDLE)]     # one TMS=0 cycle
+
+    TCK runs while TRST is low, which matters: ``tap_core`` and the network cells reset on
+    ``negedge trst_n`` or on a TCK edge while it is low, so a TRST that is low from the start
+    (in simulation, or a tester pin that powers up low) has no falling edge and needs those TCK
+    edges. Without a TRST pin the two ``GotoState`` still reset the TAP through TMS, but not
+    the SIB network, which only TRST resets. Without either, the ops must start where the TAP
+    already is: in Run-Test/Idle.
+
     **Timing.** One ``jtag_wft`` vector is one TCK cycle of period ``T``:
 
     - TMS and TDI change at 0;
@@ -293,7 +324,7 @@ def to_stil(
     falling at 3T/4. Its ``hold_pins`` change at 0, half a period before the rising edge."""
     pulse_periods = pulse_periods or {}
     pins = _declared_pins(inputs, outputs)
-    cycles = _walk_cycles(ir_ops)
+    cycles = _walk_cycles(ir_ops, pins)
     all_signals, pulse_ports = _collect_signals(cycles, pins)
     for port in pulse_ports:
         if port not in pulse_periods:
@@ -336,6 +367,7 @@ def to_stil(
     pattern_lines = [f"Pattern {_PATTERN_NAME} {{"]
     current_wft: Optional[str] = None
     for cycle in cycles:
+        static = dict(cycle.static)
         if isinstance(cycle, _JtagCycle):
             table_name = _JTAG_WFT
             tdo_char = "X" if cycle.tdo_compare is None else ("H" if cycle.tdo_compare else "L")
@@ -343,8 +375,8 @@ def to_stil(
             for sig in all_signals[len(_TAP_PINS):]:
                 if sig in pins.outputs:
                     values.append((sig, "X"))
-                elif sig in pins.inputs:
-                    values.append((sig, str(pins.inputs[sig])))
+                elif sig in static:
+                    values.append((sig, str(static[sig])))
                 else:
                     values.append((sig, "P"))  # named only by a PulsePin: holds what it had
         else:
@@ -358,8 +390,8 @@ def to_stil(
                     values.append((sig, "X"))
                 elif sig in hold_map:
                     values.append((sig, str(hold_map[sig])))
-                elif sig in pins.inputs:
-                    values.append((sig, str(pins.inputs[sig])))
+                elif sig in static:
+                    values.append((sig, str(static[sig])))
                 else:
                     # Not listed, not declared: hold its prior value. Forcing 0 here would
                     # assert any active-low reset another PulsePin's hold_pins named.

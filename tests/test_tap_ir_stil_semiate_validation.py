@@ -24,7 +24,8 @@ from pathlib import Path
 from warptap.icl_model import InstrumentDirection, SignalBinding
 from warptap.pdl_interpreter import PDLInterpreter
 from warptap.sib_plan import InstrumentSpec, build_sib_plan
-from warptap.tap_ir import PulsePin
+from warptap.tap_fsm import TapState
+from warptap.tap_ir import GotoState, PulsePin, SetPins
 from warptap.tap_ir_stil import to_stil
 
 
@@ -115,3 +116,11 @@ def test_declared_inputs_and_outputs_are_valid(semiate_stil_parser):
         inputs={"rst_n": 1, "sysclk": 0}, outputs=["status_out", "done"],
     )
     _assert_valid(text, semiate_stil_parser)
+
+
+def test_a_reset_lead_in_driving_trst_is_valid(semiate_stil_parser):
+    ops = [
+        SetPins((("trst_n", 0), ("rst_n", 0))), GotoState(TapState.TEST_LOGIC_RESET),
+        SetPins((("trst_n", 1), ("rst_n", 1))), GotoState(TapState.RUN_TEST_IDLE),
+    ]
+    _assert_valid(to_stil(ops, inputs={"trst_n": 1, "rst_n": 1}), semiate_stil_parser)

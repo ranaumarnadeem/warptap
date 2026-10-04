@@ -79,6 +79,17 @@ class PulsePin(NamedTuple):
     hold_pins: tuple[tuple[str, int], ...] = ()
 
 
+class SetPins(NamedTuple):
+    """Drive DUT pins other than TCK/TMS/TDI/TDO to new values from the next cycle on, until
+    another ``SetPins`` changes them: e.g. assert ``trst_n`` for a reset lead-in, clock TCK,
+    then release it. Unlike ``hold_pins``, the values stay after the op. Only
+    :mod:`warptap.tap_ir_stil` renders it, and each pin must be one of its ``inputs``; the SVF
+    and STAPL emitters and :mod:`warptap.tap_ir_play` raise their unsupported-op errors for it,
+    as they do for :class:`PulsePin`."""
+
+    pins: tuple[tuple[str, int], ...]
+
+
 #: Canonical SVF/STAPL state names for each of the 16 IEEE 1149.1 TAP states -- verbatim from
 #: the SVF Specification Rev. E p.6 and JESD71 (STAPL) Annex A, which name all 16 states
 #: identically (only the *stable_state* argument of STATE/RUNTEST/ENDIR/ENDDR/IRSTOP/DRSTOP is

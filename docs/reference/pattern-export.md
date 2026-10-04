@@ -5,7 +5,7 @@ SVF/STAPL/STIL text emitters that render it.
 
 ::: warptap.tap_ir
     options:
-      members: [GotoState, ShiftIR, ShiftDR, Runtest, PulsePin, bits_from_int, bits_to_int]
+      members: [GotoState, ShiftIR, ShiftDR, Runtest, PulsePin, SetPins, bits_from_int, bits_to_int]
 
 ::: warptap.tap_ir_svf
     options:

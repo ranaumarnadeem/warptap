@@ -141,6 +141,13 @@ def test_irunloop_sck_produced_pulsepin_is_rejected():
         to_stapl(pdl.program, **_KWARGS)
 
 
+def test_setpins_is_rejected():
+    from warptap.tap_ir import SetPins
+
+    with pytest.raises(TapIrStaplError, match="does not support"):
+        to_stapl([SetPins((("trst_n", 0),))], **_KWARGS)
+
+
 def test_crc_statement_is_the_last_line_and_is_hex():
     stapl = to_stapl([ShiftIR(bits=4, tdi=0)], **_KWARGS)
     lines = [line for line in stapl.splitlines() if line.strip()]
