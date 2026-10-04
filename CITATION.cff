@@ -11,7 +11,7 @@ authors:
     family-names: Nadeem
     email: rana.umar.nadeem21@gmail.com
     orcid: "https://orcid.org/0009-0008-9880-0116"
-version: 0.0.3
+version: 0.0.4
 license: Apache-2.0
 repository-code: "https://github.com/ranaumarnadeem/warptap"
 url: "https://ranaumarnadeem.github.io/warptap/"

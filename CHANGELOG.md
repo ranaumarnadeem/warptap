@@ -5,8 +5,71 @@ implementation stage.
 
 ## [Unreleased]
 
+## [0.0.4] - 2026-10-04
+
+### Fixed
+
+- **`to_stil` compared TDO after the rising TCK edge, so each compare checked the next bit.**
+  In 0.0.3 and earlier every JTAG vector drove TCK low at 0 and high at 1ns, and compared TDO
+  at 2ns. `rtl/tap_core.v` changes TDO on the rising edge, so by 2ns TDO already showed the
+  next bit (on a scan's last cycle, the 0 of Exit1). A STIL file from those releases that
+  compares TDO against a warptap TAP fails wherever two consecutive expected bits differ: an
+  IDCODE read-back fails 15 of its 32 compares, and a 1-bit read that should see 1 sees 0.
+  Files without compares are unaffected. Each period T now drives TMS and TDI at 0, compares
+  TDO at T/4, raises TCK at T/2 and lowers it at 3T/4. T/4 is inside the window where TDO
+  shows the current bit both on `tap_core` and on a TAP that changes TDO on the falling edge,
+  as IEEE 1149.1 requires, and at least T/4 from any TDO change in either. The Semi-ATE-STIL
+  syntax and semantic tests could not see where a strobe sits. New replay tests
+  (`tests/stil_replay.py`, `tests/test_tap_ir_stil_replay.py`) apply every event of an
+  emitted file at its time against `tap_core` and inserted designs in Icarus and count TDO
+  mismatches. They fail on the 0.0.3 timing, and pass on it with only the strobe moved before
+  the rise.
+- **A `PulsePin` drove every pin it did not list to 0.** A pin named only by `PulsePin`s
+  (another pulse port, or another pulse's `hold_pins` key) kept its value through JTAG cycles
+  but was forced to 0 by any pulse that did not list it, which asserts an active-low reset such
+  as `rst_n`. It now holds its value (`P`).
+
+### Behavior changes
+
+Upgrading from 0.0.3 changes the STIL `to_stil` writes, beyond the fix above.
+
+- **Edge times follow the period.** `jtag_period` and each `pulse_periods` value must be a
+  positive number with a unit (`'50ns'`, `'0.1us'`); anything else, such as a STIL spec
+  variable, raises `TapIrStilError`. Edge times are written in the same unit, e.g. `'12.5ns'`.
+  A `PulsePin`'s clock now rises at half its period and falls at three quarters (it rose at 1ns
+  and stayed high), so like TCK it idles low, and its `hold_pins` get half a period of setup.
+- **A `Runtest` or `PulsePin` of N > 1 cycles is one `V` inside `Loop N`,** not N `V`
+  statements. When the run opens the pattern, its first cycle is a plain `V` before the
+  `Loop`, which Semi-ATE-STIL's compiler requires. Anything that counted `V` statements sees
+  fewer.
+- **Signals beyond TCK/TMS/TDI/TDO sort by bit number** (`bus[2]` before `bus[10]`), and a name
+  that is not a plain identifier is quoted. 0.0.3 wrote such names unquoted, which is not
+  valid STIL.
+- **SVF and STAPL write `GotoState(TEST_LOGIC_RESET)` as `STATE RESET;`** instead of dropping
+  it; they still drop every other `GotoState`. Before, `navigation_tms` could not reach
+  Test-Logic-Reset, so `play()`, `to_cycles()` and `to_stil()` raised for it.
+
 ### Added
 
+- **`to_stil(..., inputs=..., outputs=...)` declares every DUT pin.** `inputs` maps each other
+  DUT input to the value (0 or 1) it holds in every vector; a `PulsePin` that pulses it or
+  lists it in `hold_pins` overrides it for that pulse. `outputs` are declared `Out` and never
+  compared. A pin named only by a `PulsePin` and left out of `inputs` behaves as before:
+  declared `In`, driven only by the pulses that name it.
+- **`SetPins`, for a reset lead-in.** A new `tap_ir` op that changes declared inputs from the
+  next vector on: assert `trst_n` (and a chip reset), run `GotoState(TEST_LOGIC_RESET)`,
+  release them, run `GotoState(RUN_TEST_IDLE)`. TCK keeps running while TRST is low, so
+  `tap_core` and the SIB network reset even when TRST has no falling edge (a tester pin that
+  powers up low, or a simulation that starts it at 0); without TRST, a TMS reset leaves the
+  SIB network unknown. Only `to_stil` renders `SetPins`; SVF, STAPL, `play()` and
+  `to_cycles()` raise for it.
+- **`GotoState(TapState.TEST_LOGIC_RESET)`.** `navigation_tms` reaches it with five TMS=1
+  cycles from any state, and `GotoState(RUN_TEST_IDLE)` settles from there with one TMS=0.
+- **Per-bit pins.** A bus is one signal per bit, such as `func_addr[0]`, quoted in `Signals`,
+  `SignalGroups`, every `WaveformTable` (and a per-bit pulse port's table name), `W` and `V`.
+  A counter fixture's replay proves each bit reaches its own DUT bit.
+- The `dev` extra installs Semi-ATE-STIL (pinned to 0.3.2) and lark, which the STIL tests and
+  the replay need. `docs/reference/pattern-export.md` shows a tester-ready `to_stil` call.
 - **`capture_sync` on a READ instrument** (`InstrumentSpec(..., capture_sync=True)`): its
   bits capture through a two-TCK-flop synchronizer (`rtl/bc1_shift_only_sync.v`, reset by
   `trst_n`), for a signal from another clock domain. A capture shows the signal as it was two
@@ -36,6 +99,13 @@ implementation stage.
   BYPASS register) take the same opcode, and `to_icl(..., ijtag_access=True)` names
   `IJTAG_ACCESS` in the AccessLink. The program JSON's `tap` carries the opcode only when
   set. Off by default, byte for byte as before.
+
+### Not changed
+
+- **`rtl/tap_core.v` still changes TDO on the rising TCK edge and drives it low outside the
+  shift states.** IEEE 1149.1 has TDO change on the falling edge and float when not shifting,
+  and the BSDL's DESIGN_WARNING already says warptap's TAP doesn't. The new STIL timing passes
+  on both kinds of TAP; a falling-edge TDO is a separate RTL change.
 
 ## [0.0.3] - 2026-09-29
 
