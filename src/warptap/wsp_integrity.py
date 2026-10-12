@@ -14,11 +14,19 @@ Tests, in program order:
 - ``code_<bits>`` (``u<k>_code_<bits>`` in a chain): every code of the WIR, one wrapper at
   a time with the others in bypass -- an unused code included, which acts as WS_BYPASS --
   loaded, then the data register it selects scanned with a sentinel: the bypass bit, or in
-  a serial instruction the boundary register, captured from the ports the program drives
-  (twice, with complementary ports) and shifted out, so every cell and the register's
-  length show. Then idle cycles, in which the mode's parallel outputs are observed.
-- ``held_update``: an update while the WIR is deselected, after a new code is shifted into
-  the WIR's shift stage, leaves the instruction in force.
+  a serial instruction the boundary register, scanned three times so every cell and the
+  register's length show. Each scan starts with a capture from the ports the program
+  drives (~P, P, P: P alternates, so neighbouring cells differ) and leaves a tail in the
+  register (0, 1, 0), so the second capture meets cells holding 0 against ports P and the
+  third cells holding 1 against ports P: a cell that follows its port when its mode says
+  hold, or holds when it should capture, shows in one of them. Then idle cycles, in which
+  the mode's parallel outputs are observed.
+- ``wby_hold``: WBY loaded with 1 and a WIR scan of zeros, then with 0 and a WIR scan
+  carrying ones -- WBY selected again after each update -- and WSO observed at idle: the
+  bypass bit holds its value through a WIR scan and update.
+- ``held_update``: an update while the WIR is deselected, after the complement of the code
+  in force is shifted into the WIR's shift stage (every bit differs), leaves the
+  instruction in force.
 - ``capture_update``: CaptureWR with the WIR selected doesn't capture the boundary cells.
 
 Every cycle carries what the model expects at WSO, at each wrapped output and at each
@@ -298,6 +306,13 @@ def _pattern(bits: int) -> int:
     return sum(_SENTINEL[k % len(_SENTINEL)] << k for k in range(bits))
 
 
+def _stream(length: int, margin: int, tail: int) -> int:
+    """A scan of ``length + margin`` bits as a tdi value: the sentinel first, so it
+    comes out ``length`` shifts late, then ``length`` bits of ``tail`` (0 or 1), which
+    are what the register holds when the scan ends."""
+    return _pattern(margin) | ((((1 << length) - 1) << margin) if tail else 0)
+
+
 # --- the recorder -----------------------------------------------------------------------
 
 
@@ -415,12 +430,39 @@ def build_wsp_integrity_program(
             rec.ops([_ir_load(wrappers, vector)])
             length = _dr_length(wrappers, vector)
             serial = w.instruction(w.instruction_of(code)).serial
-            for phase in (0, 1) if serial else (0,):
+            for phase, tail in ((1, 0), (0, 1), (0, 0)) if serial else ((0, 0),):
                 rec.set_ports(phase)
-                rec.ops([ShiftDR(length + margin, _pattern(length + margin))])
+                rec.ops([ShiftDR(length + margin, _stream(length, margin, tail))])
             rec.ops([Runtest(2)])
             rec.end()
         rec.set_ports(0)
+
+    # WBY holds across a WIR scan and update: loaded with 1 and a scan of zeros, then
+    # with 0 and a scan carrying ones, each time with WBY selected again.
+    ones = [
+        max(
+            (
+                code
+                for code in range(1 << w.ir_bits)
+                if not w.instruction(w.instruction_of(code)).serial
+            ),
+            key=lambda code: bin(code).count("1"),
+        )
+        for w in wrappers
+    ]
+    rec.begin("wby_hold")
+    rec.ops(
+        [
+            _ir_load(wrappers, zeros),
+            ShiftDR(count, (1 << count) - 1),
+            _ir_load(wrappers, zeros),
+            Runtest(2),
+            ShiftDR(count, 0),
+            _ir_load(wrappers, ones),
+            Runtest(2),
+        ]
+    )
+    rec.end()
 
     serial_codes = [
         (k, i.code) for k, w in enumerate(wrappers) for i in w.instructions if i.serial
@@ -438,8 +480,14 @@ def build_wsp_integrity_program(
     vector = list(zeros)
     vector[held[0]] = held[1]
     rec.ops([_ir_load(wrappers, vector)])
+    other = _ir_load(
+        wrappers, [~code & ((1 << w.ir_bits) - 1) for w, code in zip(wrappers, vector)]
+    )
     rec.rows(
-        [WspCycle(selectwir=1, shiftwr=1, wsi=0)] * total
+        [
+            WspCycle(selectwir=1, shiftwr=1, wsi=(other.tdi >> k) & 1)
+            for k in range(other.bits)
+        ]
         + [WspCycle(selectwir=0, updatewr=1)]
     )
     length = _dr_length(wrappers, vector)

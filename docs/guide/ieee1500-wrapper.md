@@ -96,8 +96,9 @@ output. In order:
 | --- | --- |
 | `reset` | WRSTN clears every WBY: a sentinel comes out as many shifts late as there are wrappers. |
 | `wir_length` | A sentinel through the WIRs comes out as many shifts late as they are long; the pattern ends WS_BYPASS. |
-| `code_<bits>` | Every code of the WIR, one wrapper at a time (`u<k>_code_<bits>` in a chain), the others in bypass; an unused code acts as WS_BYPASS. The data register it selects is scanned with a sentinel; a serial instruction's boundary register is captured twice with complementary ports. Then idle cycles. |
-| `held_update` | An update with the WIR deselected leaves the instruction in force. |
+| `code_<bits>` | Every code of the WIR, one wrapper at a time (`u<k>_code_<bits>` in a chain), the others in bypass; an unused code acts as WS_BYPASS. The data register it selects is scanned with a sentinel. A serial instruction's boundary register is scanned three times, each starting with a capture from the driven ports (~P, P, P, P alternating) and leaving a tail in the register (0, 1, 0): a cell that follows its port where its mode says hold, or holds where it should capture, shows in one of them. Then idle cycles. |
+| `wby_hold` | WBY loaded with 1 and a WIR scan of zeros, then with 0 and a WIR scan carrying ones: the bypass bit holds its value through a WIR scan and update. |
+| `held_update` | An update with the WIR deselected, after the complement of the code in force is shifted into the WIR, leaves the instruction in force. |
 | `capture_update` | CaptureWR with the WIR selected doesn't capture the boundary cells. |
 
 What the program cannot know -- the core's outputs, which an output cell captures -- is *no care*:

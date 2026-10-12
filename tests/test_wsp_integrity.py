@@ -63,6 +63,7 @@ def test_the_tests_of_a_block_in_program_order() -> None:
         "reset",
         "wir_length",
         *[f"code_{code:03b}" for code in range(8)],
+        "wby_hold",
         "held_update",
         "capture_update",
     ]
@@ -87,7 +88,7 @@ def test_a_chain_tests_one_wrapper_at_a_time_with_the_others_in_bypass() -> None
     assert names[:2] == ["reset", "wir_length"]
     assert [n for n in names if n.startswith("u0_")] == [f"u0_code_{c:03b}" for c in range(8)]
     assert [n for n in names if n.startswith("u1_")] == [f"u1_code_{c:03b}" for c in range(8)]
-    assert names[-2:] == ["held_update", "capture_update"]
+    assert names[-3:] == ["wby_hold", "held_update", "capture_update"]
 
 
 def test_a_block_observes_wso_its_outputs_and_its_scan_outs_a_chain_wso_and_scan_outs() -> None:
@@ -136,29 +137,49 @@ def test_the_wir_length_test_shows_the_sentinel_after_exactly_as_many_shifts_as_
 
 
 def test_ws_extest_captures_the_input_ports_and_holds_the_output_cell() -> None:
-    """WS_EXTEST: the register is 3 long (y next to WSO, then b, a). The input cells capture
-    the ports the program drives -- a, b = 0, 1 in the first scan and 1, 0 in the second --
-    and the output cell, which drives its port from its flop, holds what was shifted into it."""
+    """WS_EXTEST: the register is 3 long (y next to WSO, then b, a). Three scans, the
+    ports driven ~P, P, P (P: a, b = 0, 1), the shifted-in tail 0, 1, 0: every input
+    cell captures its port at both values, and the output cell, which drives its port
+    from its flop, holds what the scan before left in it."""
     program = build_wsp_integrity_program(BLOCK, margin=8)
     shifts = _shifts(program, "code_001")
-    # Two scans (ports phase 0, then phase 1), each 3 + margin shifts.
-    assert len(shifts) == 2 * (3 + 8)
-    first, second = shifts[: 3 + 8], shifts[3 + 8 :]
-    got1, got2 = _column(program, "wso", first), _column(program, "wso", second)
-    sent1 = [program.steps[n].cycle.wsi for n in first]
-    sent2 = [program.steps[n].cycle.wsi for n in second]
-    assert got1[0] is None  # y has never been loaded
-    assert (got1[1], got1[2]) == (1, 0) and (got2[1], got2[2]) == (0, 1)
-    assert got2[0] == sent1[8]  # y holds the first of the last three bits shifted in
-    assert got1[3:] == sent1[:8] and got2[3:] == sent2[:8]
+    assert len(shifts) == 3 * (3 + 8)
+    scans = [shifts[k * 11 : (k + 1) * 11] for k in range(3)]
+    got = [_column(program, "wso", scan) for scan in scans]
+    sent = [[program.steps[n].cycle.wsi for n in scan] for scan in scans]
+    assert got[0][0] is None  # y has never been loaded
+    assert (got[0][1], got[0][2]) == (0, 1)  # ~P: b = 0, a = 1
+    assert (got[1][1], got[1][2]) == (1, 0) and (got[2][1], got[2][2]) == (1, 0)
+    # y holds the tail of the scan before: all 0, then all 1.
+    assert got[1][0] == 0 and got[2][0] == 1
+    assert [s[8:] for s in sent] == [[0, 0, 0], [1, 1, 1], [0, 0, 0]]
+    for k in range(3):
+        assert got[k][3:] == sent[k][:8]
 
 
-def test_ws_intest_captures_the_core_into_the_output_cell_which_is_no_care() -> None:
+def test_ws_intest_holds_the_input_cells_against_the_ports_the_program_drives() -> None:
+    """WS_INTEST: the input cells hold what the scan before shifted in -- all 0, then
+    all 1 -- though the ports differ from it: a cell that followed its port instead
+    would show it. The output cell captures the core: no care."""
     program = build_wsp_integrity_program(BLOCK, margin=8)
     shifts = _shifts(program, "code_100")
-    first, second = shifts[: 3 + 8], shifts[3 + 8 :]
-    assert _column(program, "wso", first)[0] is None
-    assert _column(program, "wso", second)[0] is None
+    scans = [shifts[k * 11 : (k + 1) * 11] for k in range(3)]
+    got = [_column(program, "wso", scan) for scan in scans]
+    assert [g[0] for g in got] == [None, None, None]
+    assert (got[1][1], got[1][2]) == (0, 0) and (got[2][1], got[2][2]) == (1, 1)
+
+
+def test_a_wrapper_whose_intest_input_cells_follow_their_ports_is_caught() -> None:
+    from dataclasses import replace
+
+    program = build_wsp_integrity_program(BLOCK)
+    follows = tuple(
+        replace(i, mode=(0, 0)) if i.name == "WS_INTEST" else i
+        for i in DEFAULT_INSTRUCTIONS
+    )
+    assert check_wsp_integrity(
+        program, replay_wsp_program(program, replace(BLOCK, instructions=follows))
+    )
 
 
 def test_a_bypass_code_scans_a_single_bit() -> None:
@@ -173,6 +194,45 @@ def test_a_bypass_code_scans_a_single_bit() -> None:
 def test_an_unused_code_acts_as_bypass_in_the_program() -> None:
     program = build_wsp_integrity_program(BLOCK, margin=8)
     assert len(_shifts(program, "code_101")) == len(_shifts(program, "code_000"))
+
+
+def test_wby_holds_its_value_across_a_wir_scan_and_update() -> None:
+    """WBY loaded with 1, a WIR scan of zeros and an update (WBY selected again), then
+    WSO: still 1; loaded with 0, a WIR scan carrying ones: still 0."""
+    program = build_wsp_integrity_program(BLOCK, margin=8)
+    start, stop = next((s, e) for n, s, e in program.tests if n == "wby_hold")
+    steps = range(start, stop)
+    idle = [
+        n
+        for n in steps
+        if not any(
+            getattr(program.steps[n].cycle, signal)
+            for signal in ("selectwir", "shiftwr", "capturewr", "updatewr")
+        )
+    ]
+    assert _column(program, "wso", idle)[::2] == [1, 0]
+    wir_bits = [
+        program.steps[n].cycle.wsi
+        for n in steps
+        if program.steps[n].cycle.selectwir and program.steps[n].cycle.shiftwr
+    ]
+    assert wir_bits[:3] == [0, 0, 0] and 1 in wir_bits[3:]
+
+
+def test_a_held_update_shifts_the_complement_of_the_held_code() -> None:
+    """Every bit of the WIR's shift stage differs from the update stage, so an update
+    that took any of them would change the instruction."""
+    for design, wirs in ((BLOCK, 1), (SOC, 2)):
+        program = build_wsp_integrity_program(design, margin=8)
+        start, stop = next((s, e) for n, s, e in program.tests if n == "held_update")
+        bits = [
+            program.steps[n].cycle.wsi
+            for n in range(start, stop)
+            if program.steps[n].cycle.selectwir and program.steps[n].cycle.shiftwr
+        ]
+        total = 3 * wirs
+        assert len(bits) == 2 * total
+        assert [1 - bit for bit in bits[:total]] == bits[total:]
 
 
 def test_what_the_core_decides_is_no_care_and_the_rest_is_cared_for() -> None:
