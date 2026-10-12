@@ -103,7 +103,10 @@ output. In order:
 
 What the program cannot know -- the core's outputs, which an output cell captures -- is *no care*:
 the model runs twice, with those at 0 and at 1, and an observation is checked only where both
-runs agree.
+runs agree. The same goes for the data input ports the tester does not drive: by default every
+input cell's port is driven, but `drive=` names the ones that are (`drive=()` for wrappers
+chained on a SoC, whose ports are its own nets, not pins), and an input cell on any other
+captures a live value.
 
 `program.to_json()` is a `warptap-wsp-program` (version 1): one column per WSP signal, the data
 input ports it drives, the observation points, the tests as `start`/`stop` ranges and, per

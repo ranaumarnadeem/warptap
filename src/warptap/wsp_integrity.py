@@ -236,16 +236,26 @@ def _members(design: Design) -> tuple[list[Wrapper1500], list[str]]:
     return [design], [""]
 
 
-def drive_ports(design: Design) -> tuple[str, ...]:
+def drive_ports(
+    design: Design, drive: Optional[Sequence[str]] = None
+) -> tuple[str, ...]:
     """The data input ports the program drives: each input cell's label, ``u<k>.``-
-    prefixed in a chain, in serial order."""
+    prefixed in a chain, in serial order -- all of them, or (``drive``) only those
+    named; an input cell the tester doesn't drive captures a live value."""
     wrappers, prefixes = _members(design)
-    return tuple(
+    every = tuple(
         prefix + cell.label
         for w, prefix in zip(wrappers, prefixes)
         for cell in w.cells
         if cell.side == INPUT
     )
+    if drive is None:
+        return every
+    unknown = [name for name in drive if name not in every]
+    if unknown:
+        raise WspIntegrityError(f"{unknown[0]} is no input port of the design")
+    chosen = set(drive)
+    return tuple(name for name in every if name in chosen)
 
 
 def observation_points(
@@ -320,10 +330,15 @@ class _Recorder:
     """Plays the program's cycles on the model twice -- the core's outputs at 0 and at
     1 -- and keeps what both runs agree on as the expected value."""
 
-    def __init__(self, design: Design, observe: Sequence[ObservePoint]) -> None:
+    def __init__(
+        self,
+        design: Design,
+        observe: Sequence[ObservePoint],
+        drive: Optional[Sequence[str]] = None,
+    ) -> None:
         self.wrappers, self.prefixes = _members(design)
         self.observe = tuple(observe)
-        self.drive = drive_ports(design)
+        self.drive = drive_ports(design, drive)
         self.chains = [Wsp1500Chain(self.wrappers), Wsp1500Chain(self.wrappers)]
         self.ports = dict.fromkeys(self.drive, 0)
         self.steps: list[Step] = []
@@ -347,7 +362,9 @@ class _Recorder:
         for w, prefix in zip(self.wrappers, self.prefixes):
             cells: list[Value] = []
             for cell in w.cells:
-                cells.append(self.ports[prefix + cell.label] if cell.side == INPUT else live)
+                port = prefix + cell.label
+                driven = cell.side == INPUT and port in self.ports
+                cells.append(self.ports[port] if driven else live)
             found.append(tuple(cells))
         return found
 
@@ -393,16 +410,19 @@ def build_wsp_integrity_program(
     exhaustive_opcodes: bool = True,
     outputs: Optional[bool] = None,
     scan_outs: bool = True,
+    drive: Optional[Sequence[str]] = None,
 ) -> WspIntegrityProgram:
     """The integrity program of ``design`` (see the module docstring). ``margin``: how
     many sentinel bits each scan carries past the register's length; ``exhaustive_opcodes``:
-    test every code of the WIR, not only the instructions' own."""
+    test every code of the WIR, not only the instructions' own; ``drive``: the data input
+    ports the tester drives (default: all; ``()`` for wrappers whose ports are a SoC's own
+    nets) -- an input cell on any other captures a live value, no care."""
     if margin < 2:
         raise WspIntegrityError("a margin under 2 shows no length")
     wrappers, prefixes = _members(design)
     count = len(wrappers)
     observe = observation_points(design, outputs=outputs, scan_outs=scan_outs)
-    rec = _Recorder(design, observe)
+    rec = _Recorder(design, observe, drive)
     rec.set_ports(0)
     zeros = [0] * count
 
@@ -535,9 +555,7 @@ def replay_wsp_program(
     design = design if design is not None else program.design
     if design is None:
         raise WspIntegrityError("a program read from JSON needs the design to replay on")
-    rec = _Recorder(design, program.observe)
-    if rec.drive != program.drive:
-        raise WspIntegrityError("the design doesn't drive the ports the program does")
+    rec = _Recorder(design, program.observe, program.drive)
     chain = rec.chains[live]
     seen = []
     for step in program.steps:

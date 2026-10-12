@@ -32,7 +32,8 @@ implementation stage.
     0, so a cell that follows its port instead of holding shows; WBY; an unused code), WBY held
     across a WIR scan, a held update that shifts in the complement of the code in force, and a
     CaptureWR with the WIR selected, each cycle carrying what the model expects at WSO, at each
-    wrapped output and at each wrapper chain's scan output; what the core decides is no care. The program is a
+    wrapped output and at each wrapper chain's scan output; what the core decides is no care,
+    and so is an input cell on a port the tester doesn't drive (`drive=`, `()` on a SoC). The program is a
     `warptap-wsp-program` (version 1) JSON a tool without warptap can play; `check_wsp_integrity`
     compares measured values with it and `replay_wsp_program` plays it on a model.
 - **`capture_sync` on a READ instrument** (`InstrumentSpec(..., capture_sync=True)`): its

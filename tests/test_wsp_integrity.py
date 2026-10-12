@@ -285,8 +285,8 @@ def test_a_wrapper_that_decodes_an_instruction_differently_is_caught() -> None:
         chains=((WbrCell("a", "input"), WbrCell("b", "input"), WbrCell("c", "input")),
                 (WbrCell("y", "output"),)),
     )
-    with pytest.raises(WspIntegrityError, match="doesn't drive"):
-        replay_wsp_program(program, longer)
+    # A longer boundary register than the program was built for: the lengths show.
+    assert check_wsp_integrity(program, replay_wsp_program(program, longer))
 
 
 def test_the_program_is_json_and_reads_back_to_the_same_program() -> None:
@@ -303,6 +303,44 @@ def test_the_program_is_json_and_reads_back_to_the_same_program() -> None:
     assert again.digest() == program.digest()
     # A program read from JSON checks a design by replaying it.
     assert check_wsp_integrity(again, replay_wsp_program(again, SOC)) == []
+
+
+def test_ports_the_tester_does_not_drive_are_live_and_no_care() -> None:
+    """A SoC's block ports are its own nets, not pins: with drive=() every input cell
+    captures a live value, and the program cares only about what that leaves known."""
+    full = build_wsp_integrity_program(SOC)
+    none = build_wsp_integrity_program(SOC, drive=())
+    assert none.drive == () and full.drive == ("u0.a", "u0.b", "u1.a", "u1.b")
+
+    def cared(program: WspIntegrityProgram) -> int:
+        return sum(v is not None for step in program.steps for v in step.expect)
+
+    assert 0 < cared(none) < cared(full)
+    assert len(none) == len(full)
+    for live in (0, 1):
+        assert check_wsp_integrity(none, replay_wsp_program(none, SOC, live=live)) == []
+    again = WspIntegrityProgram.from_json(json.loads(json.dumps(none.to_json())))
+    assert again.drive == () and again.digest() == none.digest()
+    assert all(step.ports == () for step in none.steps)
+
+
+def test_a_subset_of_the_ports_may_be_driven_and_the_rest_are_live() -> None:
+    part = build_wsp_integrity_program(BLOCK, drive=("a",))
+    assert part.drive == ("a",)
+    for live in (0, 1):
+        assert check_wsp_integrity(part, replay_wsp_program(part, BLOCK, live=live)) == []
+    # The driven port keeps its care bits, so the program is not blind to it.
+    assert any(
+        value is not None
+        for step in part.steps
+        for value in step.expect
+    )
+
+
+@pytest.mark.parametrize("name", ["nope", "y", "u0.a"])
+def test_driving_a_port_the_design_does_not_have_as_an_input_is_refused(name: str) -> None:
+    with pytest.raises(WspIntegrityError, match="no input"):
+        build_wsp_integrity_program(BLOCK, drive=(name,))
 
 
 def test_the_json_names_the_roles_the_columns_and_the_care_strings() -> None:
