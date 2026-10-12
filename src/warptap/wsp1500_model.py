@@ -76,14 +76,40 @@ class WbrCell:
 
 
 @dataclass(frozen=True)
+class WspPorts:
+    """The names of a wrapper's ports: the WSP's eight signals, the wrapper scan
+    enable, and each wrapper chain's scan input and output (``si<k>``, ``so<k>`` by
+    default)."""
+
+    wsi: str = "wsi"
+    wso: str = "wso"
+    shiftwr: str = "shiftwr"
+    capturewr: str = "capturewr"
+    updatewr: str = "updatewr"
+    selectwir: str = "selectwir"
+    wrck: str = "wrck"
+    wrstn: str = "wrstn"
+    scan_enable: str = "scan_en"
+    chain_in: tuple[str, ...] = ()
+    chain_out: tuple[str, ...] = ()
+
+    def si(self, chain: int) -> str:
+        return self.chain_in[chain] if chain < len(self.chain_in) else f"si{chain}"
+
+    def so(self, chain: int) -> str:
+        return self.chain_out[chain] if chain < len(self.chain_out) else f"so{chain}"
+
+
+@dataclass(frozen=True)
 class Wrapper1500:
     """A wrapper: its boundary cells in ``chains`` (each a wrapper scan chain, head
-    first), the WIR's width and its instructions."""
+    first), the WIR's width, its instructions and its port names."""
 
     name: str
     chains: tuple[tuple[WbrCell, ...], ...]
     ir_bits: int = 3
     instructions: tuple[Instruction, ...] = DEFAULT_INSTRUCTIONS
+    ports: WspPorts = WspPorts()
 
     def __post_init__(self) -> None:
         codes = [i.code for i in self.instructions]
