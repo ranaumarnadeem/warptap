@@ -207,3 +207,26 @@ def test_unknown_values_stay_unknown_until_something_defines_them() -> None:
     assert sim.outputs(WspCycle(cfi=(1, 1, 1))) == [None, None, None]
     sim.step(WspCycle(wrstn=0, pulse=False))
     assert sim.outputs(WspCycle(cfi=(1, 1, 1))) == [1, 1, 1]
+
+
+def test_scan_outs_are_each_wrapper_chains_tail_cell() -> None:
+    sim = Wsp1500Sim(BLOCK)
+    sim.wbr = [1, 0, 1]  # a, b, y
+    assert sim.scan_outs() == [0, 1]  # chain 0 ends at b, chain 1 at y
+
+
+def test_a_chain_steps_each_wrapper_with_its_own_functional_inputs() -> None:
+    chain = Wsp1500Chain([BLOCK, BLOCK])
+    chain.step(WspCycle(wrstn=0, pulse=False))
+    # One WIR scan of both wrappers: WS_EXTEST's code 0b001, last bit first, twice.
+    for _ in range(2):
+        for bit in (0, 0, 1):
+            chain.step(WspCycle(selectwir=1, shiftwr=1, wsi=bit))
+    chain.step(WspCycle(selectwir=1, updatewr=1))
+    assert [sim.instruction for sim in chain.sims] == ["WS_EXTEST", "WS_EXTEST"]
+    capture = WspCycle(capturewr=1)
+    chain.step(capture, cfis=[(1, 0, None), (0, 1, None)])
+    assert [sim.wbr[:2] for sim in chain.sims] == [[1, 0], [0, 1]]
+    assert chain.wso(WspCycle(), cfis=[(0, 0, 0), (0, 0, 0)]) == chain.sims[-1].wbr[-1]
+    with pytest.raises(ValueError, match="one cfi per wrapper"):
+        chain.step(capture, cfis=[(0, 0, 0)])

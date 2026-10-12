@@ -31,7 +31,7 @@ WSO are chained and whose other controls are shared.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Mapping, Optional, Sequence, cast
 
 INPUT = "input"
@@ -254,6 +254,15 @@ class Wsp1500Sim:
                 found.append(cycle.cfi[k] if k < len(cycle.cfi) else None)
         return found
 
+    def scan_outs(self) -> list[Value]:
+        """Each wrapper chain's scan output: its tail cell's flop."""
+        found: list[Value] = []
+        last = -1
+        for chain in self.wrapper.chains:
+            last += len(chain)
+            found.append(self.wbr[last])
+        return found
+
     def step(self, cycle: WspCycle, wsi: object = _OWN) -> Value:
         """Apply ``cycle``: WSO at its strobe, returned; then its WRCK pulse. ``wsi``
         (0, 1 or None) overrides the cycle's WSI -- a chain feeds the wrapper before's
@@ -315,14 +324,43 @@ class Wsp1500Chain:
             raise ValueError("a chain needs a wrapper")
         self.sims = [Wsp1500Sim(wrapper) for wrapper in wrappers]
 
-    def step(self, cycle: WspCycle) -> Value:
+    def _cycles(
+        self, cycle: WspCycle, cfis: Optional[Sequence[tuple[Value, ...]]]
+    ) -> list[WspCycle]:
+        """``cycle`` for each wrapper: with ``cfis`` (each wrapper's boundary cells'
+        functional inputs), its own; else the cycle's ``cfi`` for all."""
+        if cfis is None:
+            return [cycle] * len(self.sims)
+        if len(cfis) != len(self.sims):
+            raise ValueError("one cfi per wrapper")
+        return [replace(cycle, cfi=cfi) for cfi in cfis]
+
+    def step(
+        self, cycle: WspCycle, cfis: Optional[Sequence[tuple[Value, ...]]] = None
+    ) -> Value:
         """Apply ``cycle`` to every wrapper; the chain's WSO at its strobe. Every WSO
-        is read before any edge, so each wrapper shifts in what its neighbour showed."""
-        strobes = [sim.wso(cycle) for sim in self.sims]
+        is read before any edge, so each wrapper shifts in what its neighbour showed.
+        ``cfis``: each wrapper's own functional inputs."""
+        cycles = self._cycles(cycle, cfis)
+        strobes = [sim.wso(c) for sim, c in zip(self.sims, cycles)]
         feeds: list[Value] = [cycle.wsi, *strobes[:-1]]
-        for sim, feed in zip(self.sims, feeds):
-            sim.step(cycle, feed)
+        for sim, c, feed in zip(self.sims, cycles, feeds):
+            sim.step(c, feed)
         return strobes[-1]
+
+    def wso(
+        self, cycle: WspCycle, cfis: Optional[Sequence[tuple[Value, ...]]] = None
+    ) -> Value:
+        """The chain's WSO at the strobe of ``cycle``, without applying it."""
+        cycles = self._cycles(cycle, cfis)
+        return self.sims[-1].wso(cycles[-1])
+
+    def outputs(
+        self, cycle: WspCycle, cfis: Optional[Sequence[tuple[Value, ...]]] = None
+    ) -> list[list[Value]]:
+        """Each wrapper's cells' functional outputs at the strobe of ``cycle``."""
+        cycles = self._cycles(cycle, cfis)
+        return [sim.outputs(c) for sim, c in zip(self.sims, cycles)]
 
     def run(self, cycles: Sequence[WspCycle]) -> list[Value]:
         return [self.step(cycle) for cycle in cycles]
