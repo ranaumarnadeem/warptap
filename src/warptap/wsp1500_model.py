@@ -32,7 +32,7 @@ WSO are chained and whose other controls are shared.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Optional, Sequence, cast
+from typing import Mapping, Optional, Sequence, cast
 
 INPUT = "input"
 OUTPUT = "output"
@@ -142,6 +142,17 @@ class Wrapper1500:
             if found.code == code:
                 return found.name
         return self.instruction_of(0)
+
+
+@dataclass(frozen=True)
+class WspChainDesign:
+    """Wrappers daisy-chained on a SoC: the SoC's ``top`` module, the ``wrappers`` from
+    its WSI to its WSO, and ``pins`` -- each WSP role's SoC port and whether an inverter
+    sits between it and the wrappers (:data:`warptap.icl_emit_1500.ROLES`)."""
+
+    top: str
+    wrappers: tuple[Wrapper1500, ...]
+    pins: Mapping[str, tuple[str, bool]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
