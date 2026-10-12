@@ -44,6 +44,7 @@ nav:
       - ICL / PDL import: guide/icl-pdl-import.md
       - System-clock pulsing (-sck): guide/sck-clock-pulsing.md
       - Faultflow pattern retargeting: guide/faultflow-retargeting.md
+      - IEEE 1500 wrappers: guide/ieee1500-wrapper.md
   - API Reference:
       - Overview: reference/index.md
       - Netlist & Ingest: reference/netlist.md
@@ -53,6 +54,7 @@ nav:
       - ICL: reference/icl.md
       - BSDL: reference/bsdl.md
       - Network Integrity: reference/integrity.md
+      - IEEE 1500 wrapper: reference/ieee1500.md
       - Pattern Export: reference/pattern-export.md
       - Faultflow: reference/faultflow.md
   - Changelog: changelog.md

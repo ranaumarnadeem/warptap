@@ -7,6 +7,32 @@ implementation stage.
 
 ### Added
 
+- **IEEE 1500 wrappers and their wrapper serial port (WSP)**, the counterpart of the TAP and
+  IJTAG support, for a block wrapped to IEEE 1500 or a SoC that chains such blocks. A wrapper's
+  access logic -- the WIR, WBY and their decode -- is a test instrument: tested with an ICL
+  description and a PDL-retargeted program, not with scan ATPG. The pieces:
+  - `wsp1500_model`: `Wrapper1500` (boundary cells in wrapper chains, the WIR's width and
+    instructions, port names), `Wsp1500Sim` / `Wsp1500Chain` (the registers cycle by cycle: WIR
+    shift stage on the rising edge of WRCK and update stage on the falling edge, WRSTN, WBY, the
+    boundary register, the safe / hold / functional cell modes, an unused code acting as
+    WS_BYPASS, wrappers chained WSI to WSO), and `WspChainDesign` for a SoC top.
+  - `to_icl_1500` / `to_icl_1500_chain`: the ICL of a wrapper and of wrappers chained on a SoC,
+    in the standard shape the vendored `icl_parser` accepts (the ICL value of an instruction is
+    its code with the bits reversed, since a `ScanRegister` enters its MSB); `import_icl_1500`
+    rebuilds the model from the `warptap_*` attributes and requires the regenerated ICL to equal
+    the text byte for byte.
+  - `WspReset` and `to_wsp_rows`: the `ShiftIR` / `ShiftDR` / `Runtest` operations of a TAP played
+    on the WSP (a WIR scan, a data scan with a CaptureWR cycle and an UpdateWR cycle, idle cycles).
+  - `Wsp1500Interpreter` (`iReset`, `iTarget`, `iWrite`, `iRead`, `iRunLoop`, `iApply`) with
+    `to_pdl_1500` / `import_pdl_1500`: one `iApply` is one WIR scan through every wrapper of the
+    chain, far wrapper's bits first, then one data scan through whatever each wrapper's
+    instruction selects.
+  - `build_wsp_integrity_program`: reset, WIR length, every WIR code (a boundary register scan
+    twice with complementary ports, WBY, an unused code), a held update and a CaptureWR with the
+    WIR selected, each cycle carrying what the model expects at WSO, at each wrapped output and
+    at each wrapper chain's scan output; what the core decides is no care. The program is a
+    `warptap-wsp-program` (version 1) JSON a tool without warptap can play; `check_wsp_integrity`
+    compares measured values with it and `replay_wsp_program` plays it on a model.
 - **`capture_sync` on a READ instrument** (`InstrumentSpec(..., capture_sync=True)`): its
   bits capture through a two-TCK-flop synchronizer (`rtl/bc1_shift_only_sync.v`, reset by
   `trst_n`), for a signal from another clock domain. A capture shows the signal as it was two
