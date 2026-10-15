@@ -84,3 +84,21 @@ def test_polynomial_from_manifest_fallback_still_raises_for_unsupported_width():
     compression = {"num_channels": 12}
     with pytest.raises(FaultflowCompressionError, match="width 12"):
         polynomial_from_manifest(compression)
+
+
+@pytest.mark.parametrize("architecture", ["continuous", "something_else"])
+def test_polynomial_from_manifest_refuses_another_decompressor(architecture):
+    """faultflow's manifests now say "continuous"; the one-shot retarget would get them wrong
+    without an error, so its polynomial is refused and the message names the right retarget."""
+    compression = {
+        "architecture": architecture,
+        "num_channels": 4,
+        "polynomial": {"width": 8, "taps": [4, 5, 6]},
+    }
+    with pytest.raises(FaultflowCompressionError, match="retarget_decompressed_faultflow_patterns"):
+        polynomial_from_manifest(compression)
+
+
+def test_polynomial_from_manifest_accepts_an_explicit_one_shot():
+    compression = {"architecture": "one_shot", "polynomial": {"width": 8, "taps": [4, 5, 6]}}
+    assert polynomial_from_manifest(compression) == LfsrPolynomial(8, frozenset({4, 5, 6}))

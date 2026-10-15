@@ -129,8 +129,9 @@ def continuous_from_manifest(compression: dict) -> ContinuousDecompressor:
             raise FaultflowCompressionError(
                 f"the continuous decompressor's manifest entry has no {key}"
             )
+    polynomial = compression["polynomial"]
     decompressor = ContinuousDecompressor(
-        poly=polynomial_from_manifest(compression),
+        poly=LfsrPolynomial(int(polynomial["width"]), frozenset(polynomial["taps"])),
         phase_shifter_taps=[list(taps) for taps in compression["phase_shifter_taps"]],
         num_channels=int(compression["num_channels"]),
         warmup=int(compression["warmup"]),

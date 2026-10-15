@@ -7,6 +7,12 @@ feeding a Galois-form LFSR ring generator, expanded to each chain via a static X
 shifter. ``chain_to_instrument``'s naive 1:1 raw-chain-to-instrument map has nothing to bind to
 on this side of a compressed design.
 
+**The one-shot decompressor only.** faultflow retired it (commit ``c665de9``, October 2026): its
+manifests now say ``"architecture": "continuous"``, and :mod:`warptap.faultflow_continuous`
+retargets those. :func:`polynomial_from_manifest` refuses a manifest of any other architecture,
+so a continuous chip's patterns can't reach :func:`retarget_compressed_faultflow_patterns`
+through it and come out wrong without an error.
+
 **Port understanding, not code** (this project's own established boundary with faultflow,
 ``tapestry_handoff.md``, already applied by Stage 14 for bit-order/padding rules): the GF(2)
 math below is a native, hand-written reimplementation, cited from faultflow's real source at
@@ -93,8 +99,9 @@ class FaultflowCompressionError(WarptapError):
     """Raised for a faultflow chain id missing from ``chain_to_instrument`` (unload side,
     mirrors :class:`~warptap.faultflow_retarget.FaultflowRetargetError`), a ``load_seqs`` entry
     whose length doesn't match ``max_chain_length`` (a compression-enabled campaign's own
-    protocol invariant -- see this module's docstring), or a pattern whose specified load
-    content has no jointly-satisfying K-bit seed through this decompressor."""
+    protocol invariant -- see this module's docstring), a pattern whose specified load
+    content has no jointly-satisfying K-bit seed through this decompressor, or a manifest of
+    another decompressor (:func:`polynomial_from_manifest`)."""
 
 
 @dataclass(frozen=True)
@@ -146,7 +153,19 @@ def polynomial_from_manifest(compression: dict) -> LfsrPolynomial:
     docstring) -- when present, that's used directly, with no curated-table lookup or drift risk
     of any kind. Falls back to :func:`lookup_polynomial` on ``compression["num_channels"]`` for a
     manifest captured before faultflow started serializing this field (no ``"polynomial"`` key
-    present)."""
+    present).
+
+    Raises :class:`FaultflowCompressionError` when ``compression["architecture"]`` is present
+    and not ``"one_shot"``: this module models only the one-shot decompressor, and
+    :func:`~warptap.faultflow_continuous.retarget_decompressed_faultflow_patterns` picks the
+    retarget that matches the manifest."""
+    architecture = compression.get("architecture", "one_shot")
+    if architecture != "one_shot":
+        raise FaultflowCompressionError(
+            f"manifest['compression'] describes the {architecture!r} decompressor, not the "
+            "one-shot one this module retargets; use "
+            "warptap.faultflow_continuous.retarget_decompressed_faultflow_patterns"
+        )
     polynomial = compression.get("polynomial")
     if polynomial is None:
         return lookup_polynomial(compression["num_channels"])
