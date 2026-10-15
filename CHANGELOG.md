@@ -5,6 +5,54 @@ implementation stage.
 
 ## [Unreleased]
 
+### Added
+
+- **faultflow's continuous-flow decompressor** (`faultflow_continuous.py`, beside the one-shot
+  port in `faultflow_compression.py`): the ring generator cleared on the scan-enable rise and
+  fed `num_channels` channel bits on every shift, so a pattern has channels x shifts free bits.
+  `injector_stages` and `continuous_scan_in_rows` port its model; `solve_pattern_channels`
+  solves a pattern's whole load at once, strictly (a don't-care is a `load_care` the pattern
+  names), for the channel bit of every channel at every shift; `continuous_from_manifest` reads
+  the decompressor from `manifest["compression"]` (`architecture`, `polynomial`,
+  `phase_shifter_taps`, `warmup`, and `injectors` as a check);
+  `retarget_continuous_faultflow_patterns` pulses the clock once with scan enable low, then per
+  shift writes that shift's channel word and pulses once with scan enable high, then captures
+  and unloads as the one-shot flow does; `retarget_decompressed_faultflow_patterns` picks the
+  retarget from the manifest's `architecture` (absent: the one-shot decompressor). Tests: an
+  independent numeric model of the ring, a cross-check of every scan-in row against
+  faultflow's own model, and an Icarus Verilog run on a real `insert_continuous_compression`
+  netlist behind warptap's SIB network. A transition (launch) pattern is not retargeted, as in
+  the one-shot flow.
+- **IEEE 1500 wrappers and their wrapper serial port (WSP)**, the counterpart of the TAP and
+  IJTAG support, for a block wrapped to IEEE 1500 or a SoC that chains such blocks. A wrapper's
+  access logic -- the WIR, WBY and their decode -- is a test instrument: tested with an ICL
+  description and a PDL-retargeted program, not with scan ATPG. The pieces:
+  - `wsp1500_model`: `Wrapper1500` (boundary cells in wrapper chains, the WIR's width and
+    instructions, port names), `Wsp1500Sim` / `Wsp1500Chain` (the registers cycle by cycle: WIR
+    shift stage on the rising edge of WRCK and update stage on the falling edge, WRSTN, WBY, the
+    boundary register, the safe / hold / functional cell modes, an unused code acting as
+    WS_BYPASS, wrappers chained WSI to WSO), and `WspChainDesign` for a SoC top.
+  - `to_icl_1500` / `to_icl_1500_chain`: the ICL of a wrapper and of wrappers chained on a SoC,
+    in the standard shape the vendored `icl_parser` accepts (the ICL value of an instruction is
+    its code with the bits reversed, since a `ScanRegister` enters its MSB); `import_icl_1500`
+    rebuilds the model from the `warptap_*` attributes and requires the regenerated ICL to equal
+    the text byte for byte.
+  - `WspReset` and `to_wsp_rows`: the `ShiftIR` / `ShiftDR` / `Runtest` operations of a TAP played
+    on the WSP (a WIR scan, a data scan with a CaptureWR cycle and an UpdateWR cycle, idle cycles).
+  - `Wsp1500Interpreter` (`iReset`, `iTarget`, `iWrite`, `iRead`, `iRunLoop`, `iApply`) with
+    `to_pdl_1500` / `import_pdl_1500`: one `iApply` is one WIR scan through every wrapper of the
+    chain, far wrapper's bits first, then one data scan through whatever each wrapper's
+    instruction selects.
+  - `build_wsp_integrity_program`: reset, WIR length, every WIR code (a boundary register scan
+    three times, each starting with a capture from the driven ports and leaving a tail of 0, 1,
+    0, so a cell that follows its port instead of holding shows; WBY; an unused code), WBY held
+    across a WIR scan, a held update that shifts in the complement of the code in force, and a
+    CaptureWR with the WIR selected, each cycle carrying what the model expects at WSO, at each
+    wrapped output and at each wrapper chain's scan output; what the core decides is no care,
+    and so is an input cell on a port the tester doesn't drive (`drive=`, `()` on a SoC). The program is a
+    `warptap-wsp-program` (version 1) JSON a tool without warptap can play; `check_wsp_integrity`
+    compares measured values with it and `replay_wsp_program` plays it on a model.
+
 ## [0.0.4] - 2026-10-04
 
 ### Fixed

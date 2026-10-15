@@ -14,7 +14,9 @@ from warptap.bsr_insert import BsrInsertError, insert_bsr
 from warptap.errors import WarptapError
 from warptap.faultflow_retarget import FaultflowRetargetError, retarget_faultflow_patterns
 from warptap.icl_emit import IclEmitError, render_one_hot_data_group_module, to_icl
+from warptap.icl_emit_1500 import Icl1500Error, to_icl_1500, to_icl_1500_chain
 from warptap.icl_import import IclImportError, import_icl, import_one_hot_data_group
+from warptap.icl_import_1500 import Icl1500ImportError, import_icl_1500, import_icl_1500_file
 from warptap.icl_model import (
     Alias,
     ICLAddressError,
@@ -35,6 +37,7 @@ from warptap.icl_model import (
 from warptap.netlist import Netlist
 from warptap.pdl_emit import PdlEmitError, to_pdl
 from warptap.pdl_import import PdlImportError, import_pdl
+from warptap.pdl_1500 import Pdl1500Error, Wsp1500Interpreter, import_pdl_1500, to_pdl_1500
 from warptap.pdl_interpreter import PDLError, PDLInterpreter
 from warptap.pdl_verify import PDLVerifyError, ReadCheckResult, check_reads, correlate_observed
 from warptap.pipeline import TestAccessSpec, insert_test_access
@@ -67,6 +70,23 @@ from warptap.tap_ir import (
 from warptap.tap_ir_stapl import TapIrStaplError, to_stapl
 from warptap.tap_ir_stil import TapIrStilError, to_stil
 from warptap.tap_ir_svf import TapIrSvfError, to_svf
+from warptap.wsp1500_model import (
+    WbrCell,
+    Wrapper1500,
+    Wsp1500Chain,
+    Wsp1500Sim,
+    WspChainDesign,
+    WspCycle,
+)
+from warptap.wsp_integrity import (
+    WspIntegrityError,
+    WspIntegrityProgram,
+    build_wsp_integrity_program,
+    check_wsp_integrity,
+    replay_wsp_program,
+)
+from warptap.wsp_ir import WspReset
+from warptap.wsp_play import WspPlayError, WspRow, to_wsp_rows
 from warptap.yosys_io import YosysError, ingest, write_verilog_from_json
 
 __version__ = "0.0.4"
@@ -77,6 +97,8 @@ __all__ = [
     "WarptapError",
     "BsrInsertError",
     "FaultflowRetargetError",
+    "Icl1500Error",
+    "Icl1500ImportError",
     "IclEmitError",
     "IclImportError",
     "ICLAddressError",
@@ -85,11 +107,14 @@ __all__ = [
     "PdlImportError",
     "PDLError",
     "PDLVerifyError",
+    "Pdl1500Error",
     "SibInsertError",
     "TapIntegrityError",
     "TapIrStaplError",
     "TapIrStilError",
     "TapIrSvfError",
+    "WspIntegrityError",
+    "WspPlayError",
     "YosysError",
     # netlist / ingest / re-emit
     "Netlist",
@@ -157,6 +182,27 @@ __all__ = [
     "build_integrity_program",
     "check_integrity",
     "select_instruction",
+    # IEEE 1500 wrapper and its serial port (ICL, PDL, scan operations, integrity program)
+    "WbrCell",
+    "Wrapper1500",
+    "Wsp1500Chain",
+    "Wsp1500Interpreter",
+    "Wsp1500Sim",
+    "WspChainDesign",
+    "WspCycle",
+    "WspIntegrityProgram",
+    "WspReset",
+    "WspRow",
+    "build_wsp_integrity_program",
+    "check_wsp_integrity",
+    "import_icl_1500",
+    "import_icl_1500_file",
+    "import_pdl_1500",
+    "replay_wsp_program",
+    "to_icl_1500",
+    "to_icl_1500_chain",
+    "to_pdl_1500",
+    "to_wsp_rows",
     # faultflow
     "retarget_faultflow_patterns",
 ]
