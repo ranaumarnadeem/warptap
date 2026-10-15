@@ -7,6 +7,22 @@ implementation stage.
 
 ### Added
 
+- **faultflow's continuous-flow decompressor** (`faultflow_continuous.py`, beside the one-shot
+  port in `faultflow_compression.py`): the ring generator cleared on the scan-enable rise and
+  fed `num_channels` channel bits on every shift, so a pattern has channels x shifts free bits.
+  `injector_stages` and `continuous_scan_in_rows` port its model; `solve_pattern_channels`
+  solves a pattern's whole load at once, strictly (a don't-care is a `load_care` the pattern
+  names), for the channel bit of every channel at every shift; `continuous_from_manifest` reads
+  the decompressor from `manifest["compression"]` (`architecture`, `polynomial`,
+  `phase_shifter_taps`, `warmup`, and `injectors` as a check);
+  `retarget_continuous_faultflow_patterns` pulses the clock once with scan enable low, then per
+  shift writes that shift's channel word and pulses once with scan enable high, then captures
+  and unloads as the one-shot flow does; `retarget_decompressed_faultflow_patterns` picks the
+  retarget from the manifest's `architecture` (absent: the one-shot decompressor). Tests: an
+  independent numeric model of the ring, a cross-check of every scan-in row against
+  faultflow's own model, and an Icarus Verilog run on a real `insert_continuous_compression`
+  netlist behind warptap's SIB network. A transition (launch) pattern is not retargeted, as in
+  the one-shot flow.
 - **IEEE 1500 wrappers and their wrapper serial port (WSP)**, the counterpart of the TAP and
   IJTAG support, for a block wrapped to IEEE 1500 or a SoC that chains such blocks. A wrapper's
   access logic -- the WIR, WBY and their decode -- is a test instrument: tested with an ICL
