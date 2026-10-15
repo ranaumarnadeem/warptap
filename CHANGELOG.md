@@ -5,6 +5,27 @@ implementation stage.
 
 ## [Unreleased]
 
+## [0.0.5] - 2026-10-15
+
+### Behavior changes
+
+- **`polynomial_from_manifest` refuses a manifest whose `architecture` is not `"one_shot"`.**
+  faultflow retired its one-shot decompressor (commit `c665de9`): every compressed manifest it
+  writes now says `"architecture": "continuous"`. `retarget_compressed_faultflow_patterns`
+  models only the one-shot decompressor and never sees the manifest, so given the polynomial
+  and phase shifter of a continuous chip it produced wrong ops without an error. Reading the
+  polynomial through `polynomial_from_manifest` now raises `FaultflowCompressionError` and
+  names `retarget_decompressed_faultflow_patterns`, which picks the retarget from the
+  manifest. A manifest with no `architecture` is still the one-shot decompressor.
+  `continuous_from_manifest` reads the polynomial itself.
+
+### Not changed
+
+- **The one-shot compression cross-sim needs a faultflow from before `c665de9`.** It builds
+  the chip with faultflow's `insert_compression`, which that commit removed, so against a
+  current faultflow checkout it skips and says so. The continuous decompressor's cross-sim and
+  cross-check run against current faultflow.
+
 ### Added
 
 - **faultflow's continuous-flow decompressor** (`faultflow_continuous.py`, beside the one-shot
