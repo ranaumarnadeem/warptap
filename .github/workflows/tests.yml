@@ -1,0 +1,61 @@
+name: Tests
+
+# The full suite on every push and pull request, so a branch is tested before it reaches dev or
+# main, not only on the machine that cuts a release.
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  tests:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        # The oldest Python pyproject.toml accepts, and the one releases are tested on.
+        # third_party/icl_parser still imports typing.io, which Python 3.13 removed.
+        python-version: ["3.10", "3.12"]
+    env:
+      # No system Yosys here: the dev extra's yowasp-yosys (YosysHQ's WASM build) is the one.
+      WARPTAP_YOSYS_CMD: yowasp-yosys
+      # faultflow and autoMBIST, checked out below, for the cross-checks that need them.
+      # Tracking their development branches is on purpose: warptap ports faultflow's models
+      # and both pin warptap, so drift should show up here first.
+      WARPTAP_FAULTFLOW_DIR: ${{ github.workspace }}/siblings/faultflow
+      WARPTAP_OPENMBIST_DIR: ${{ github.workspace }}/siblings/autoMBIST
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true # third_party/icl_parser: its tests fail, not skip, without it
+      - uses: actions/checkout@v4
+        with:
+          repository: ranaumarnadeem/faultflow
+          ref: dev
+          path: siblings/faultflow
+      - uses: actions/checkout@v4
+        with:
+          repository: ranaumarnadeem/autoMBIST
+          path: siblings/autoMBIST
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install Icarus Verilog and OpenOCD
+        run: sudo apt-get update && sudo apt-get install -y iverilog openocd
+      - name: Install warptap with its dev extra
+        # jinja2: autoMBIST's generator, imported from its checkout by the design tests.
+        run: python -m pip install -e ".[dev]" jinja2
+      - name: Run the test suite
+        # -rs lists every skip and why. The Jam STAPL player is not built here, so its 3
+        # tests skip, and so does the verilog-uart test.
+        run: python -m pytest -q -rs
+
+  docs:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install ".[docs]"
+      - run: mkdocs build --strict
