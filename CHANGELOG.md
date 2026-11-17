@@ -5,6 +5,31 @@ implementation stage.
 
 ## [Unreleased]
 
+### Fixed
+
+- **The ICL of a multi-bit instrument described a 1-bit scan path.** warptap's per-bit cells
+  take SI into bit 0 and shift out of bit `width - 1`, but `to_icl` declared the register
+  `ScanRegister SR[width-1:0]` (`DR[...]` for a READ instrument) with `SO` taken from bit
+  `width - 1`. In ICL a `ScanRegister`'s `ScanInSource` feeds its leftmost declared bit, so
+  scan-in and the `SO` tap were the same bit, and a tool reading the file the standard way saw
+  one bit of the register and lost the rest: the vendored `icl_parser` walked a 2-bit chain
+  through a 3-bit instrument and its SIB, where the RTL has 4. The register is now declared
+  `[0:width-1]`. A 1-bit register (`[0:0]`) is unchanged, and so is every ScanMux `SELREG`,
+  whose RTL shifts the other way. The RTL, the PDL, `PDLInterpreter` and every warptap
+  pattern were right all along; only the ICL text changes, which includes the
+  `<top>_mbist.icl` faultflow writes. `tests/test_icl_emit_scan_order.py` checks the parser
+  walks every bit in the RTL's order, and that the old declaration hid all but one. The
+  golden ICL files are regenerated; they differ only in those declarations.
+
+### Added
+
+- **A CI workflow** (`.github/workflows/tests.yml`): the full suite on every push and pull
+  request, on Python 3.10 and 3.12, with Icarus and OpenOCD from apt, `yowasp-yosys` as Yosys,
+  and faultflow (`dev`) and autoMBIST checked out for the cross-checks; plus a strict docs
+  build. Until now only the docs deploy and the PyPI publish ran on GitHub.
+- The `dev` extra installs PyYAML, which the openMBIST design tests import; a fresh
+  `pip install -e '.[dev]'` could not collect them.
+
 ## [0.0.5] - 2026-10-15
 
 ### Behavior changes
