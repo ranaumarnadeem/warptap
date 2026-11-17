@@ -388,6 +388,24 @@ def _scan_port_bit_ref(register_name: str, width: int, bit: int) -> str:
     return register_name if width == 1 else f"{register_name}[{bit}]"
 
 
+def _scan_register_range(width: int) -> str:
+    """An instrument's ``ScanRegister`` range, scan-in end first: ``[0:width-1]``.
+
+    In ICL a ``ScanRegister``'s ``ScanInSource`` feeds its leftmost declared bit and the
+    rightmost shifts out, as published ICL writes it (``SR[7:0]`` shifting out of ``SR[0]``).
+    warptap's per-bit cells take SI into bit 0 and shift out of bit ``width - 1``
+    (:func:`warptap.sib_insert._insert_leaf_instrument_bits`), so bit 0 must be leftmost. Up to
+    0.0.5 this was declared ``[width-1:0]``: read the standard way, scan-in and the ``SO``
+    tap were then the same bit, and the vendored ``icl_parser`` saw a 1-bit path through any
+    multi-bit instrument. ``tests/test_icl_emit_scan_order.py`` checks the parser now sees
+    every bit, in the RTL's order. A ``DataRegister`` (no scan path) keeps ``[width-1:0]``,
+    and every other reference names its bits explicitly (``WriteDataSource SR[width-1:0]``,
+    ``CaptureSource SR[0:width-1]``), so bit ``k`` of one is still bit ``k`` of the other.
+    ``rtl/scan_mux_cell.v`` shifts the other way (SI into its MSB, out of bit 0), so a
+    ScanMux's ``SELREG`` keeps ``[width-1:0]``."""
+    return f"[0:{width - 1}]"
+
+
 def _render_aliases(aliases, register_name: str) -> list:
     """One ``Alias <name>[hi:0] = <register_name>[abs_hi:abs_lo];`` per declared alias --
     real ICL rebases the alias's OWN declared range to start at 0 regardless of the source's
@@ -447,6 +465,7 @@ def render_instrument_module(instrument: InstrumentNode) -> str:
                 "real for it to drive, so there is nothing honest to emit as its DataOutPort"
             )
         bits = f"[{width - 1}:0]"
+        scan_bits = _scan_register_range(width)
         reset_value = f"{width}'b0"
         drive_comment = (
             "    // DataOutPort DO drives real host port bit(s): "
@@ -458,7 +477,8 @@ def render_instrument_module(instrument: InstrumentNode) -> str:
         # SO's own single-bit source: sib_insert._insert_leaf_instrument_bits's own per-bit
         # chain returns its LAST iteration's so (k == width - 1) as the module's own external
         # SO -- that cell handles value bit width-1, the MSB. See _scan_port_bit_ref's own
-        # docstring for why this bit index is confirmed per-construct, never assumed.
+        # docstring for why this bit index is confirmed per-construct, never assumed. SI
+        # enters bit 0, so SR is declared [0:width-1] (see _scan_register_range).
         so_source = _scan_port_bit_ref("SR", width, width - 1)
         return (
             f"Module {module_name} {{\n"
@@ -467,9 +487,9 @@ def render_instrument_module(instrument: InstrumentNode) -> str:
             "    ScanInPort SI;\n"
             f"    ScanOutPort SO {{ Source {so_source}; }}\n"
             "\n"
-            f"    ScanRegister SR{bits} {{\n"
+            f"    ScanRegister SR{scan_bits} {{\n"
             "        ScanInSource SI;\n"
-            f"        CaptureSource SR{bits};  // self-capture: mirrors instrument_write.v's\n"
+            f"        CaptureSource SR{scan_bits};  // self-capture: mirrors instrument_write.v's\n"
             "                                   // own shift_ff <= po read-back-what-was-\n"
             "                                   // last-committed behavior\n"
             f"        ResetValue {reset_value};\n"
@@ -486,8 +506,9 @@ def render_instrument_module(instrument: InstrumentNode) -> str:
         )
 
     # READ (rtl/bc1_shift_only.v shape): capture + shift only, no update latch.
+    scan_bits = _scan_register_range(width)
     if instrument.signal_bits:
-        capture_source = f"DR[{width - 1}:0]"
+        capture_source = f"DR{scan_bits}"
         binding_comment = (
             f"    // CaptureSource fans out from real host port bit(s): "
             + ", ".join(f"{b.port_name}[{b.bit}]" for b in instrument.signal_bits)
@@ -511,7 +532,7 @@ def render_instrument_module(instrument: InstrumentNode) -> str:
         f"    ScanOutPort SO {{ Source {so_source}; }}",
         "",
         binding_comment.rstrip("\n"),
-        f"    ScanRegister DR[{width - 1}:0] {{",
+        f"    ScanRegister DR{scan_bits} {{",
         "        ScanInSource SI;",
     ]
     if capture_source is not None:

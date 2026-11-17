@@ -87,7 +87,7 @@ Module warptap_instr_deep_b {
     // warptap: fixed stub capture_value=0x1 -- no
     // real CaptureSource; ICL has no confirmed mechanism for a constant capture
     // source, so none is fabricated here (see module docstring).
-    ScanRegister DR[1:0] {
+    ScanRegister DR[0:1] {
         ScanInSource SI;
         ResetValue 2'b0;
     }
@@ -100,7 +100,7 @@ Module warptap_instr_arm_two {
     // warptap: fixed stub capture_value=0x6 -- no
     // real CaptureSource; ICL has no confirmed mechanism for a constant capture
     // source, so none is fabricated here (see module docstring).
-    ScanRegister DR[2:0] {
+    ScanRegister DR[0:2] {
         ScanInSource SI;
         ResetValue 3'b0;
     }

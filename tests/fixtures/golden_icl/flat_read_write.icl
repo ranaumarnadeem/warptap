@@ -24,7 +24,7 @@ Module warptap_instr_sensor {
     // warptap: fixed stub capture_value=0x5 -- no
     // real CaptureSource; ICL has no confirmed mechanism for a constant capture
     // source, so none is fabricated here (see module docstring).
-    ScanRegister DR[2:0] {
+    ScanRegister DR[0:2] {
         ScanInSource SI;
         ResetValue 3'b0;
     }
@@ -36,9 +36,9 @@ Module warptap_instr_ctrl {
     ScanInPort SI;
     ScanOutPort SO { Source SR[1]; }
 
-    ScanRegister SR[1:0] {
+    ScanRegister SR[0:1] {
         ScanInSource SI;
-        CaptureSource SR[1:0];  // self-capture: mirrors instrument_write.v's
+        CaptureSource SR[0:1];  // self-capture: mirrors instrument_write.v's
                                    // own shift_ff <= po read-back-what-was-
                                    // last-committed behavior
         ResetValue 2'b0;

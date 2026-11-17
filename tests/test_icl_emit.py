@@ -74,7 +74,8 @@ def test_read_instrument_with_signal_bits_has_real_capture_source():
     block = render_instrument_module(
         _read_instrument(signal_bits=(SignalBinding("status_out"),))
     )
-    assert "CaptureSource DR[2:0];" in block
+    assert "ScanRegister DR[0:2] {" in block  # scan-in end first: see _scan_register_range
+    assert "CaptureSource DR[0:2];" in block
     assert "status_out[0]" in block
 
 
