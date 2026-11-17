@@ -42,6 +42,8 @@ dev = [
     # It does not declare lark, which it imports.
     "Semi-ATE-STIL==0.3.2",
     "lark",
+    # The openMBIST (autoMBIST) design tests write their memory configs as YAML.
+    "pyyaml",
 ]
 docs = ["mkdocs>=1.6", "mkdocs-material>=9.5", "mkdocstrings[python]>=1.0"]
 
