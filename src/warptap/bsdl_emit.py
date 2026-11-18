@@ -152,8 +152,8 @@ def _design_warning(placeholder_idcode: bool, ijtag_access_opcode: int | None) -
         "or BOUNDARY_REGISTER is declared, so a tool that requires a boundary register will "
         "reject this file. "
         + routing
-        + "Not fully IEEE 1149.1 conformant: TDO changes on the rising edge of TCK and is driven "
-        "low, not tri-stated, outside the shift states"
+        + "Not fully IEEE 1149.1 conformant: TDO is driven low, not tri-stated, outside the "
+        "shift states"
         + (
             ", and the IDCODE value is a placeholder, not a registered manufacturer ID. "
             if placeholder_idcode

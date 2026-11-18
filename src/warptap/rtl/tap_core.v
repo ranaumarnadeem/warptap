@@ -15,6 +15,11 @@
 // The instruction resets to IDCODE (BYPASS without HAS_IDCODE) both on trst_n and in
 // Test-Logic-Reset, as IEEE 1149.1 requires, so five TMS=1 cycles deselect any test-mode
 // instruction without a TRST pin. Every register here is reset by trst_n.
+//
+// TDO changes on the falling edge of TCK, as IEEE 1149.1 requires, so whatever samples it on the
+// next rising edge (a tester, or the next device's TDI in a board chain) gets half a TCK period
+// of setup and hold. Up to warptap 0.0.5 it was driven straight from the mux below and changed
+// just after the rising edge, which left only clock-to-output delay as hold time.
 module tap_core #(
     parameter IR_WIDTH = 4,
     parameter [IR_WIDTH-1:0] OPCODE_EXTEST = 4'b0000,
@@ -143,23 +148,33 @@ module tap_core #(
         end
     end
 
-    // TDO mux: combinational from the *current* (pre-edge) register contents, so it
-    // presents the bit about to be shifted out throughout the cycle -- matches
-    // TapModel.tick() computing its returned tdo before mutating its own registers.
-    // Only meaningful while resident in Shift-IR/Shift-DR; 0 elsewhere.
+    // TDO mux: combinational from the register contents after the last rising edge, i.e. the
+    // bit the next rising edge shifts out. Only meaningful while resident in Shift-IR/Shift-DR;
+    // 0 elsewhere.
+    reg tdo_next;
     always @(*) begin
         if (state == SHIFT_IR) begin
-            tdo = ir_shift[0];
+            tdo_next = ir_shift[0];
         end else if (state == SHIFT_DR) begin
             if (HAS_IDCODE && current_instruction_r == OPCODE_IDCODE)
-                tdo = idcode_shift[0];
+                tdo_next = idcode_shift[0];
             else if (current_instruction_r == BYPASS_OPCODE)
-                tdo = bypass_bit;
+                tdo_next = bypass_bit;
             else
-                tdo = external_dr_tdo;
+                tdo_next = external_dr_tdo;
         end else begin
-            tdo = 1'b0;
+            tdo_next = 1'b0;
         end
+    end
+
+    // ... launched on the falling edge (see the header): during each cycle, before its rising
+    // edge, TDO shows the bit that edge shifts out -- what TapModel.tick() returns before it
+    // mutates its own registers.
+    always @(negedge tck or negedge trst_n) begin
+        if (!trst_n)
+            tdo <= 1'b0;
+        else
+            tdo <= tdo_next;
     end
 
 endmodule

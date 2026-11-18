@@ -32,7 +32,8 @@ stil = to_stil(
 In each TCK cycle TMS and TDI change at 0, TDO is compared at a quarter period, and TCK rises
 at half and falls at three quarters; `to_stil` below says why. A `Runtest` or `PulsePin` of
 many cycles is written as one `Loop`. Releases up to 0.0.3 compared TDO after the rising edge,
-so on warptap's own TAP every compare checked the next bit.
+so on warptap's TAP of those releases, which changed TDO on that edge, every compare checked the
+next bit. The TAP has changed TDO on the falling edge since 0.0.6, as IEEE 1149.1 requires.
 
 ::: warptap.tap_ir
     options:

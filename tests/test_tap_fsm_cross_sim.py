@@ -197,11 +197,15 @@ def test_every_tap_core_register_is_reset_by_trst_n(yosys_command):
     mod = ingest([_RTL_PATH], "tap_core", yosys_command=yosys_command)["modules"]["tap_core"]
     trst_n = mod["ports"]["trst_n"]["bits"]
     flops = [cell for cell in mod["cells"].values() if "dff" in cell["type"]]
-    assert len(flops) == 5  # state, ir_shift, current_instruction_r, idcode_shift, bypass_bit
+    # state, ir_shift, current_instruction_r, idcode_shift, bypass_bit, and tdo
+    assert len(flops) == 6
     for cell in flops:
         assert cell["type"] == "$adff"
         assert cell["connections"]["ARST"] == trst_n
         assert int(cell["parameters"]["ARST_POLARITY"], 2) == 0
+    # Only tdo is clocked on the falling edge (IEEE 1149.1); everything else on the rising one.
+    falling = [cell for cell in flops if int(cell["parameters"]["CLK_POLARITY"], 2) == 0]
+    assert [cell["connections"]["Q"] for cell in falling] == [mod["ports"]["tdo"]["bits"]]
 
 
 def test_tap_core_ingests_via_yosys(yosys_command):

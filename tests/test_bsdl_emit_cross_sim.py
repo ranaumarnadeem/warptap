@@ -20,8 +20,9 @@ Checked here:
   PRELOAD by default; IJTAG_ACCESS alone with it): TDO follows ``external_dr_tdo``.
 - IDCODE as the default instruction: Test-Logic-Reset selects it whether it's reached through TMS
   or through the TRST pin (active low).
-- The ``DESIGN_WARNING`` claims: TDO is low outside the shift states, and TDO changes on the
-  rising edge of TCK only.
+- The ``DESIGN_WARNING`` claim that TDO is low, not tri-stated, outside the shift states; and that
+  TDO changes on the falling edge of TCK only, as IEEE 1149.1 requires and the BSDL therefore
+  doesn't warn about (up to 0.0.5 it changed on the rising edge, and the warning said so).
 
 Not checkable by simulation, and not checked here: the ``TAP_SCAN_CLOCK`` frequency (timing is
 supplied by the integrator, not an RTL property), ``PHYSICAL_PIN_MAP``/``PIN_MAP`` (a placeholder
@@ -159,9 +160,14 @@ def _observed(result: Result, ops) -> List[int]:
 
 
 def _ext_stream(ops, op_index: int, n: int) -> int:
-    """The external_dr_tdo bits (LSB first) the testbench drove during shift op ``op_index``."""
+    """The external_dr_tdo bits (LSB first) that reach TDO during shift op ``op_index``.
+
+    TDO launches on the falling edge what ``external_dr_tdo`` shows then, and the testbench
+    drives ``external_dr_tdo`` once per tick, before that tick's edges: so shift cycle ``k`` reads
+    the value driven a tick earlier. A real network's tail changes at the rising edge before
+    the falling edge that launches it, which this testbench's early drive stands in for."""
     start, _ = shift_op_ranges(ops)[op_index]
-    return bits_to_int([_ext(_LEAD_IN_TICKS + start + k) for k in range(n)])
+    return bits_to_int([_ext(_LEAD_IN_TICKS + start + k - 1) for k in range(n)])
 
 
 def _load_ir(opcode: int, ir_width: int) -> list:
@@ -298,12 +304,12 @@ def test_a_tms_reset_and_the_trst_pin_both_select_idcode(bsdl, sim):
     assert (after_trst.state, after_trst.instr) == (_TLR, idcode)
 
 
-def test_tdo_is_low_outside_the_shift_states_and_changes_only_on_the_rising_edge(bsdl, sim):
-    """Two DESIGN_WARNING claims, checked over a long run with a network instruction selected
-    and external_dr_tdo held high (so any leak of it onto TDO outside a shift state is visible):
-    TDO is driven low, not tri-stated or passed through, outside Shift-DR/Shift-IR; and it never
-    differs between just-after-rising-edge and just-after-falling-edge (it changes only at the
-    rising edge -- 1149.1 wants the falling edge)."""
+def test_tdo_is_low_outside_the_shift_states_and_changes_only_on_the_falling_edge(bsdl, sim):
+    """Checked over a long run with a network instruction selected and external_dr_tdo held
+    high (so any leak of it onto TDO outside a shift state is visible): TDO is driven low, not
+    tri-stated or passed through, outside Shift-DR/Shift-IR (the DESIGN_WARNING claim); and it
+    never differs between just before and just after the rising edge, so it changes only at
+    the falling edge, as IEEE 1149.1 requires."""
     length = bsdl.instruction_length
     network = _opcode(bsdl, _network_instructions(bsdl)[0])
     ops = _load_ir(network, length) + _scan_dr(16, 0xA5A5)
@@ -316,10 +322,10 @@ def test_tdo_is_low_outside_the_shift_states_and_changes_only_on_the_rising_edge
     for i, s in enumerate(samples):
         if s.state not in _SHIFT_STATES:
             assert s.tdo_pre == 0, f"TDO not low pre-edge in state {s.state} (tick {i})"
-        assert s.tdo_rise == s.tdo_fall, f"TDO changed on the falling edge (tick {i})"
+        assert s.tdo_pre == s.tdo_rise, f"TDO changed on the rising edge (tick {i})"
     for prev, nxt in zip(samples, samples[1:]):
         if nxt.state not in _SHIFT_STATES:
-            assert prev.tdo_rise == 0 and prev.tdo_fall == 0
-    # ... and TDO really does change at rising edges (shifting IR/DR bits), so the equality
+            assert prev.tdo_fall == 0  # the falling edge after leaving a shift state drives it low
+    # ... and TDO really does change at falling edges (shifting IR/DR bits), so the equality
     # above is not vacuous.
-    assert any(s.tdo_pre != s.tdo_rise for s in samples)
+    assert any(s.tdo_rise != s.tdo_fall for s in samples)

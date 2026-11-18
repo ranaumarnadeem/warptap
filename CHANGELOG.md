@@ -5,6 +5,22 @@ implementation stage.
 
 ## [Unreleased]
 
+### Behavior changes
+
+- **The inserted TAP changes TDO on the falling edge of TCK, as IEEE 1149.1 requires.**
+  `rtl/tap_core.v` drove TDO straight from its output mux, so it changed just after the rising
+  edge, and whatever sampled it on that edge (a tester, or the next device's TDI in a board
+  chain) had only clock-to-output delay as hold time. A falling-edge flop, reset by `trst_n`,
+  now launches the same bit half a period earlier, so it is stable from the falling edge before
+  the rising edge that samples it to the falling edge after. The bit each cycle shows is
+  unchanged, so `TapModel`, the patterns and the PDL are unchanged; a testbench that samples
+  TDO just before the rising edge, as warptap's own do, sees the same values. One that samples
+  just after the rising edge, or drives the network's tail combinationally within a cycle, sees
+  the bit a cycle later. The BSDL `DESIGN_WARNING` no longer says TDO changes on the rising
+  edge; TDO is still driven low, not tri-stated, outside the shift states. The STIL timing
+  (TDO compared at T/4) is correct for both kinds of TAP; the 0.0.3 timing, wrong for the old
+  TAP, happens to be right for the new one.
+
 ### Fixed
 
 - **The ICL of a multi-bit instrument described a 1-bit scan path.** warptap's per-bit cells

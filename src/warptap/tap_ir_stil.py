@@ -349,13 +349,14 @@ def to_stil(
 
     A vector's expected TDO bit is the one the TAP shows *before* that vector's rising edge,
     the edge that shifts it out: :meth:`~warptap.tap_model.TapModel.tick` returns it before it
-    clocks, and ``ShiftIR``/``ShiftDR``'s ``tdo`` holds those bits. ``rtl/tap_core.v`` changes
-    TDO on the rising edge, so that bit is valid from the previous rise (-T/2) to this one
-    (T/2). A TAP that changes TDO on the falling edge, as IEEE 1149.1 requires, shows it from
-    the previous fall (-T/4) to this cycle's fall (3T/4). A strobe at T/4 lies inside both
-    windows and is at least T/4 from any TDO change in either. TMS and TDI get T/2 of setup
-    before the rise and T/2 of hold after it. Up to 0.0.3, TCK rose at 1ns and TDO was compared
-    at 2ns, after the rising edge, so on ``tap_core`` every compare checked the next bit.
+    clocks, and ``ShiftIR``/``ShiftDR``'s ``tdo`` holds those bits. A TAP that changes TDO on
+    the falling edge, as IEEE 1149.1 requires and ``rtl/tap_core.v`` does, shows it from the
+    previous fall (-T/4) to this cycle's fall (3T/4). One that changes TDO on the rising edge,
+    as ``tap_core`` did up to 0.0.5, shows it from the previous rise (-T/2) to this one (T/2). A
+    strobe at T/4 lies inside both windows and is at least T/4 from any TDO change in either.
+    TMS and TDI get T/2 of setup before the rise and T/2 of hold after it. Up to 0.0.3, TCK rose
+    at 1ns and TDO was compared at 2ns, after the rising edge, so on the rising-edge
+    ``tap_core`` of those releases every compare checked the next bit.
 
     A ``PulsePin``'s port has the same shape in its own period: low at 0, rising at T/2,
     falling at 3T/4. Its ``hold_pins`` change at 0, half a period before the rising edge."""

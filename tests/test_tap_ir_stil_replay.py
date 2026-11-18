@@ -12,11 +12,14 @@ EXTEST write, a ``PulsePin`` and a read-back through an inserted network all com
 Controls, each on the same pattern:
 
 - a wrong expected bit fails at that bit, and only there;
-- the 0.0.3 timing (TCK rising at 1ns, TDO compared at 2ns) fails, each compare seeing the next
-  bit;
+- a strobe moved after TCK falls fails, each compare seeing the next bit, since ``tap_core``
+  changes TDO on the falling edge;
 - leaving the ``PulsePin`` out fails the read, so the replay really clocks the functional logic.
 
-The 0.0.3 TCK edge with only the strobe moved before it passes: that observation found the bug.
+The 0.0.3 timing (TCK rising at 1ns, TDO compared at 2ns) compared after the rising edge. On
+the ``tap_core`` of 0.0.5 and earlier, which changed TDO at that edge, each compare saw the next
+bit: that is the bug these tests were written for. On today's ``tap_core`` it passes, because
+TDO changes at the falling edge, which that waveform puts at 0ns.
 """
 
 from __future__ import annotations
@@ -78,6 +81,16 @@ def _with_0_0_3_timing(text: str, strobe: str = "2ns") -> str:
     return text
 
 
+def _with_strobe_at(text: str, strobe: str) -> str:
+    """``text`` with jtag_wft's TDO compared at ``strobe`` instead of a quarter period."""
+    text, tdo = re.subn(
+        r"tdo \{ HLX \{ '0ns' X; '[^']*' H/L/X; \}\}",
+        f"tdo {{ HLX {{ '0ns' X; '{strobe}' H/L/X; }}}}", text,
+    )
+    assert tdo == 1
+    return text
+
+
 def test_idcode_reads_back(stil_replay):
     result = stil_replay(to_stil(_idcode_ops(), jtag_period="50ns"), [_TAP_CORE], "tap_core",
                          **_TAP_CORE_PINS)
@@ -108,16 +121,19 @@ def test_a_wrong_expected_bit_fails_at_that_bit_only(stil_replay):
     assert re.search(r"expected (0, got 1|1, got 0)$", result.mismatches[0])
 
 
-def test_0_0_3_timing_compares_each_bit_against_the_next_one(stil_replay):
-    text = _with_0_0_3_timing(to_stil(_idcode_ops(), jtag_period="50ns"))
+def test_a_strobe_after_tck_falls_compares_each_bit_against_the_next_one(stil_replay):
+    """At 50ns TCK falls at 37.5ns and TDO changes with it, so a strobe at 45ns reads the next
+    bit (on the scan's last cycle, Exit1-DR's 0)."""
+    text = _with_strobe_at(to_stil(_idcode_ops(), jtag_period="50ns"), "45ns")
     result = stil_replay(text, [_TAP_CORE], "tap_core", **_TAP_CORE_PINS)
     bits = bits_from_int(IDCODE_VALUE, 32)
-    seen = bits[1:] + [0]  # after the rising edge: the next bit, then Exit1-DR's 0
+    seen = bits[1:] + [0]
     assert len(result.mismatches) == sum(b != s for b, s in zip(bits, seen)) > 0
 
 
-def test_the_0_0_3_rise_with_only_the_strobe_moved_before_it_passes(stil_replay):
-    text = _with_0_0_3_timing(to_stil(_idcode_ops(), jtag_period="50ns"), strobe="500ps")
+def test_the_0_0_3_timing_passes_now_that_tdo_changes_on_the_falling_edge(stil_replay):
+    """0.0.3 compared at 2ns, after its 1ns rising edge; the cycle's falling edge is at 0ns."""
+    text = _with_0_0_3_timing(to_stil(_idcode_ops(), jtag_period="50ns"))
     assert stil_replay(text, [_TAP_CORE], "tap_core", **_TAP_CORE_PINS).mismatches == []
 
 
@@ -168,7 +184,7 @@ def test_write_pulse_read_through_an_inserted_network(stil_replay, real_signal_n
     assert result.mismatches == []
 
 
-@pytest.mark.parametrize("control", ["wrong_expected", "0.0.3_timing", "no_pulse"])
+@pytest.mark.parametrize("control", ["wrong_expected", "strobe_after_fall", "no_pulse"])
 def test_inserted_network_controls_fail(control, stil_replay, real_signal_network):
     graph, root, path = real_signal_network
     pins = {}
@@ -180,8 +196,8 @@ def test_inserted_network_controls_fail(control, stil_replay, real_signal_networ
     else:
         ops = _write_pulse_read(graph, root)
     text = to_stil(ops, jtag_period="50ns", pulse_periods={"clk": "10ns"})
-    if control == "0.0.3_timing":
-        text = _with_0_0_3_timing(text)
+    if control == "strobe_after_fall":
+        text = _with_strobe_at(text, "45ns")
     assert _replay_real_signal(stil_replay, path, text, **pins).mismatches
 
 
