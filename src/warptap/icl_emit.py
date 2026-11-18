@@ -95,12 +95,14 @@ rejects it with ``Cannot find ScanInterface "" in instance``. MAST takes exactly
 instruction and walks back from that interface's scan-out port through every instance that
 feeds it, so the interface whose ``SO`` is the chain's end covers the whole chain; up to 0.0.5
 the list named the first slot instead, which covers only that slot. **Not confirmed by any
-tool:** MAST builds no model from any AccessLink on warptap's network. Naming a top-level slot
-crashes it as it walks out of that instance into the rest of the top module; its own AccessLink
-examples, like the standard's published ones, name a single instance that holds the whole
-network. Moving warptap's network into such a wrapper module would change every instance path
-in the ICL and PDL, and MAST still stops on that shape with an unresolved path-selector error, so
-it is not done. The top-level slots' ``SEL`` ports stay unbound in the ``Instance`` statements.
+tool**, and MAST cannot confirm it: it models no SIB below an AccessLink at all. Naming a
+top-level slot crashes it as it walks out of that instance into the rest of the top module.
+Its own AccessLink examples, like the standard's published ones, name a single instance that
+holds the whole network, and MAST does model a daisy chain of plain registers in that shape;
+but with a SIB in it, MAST's own ``SIB_mux_pre`` module as much as warptap's, it stops with an
+unresolved path-selector error. Moving warptap's network into such a wrapper module would
+change every instance path in the ICL and PDL and still not be checkable, so it is not done.
+The top-level slots' ``SEL`` ports stay unbound in the ``Instance`` statements.
 
 **The vendored raw ICL parser cannot check any ordinarily formatted AccessLink**: its
 ``AccessLinkGeneric_def`` is a *lexer* rule (``icl.g4:395-396``), so ``AccessLink X Of

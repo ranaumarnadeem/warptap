@@ -41,11 +41,13 @@ implementation stage.
   ScanMux module has two scan interfaces, so a bare name doesn't say which, and MAST rejects it
   (`Cannot find ScanInterface "" in instance`). MAST walks back from the named interface's
   scan-out, so the slot at the chain's end covers the whole chain, where the first slot covered
-  only itself. Not yet confirmed by a tool: MAST, built and run on warptap's ICL, builds no
-  model from any AccessLink on this network. Naming a top-level slot crashes it, and its own
-  examples name a single instance that holds the whole network, a shape warptap doesn't emit.
-  faultflow's `test_insert_jtag.py` checks the old text, so it needs the new one when it
-  re-pins.
+  only itself. Not confirmed by a tool, and MAST cannot confirm it: built and run on warptap's
+  ICL, it models no SIB below an AccessLink. Naming a top-level slot crashes it. Moving the
+  network into one wrapper instance, the shape MAST's own examples use, works in MAST for a
+  daisy chain of plain registers, but with any SIB in it, MAST's own SIB module included, MAST
+  stops with an unresolved path-selector error; so warptap keeps its instance paths and does
+  not restructure. faultflow's `test_insert_jtag.py` checks the old text, so it needs the new
+  one when it re-pins.
 
 ### Added
 
