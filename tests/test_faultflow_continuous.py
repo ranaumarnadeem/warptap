@@ -365,33 +365,29 @@ def test_the_architecture_in_the_manifest_picks_the_retarget():
     assert len([op for op in ops if isinstance(op, PulsePin)]) == 1 + 5 + 1
 
 
-def test_a_manifest_without_an_architecture_is_the_one_shot_decompressor():
+@pytest.mark.parametrize("architecture", [None, "one_shot", "something_else"])
+def test_a_manifest_that_is_not_the_continuous_decompressor_is_refused(architecture):
+    """No architecture, or "one_shot", is faultflow's retired one-shot decompressor, which
+    warptap stopped retargeting after 0.0.5; anything else is unknown."""
     graph, root = _graph_root(2)
-    one_shot = {
+    manifest = {
         "enabled": True,
         "num_channels": 8,
         "polynomial": {"width": 2, "taps": [1]},
         "phase_shifter_taps": [[0], [1]],
     }
-    ops = retarget_decompressed_faultflow_patterns(
-        [
-            {
-                "load_seqs": {"0": [True, False, True], "1": [False, True, True]},
-                "expected_unload": {},
-                "capture_pi_values": {},
-            }
-        ],
-        {},
-        "tdi_channel",
-        graph,
-        root,
-        compression=one_shot,
-        max_chain_length=3,
-        clock_port="clk",
-        scan_enable_port="scan_en",
-    )
-    # The one-shot flow: one idle-settle pulse, then max_chain_length shift edges at once.
-    assert [op for op in ops if isinstance(op, PulsePin)] == [
-        PulsePin("clk", 1, hold_pins=(("scan_en", 0),)),
-        PulsePin("clk", 3, hold_pins=(("scan_en", 1),)),
-    ]
+    if architecture is not None:
+        manifest["architecture"] = architecture
+    match = "unknown decompressor" if architecture == "something_else" else "one-shot.*0.0.5"
+    with pytest.raises(FaultflowCompressionError, match=match):
+        retarget_decompressed_faultflow_patterns(
+            [{"load_seqs": {"0": [True, False, True]}, "expected_unload": {}}],
+            {},
+            "tdi_channel",
+            graph,
+            root,
+            compression=manifest,
+            max_chain_length=3,
+            clock_port="clk",
+            scan_enable_port="scan_en",
+        )

@@ -1,5 +1,5 @@
-"""faultflow's continuous-flow scan decompressor: its model and pattern retargeting (W1, next
-to ``faultflow_compression.py``'s one-shot port).
+"""faultflow's continuous-flow scan decompressor: its model and pattern retargeting, on the
+ring generator and GF(2) solve in ``faultflow_compression.py``.
 
 The decompressor (``faultflow/scan/ring_generator.py`` and ``compression.py`` in faultflow;
 ported here as understanding, not as an import): a Galois ring generator of ``poly.width``
@@ -19,15 +19,15 @@ once, strictly -- a don't-care is a ``load_care`` the pattern names, nothing els
 returns each channel's bit for each shift. :func:`retarget_continuous_faultflow_patterns` drives
 them through the JTAG network: one clock pulse with scan enable low, then for each shift a
 write of that shift's channel word and one pulse with scan enable high, then the capture and
-the unload as in the one-shot flow.
+the unload.
 
 ``manifest["compression"]`` describes the decompressor: ``architecture`` (``"continuous"``;
-absent or ``"one_shot"`` is the older decompressor, which
-:func:`retarget_decompressed_faultflow_patterns` hands to ``faultflow_compression``),
+absent or ``"one_shot"`` is faultflow's retired one-shot decompressor, which warptap stopped
+retargeting after 0.0.5, so :func:`retarget_decompressed_faultflow_patterns` raises for it),
 ``num_channels``, ``polynomial`` (``{"width", "taps"}``), ``phase_shifter_taps``, ``warmup``
 and, as a check, ``injectors``.
 
-Not retargeted here: a transition (launch) pattern, as in the one-shot flow.
+Not retargeted here: a transition (launch) pattern.
 """
 
 from __future__ import annotations
@@ -40,8 +40,6 @@ from warptap.faultflow_compression import (
     LfsrPolynomial,
     _step,
     _xor_reduce,
-    polynomial_from_manifest,
-    retarget_compressed_faultflow_patterns,
     solve_xor_broadcast,
 )
 from warptap.faultflow_retarget import (
@@ -219,9 +217,9 @@ def retarget_continuous_faultflow_patterns(
     clock once with scan enable low (so the next edge's scan-enable rise clears the ring),
     then for each shift write that shift's channel word to ``compression_channel_instrument``
     (a ``num_channels``-bit WRITE instrument on the composed netlist's channel port) and pulse
-    the clock once with scan enable high. The unload side is
-    :mod:`warptap.faultflow_compression`'s: capture pulse (scan enable low, the pattern's
-    ``capture_pi_values``), then a read of each raw ``scan_out_N`` chain."""
+    the clock once with scan enable high. The unload side is the one faultflow's retired
+    one-shot flow used: a capture pulse (scan enable low, the pattern's ``capture_pi_values``),
+    then a read of each raw ``scan_out_N`` chain."""
     pdl = PDLInterpreter(graph, root)
     for pattern_index, pattern in enumerate(patterns):
         load_seqs: dict = pattern.get("load_seqs", {})
@@ -292,35 +290,28 @@ def retarget_decompressed_faultflow_patterns(
     scan_enable_port: str,
     clock_pulse_count: int = 1,
 ) -> list:
-    """Retarget through whichever decompressor ``manifest["compression"]`` says is on the
-    chip: ``architecture == "continuous"`` the continuous one, anything else (absent: the
-    older one) :func:`~warptap.faultflow_compression.retarget_compressed_faultflow_patterns`."""
+    """Retarget through the decompressor ``manifest["compression"]`` says is on the chip, which
+    must be the continuous one (``architecture == "continuous"``). A manifest without an
+    ``architecture``, or with ``"one_shot"``, is faultflow's retired one-shot decompressor:
+    warptap 0.0.5 is the last release that retargets it, and this raises
+    :class:`~warptap.faultflow_compression.FaultflowCompressionError` naming that."""
     architecture = compression.get("architecture", "one_shot")
-    if architecture == "continuous":
-        return retarget_continuous_faultflow_patterns(
-            patterns,
-            chain_to_instrument,
-            compression_channel_instrument,
-            graph,
-            root,
-            decompressor=continuous_from_manifest(compression),
-            max_chain_length=max_chain_length,
-            clock_port=clock_port,
-            scan_enable_port=scan_enable_port,
-            clock_pulse_count=clock_pulse_count,
+    if architecture == "one_shot":
+        raise FaultflowCompressionError(
+            "manifest['compression'] describes faultflow's one-shot decompressor, which "
+            "faultflow retired; warptap 0.0.5 is the last release that retargets it"
         )
-    if architecture != "one_shot":
+    if architecture != "continuous":
         raise FaultflowCompressionError(
             f"unknown decompressor architecture {architecture!r}"
         )
-    return retarget_compressed_faultflow_patterns(
+    return retarget_continuous_faultflow_patterns(
         patterns,
         chain_to_instrument,
         compression_channel_instrument,
         graph,
         root,
-        poly=polynomial_from_manifest(compression),
-        phase_shifter_taps=[list(t) for t in compression["phase_shifter_taps"]],
+        decompressor=continuous_from_manifest(compression),
         max_chain_length=max_chain_length,
         clock_port=clock_port,
         scan_enable_port=scan_enable_port,

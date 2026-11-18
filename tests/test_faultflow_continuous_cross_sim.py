@@ -18,7 +18,7 @@ import tempfile
 from pathlib import Path
 
 import pytest
-from test_faultflow_compression_cross_sim import (
+from compressed_netlist_helpers import (
     _RESET_LEAD_IN,
     _blackbox_stub_verilog,
     _correlate_skipping_pulses,

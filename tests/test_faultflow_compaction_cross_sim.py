@@ -1,7 +1,7 @@
 """RTL cross-simulation for faultflow compaction-aware pattern retargeting (Stage 24) -- the
 gold-standard validation tier this project reserves for exactly this kind of correctness-
-critical translation (mirrors test_faultflow_compression_cross_sim.py's own discipline, which
-in turn mirrors test_faultflow_retarget_cross_sim.py's). Drives a REAL
+critical translation (mirrors test_faultflow_continuous_cross_sim.py's discipline, which in
+turn mirrors test_faultflow_retarget_cross_sim.py's). Drives a REAL
 faultflow.scan.compaction.insert_compaction()-produced, warptap-SIB-inserted netlist through
 real Icarus Verilog, proving retarget_compacted_faultflow_patterns's op sequence (per-chain
 writes via chain_to_instrument, a capture edge, then per-cycle tdo-channel sampling
@@ -9,9 +9,10 @@ interleaved with shift-clock pulses) actually works on real synthesized hardware
 real, synthesized XOR-tree compactor genuinely folding two chains' worth of content into one
 output bit, not just a single chain's value passing straight through.
 
-Needs a real faultflow checkout (WARPTAP_FAULTFLOW_DIR / faultflow_dir fixture) -- see
-test_faultflow_compression_cross_sim.py's own module docstring for why this is the one place
-this project's "port understanding, not code" boundary doesn't apply.
+Needs a real faultflow checkout (WARPTAP_FAULTFLOW_DIR / faultflow_dir fixture): faultflow's
+netlist generation is the only thing that produces a real composed netlist to test against,
+so this is the one place this project's "port understanding, not code" boundary doesn't
+apply; nothing here calls faultflow's ATPG or simulation.
 """
 
 from __future__ import annotations

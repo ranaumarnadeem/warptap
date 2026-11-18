@@ -58,6 +58,19 @@ implementation stage.
 - The `dev` extra installs PyYAML, which the openMBIST design tests import; a fresh
   `pip install -e '.[dev]'` could not collect them.
 
+### Removed
+
+- **Retargeting through faultflow's one-shot decompressor.** faultflow retired it (commit
+  `c665de9`) and writes only continuous-decompressor manifests since, so
+  `retarget_compressed_faultflow_patterns`, `solve_pattern_seed`, `care_bit_rows` and
+  `polynomial_from_manifest` are gone from `warptap.faultflow_compression`, with their tests
+  and the one-shot cross-sim (which had skipped against any current faultflow).
+  `retarget_decompressed_faultflow_patterns` now refuses a manifest with no `architecture`, or
+  `"one_shot"`, naming 0.0.5 as the last release that retargets it. The module keeps what the
+  continuous decompressor shares: `LfsrPolynomial`, `PRIMITIVE_POLYNOMIALS`,
+  `lookup_polynomial`, `solve_xor_broadcast` and `FaultflowCompressionError`, which faultflow's
+  tests import from it.
+
 ## [0.0.5] - 2026-10-15
 
 ### Behavior changes

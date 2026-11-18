@@ -11,8 +11,9 @@ Retargeting a real `faultflow --export-patterns` export through an inserted netw
 
 A faultflow design whose `[compression]` entry says `architecture = "continuous"` loads its
 chains from a ring generator that takes `num_channels` fresh channel bits on every shift,
-not one seed. `retarget_decompressed_faultflow_patterns` picks the retarget from the
-manifest's architecture (an entry without one is the older one-shot decompressor);
+not one seed. `retarget_decompressed_faultflow_patterns` checks the manifest's architecture
+and refuses anything else: an entry without one, or `"one_shot"`, is faultflow's retired
+one-shot decompressor, which warptap 0.0.5 is the last release to retarget;
 `solve_pattern_channels` solves a pattern's load over every free bit (`num_channels` x
 `warmup + max_chain_length`) strictly, and the retarget writes one channel word per shift
 to the channel instrument, with one clock pulse each.
