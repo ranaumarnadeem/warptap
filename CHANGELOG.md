@@ -20,6 +20,16 @@ implementation stage.
   `<top>_mbist.icl` faultflow writes. `tests/test_icl_emit_scan_order.py` checks the parser
   walks every bit in the RTL's order, and that the old declaration hid all but one. The
   golden ICL files are regenerated; they differ only in those declarations.
+- **The AccessLink named the network by a bare instance name, of the first slot.** It now names
+  `<slot>.client`, the client interface of the top-level slot whose `SO` drives `tdo`. A SIB or
+  ScanMux module has two scan interfaces, so a bare name doesn't say which, and MAST rejects it
+  (`Cannot find ScanInterface "" in instance`). MAST walks back from the named interface's
+  scan-out, so the slot at the chain's end covers the whole chain, where the first slot covered
+  only itself. Not yet confirmed by a tool: MAST, built and run on warptap's ICL, builds no
+  model from any AccessLink on this network. Naming a top-level slot crashes it, and its own
+  examples name a single instance that holds the whole network, a shape warptap doesn't emit.
+  faultflow's `test_insert_jtag.py` checks the old text, so it needs the new one when it
+  re-pins.
 
 ### Added
 

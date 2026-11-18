@@ -259,15 +259,26 @@ def test_to_icl_access_link_names_the_network_instruction_not_wdr_select():
     from warptap.bsdl_emit import NETWORK_ACCESS_BSDL_INSTRUCTION
 
     text = to_icl(_one_sib_graph(), ModuleInstance(name="chip"), include_access_link=True)
-    assert f"{NETWORK_ACCESS_BSDL_INSTRUCTION} {{ ScanInterface {{ warptap_sib_a; }} }}" in text
+    assert f"{NETWORK_ACCESS_BSDL_INSTRUCTION} {{ ScanInterface {{ warptap_sib_a.client; }} }}" in text
     assert NETWORK_ACCESS_BSDL_INSTRUCTION == "EXTEST"
     assert "wdr_select" not in text
+
+
+def test_to_icl_access_link_names_the_client_interface_of_the_slot_driving_tdo():
+    """A SIB has two scan interfaces, so a bare instance name doesn't say which (MAST rejects
+    it); the slot whose SO drives tdo is the end MAST walks back from to cover the chain."""
+    graph = PhysicalGraph(chain=tuple(
+        SibNode(sib_name=f"sib_{n}", instrument=_read_instrument(name=n, width=1)) for n in "abc"
+    ))
+    text = to_icl(graph, ModuleInstance(name="chip"), include_access_link=True)
+    assert "ScanOutPort tdo { Source warptap_sib_c.SO; }" in text
+    assert "EXTEST { ScanInterface { warptap_sib_c.client; } }" in text
 
 
 def test_to_icl_access_link_names_ijtag_access_for_a_tap_with_it():
     root = ModuleInstance(name="chip")
     text = to_icl(_one_sib_graph(), root, include_access_link=True, ijtag_access=True)
-    assert "IJTAG_ACCESS { ScanInterface { warptap_sib_a; } }" in text
+    assert "IJTAG_ACCESS { ScanInterface { warptap_sib_a.client; } }" in text
     assert "EXTEST" not in text
     default = to_icl(_one_sib_graph(), root, include_access_link=True)
     assert text == default.replace("EXTEST {", "IJTAG_ACCESS {")  # nothing else changes

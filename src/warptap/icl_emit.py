@@ -87,11 +87,20 @@ ijtag_access=True)`` names ``IJTAG_ACCESS`` instead
 (:data:`warptap.bsdl_emit.IJTAG_ACCESS_BSDL_INSTRUCTION`), the instruction the BSDL written
 with the same opcode declares; there, EXTEST and SAMPLE/PRELOAD select BYPASS.
 
-**Open question, deliberately not guessed at:** the ``ScanInterface { ... }`` list names only the
-chain's first slot, while the top-level slots' ``SEL`` ports are never bound in the ``Instance``
-statements. Every readable published example wires its listed instances implicitly, and none has
-an explicitly ``SI``/``SO``-chained sequence listed by its head only, so the sources do not say
-whether the list should name every top-level slot. That shape is unchanged from before.
+**The ``ScanInterface`` list names one interface: ``<slot>.client`` of the top-level slot whose
+``SO`` drives ``tdo``.** A SIB or ScanMux module declares two scan interfaces (``client`` and
+``host``), so the interface must be named: up to 0.0.5 the list held the bare instance name, and
+MAST (``kouamojulesquentin/MAST-AnalogTest``, built and run on warptap's ICL in November 2026)
+rejects it with ``Cannot find ScanInterface "" in instance``. MAST takes exactly one interface per
+instruction and walks back from that interface's scan-out port through every instance that
+feeds it, so the interface whose ``SO`` is the chain's end covers the whole chain; up to 0.0.5
+the list named the first slot instead, which covers only that slot. **Not confirmed by any
+tool:** MAST builds no model from any AccessLink on warptap's network. Naming a top-level slot
+crashes it as it walks out of that instance into the rest of the top module; its own AccessLink
+examples, like the standard's published ones, name a single instance that holds the whole
+network. Moving warptap's network into such a wrapper module would change every instance path
+in the ICL and PDL, and MAST still stops on that shape with an unresolved path-selector error, so
+it is not done. The top-level slots' ``SEL`` ports stay unbound in the ``Instance`` statements.
 
 **The vendored raw ICL parser cannot check any ordinarily formatted AccessLink**: its
 ``AccessLinkGeneric_def`` is a *lexer* rule (``icl.g4:395-396``), so ``AccessLink X Of
@@ -721,14 +730,14 @@ def to_icl(
     five real JTAG pins (:mod:`warptap.tap_ports`), the SIB/mux/instrument ``Instance``
     statements (``render_sib_instances``), and (when ``include_access_link``) a trailing
     ``AccessLink warptap_tap Of STD_1149_1_2001`` block: ``BSDLEntity <entity>;`` then
-    ``EXTEST { ScanInterface { <first slot>; } }`` -- the instruction that selects the network
-    (:data:`warptap.bsdl_emit.NETWORK_ACCESS_BSDL_INSTRUCTION`), named exactly as
-    :func:`warptap.bsdl_emit.to_bsdl` declares it, so the ICL and the BSDL agree. The module
-    docstring lists the sources that confirmed this syntax, what is still unconfirmed, and the
-    open question about which slots the ``ScanInterface`` list should name. No
+    ``EXTEST { ScanInterface { <last slot>.client; } }`` -- the instruction that selects the
+    network (:data:`warptap.bsdl_emit.NETWORK_ACCESS_BSDL_INSTRUCTION`), named exactly as
+    :func:`warptap.bsdl_emit.to_bsdl` declares it, so the ICL and the BSDL agree, and the
+    ``client`` interface of the slot whose ``SO`` drives ``tdo``. The module docstring lists the
+    sources that confirmed this syntax, why that slot, and what is still unconfirmed. No
     ``ActiveSignals`` clause: it names signals the AccessLink itself provides, and warptap's
-    network needs none. The chain's first slot works here whether it's a SIB or a mux -- both
-    module kinds declare the identically-shaped ``ScanInterface client { Port SI; Port SEL;
+    network needs none. The last slot works here whether it's a SIB or a mux -- both module
+    kinds declare the identically-shaped ``ScanInterface client { Port SI; Port SEL;
     Port SO; }``.
 
     ``bsdl_entity_name`` sets the ``BSDLEntity`` name (default: ``root.name``, the top module's
@@ -772,8 +781,8 @@ def to_icl(
         module_type_blocks.append(render_instrument_module(instrument))
 
     instance_lines = render_sib_instances(graph)
-    first_slot = _slot_instance_name(graph.chain[0]) if graph.chain else None
-    last_so = f"{_slot_instance_name(graph.chain[-1])}.SO" if graph.chain else TDI
+    tdo_slot = _slot_instance_name(graph.chain[-1]) if graph.chain else None
+    last_so = f"{tdo_slot}.SO" if graph.chain else TDI
     # Both a SibNode's own SO (render_sib_module_type's SR) and a ScanMuxNode's own SO
     # (render_scan_mux_module's SO/SELREG pairing, now correctly scalar per
     # _scan_port_bit_ref's own docstring) are always exactly 1 bit -- tdo, the real physical
@@ -798,7 +807,7 @@ def to_icl(
         instruction = (
             IJTAG_ACCESS_BSDL_INSTRUCTION if ijtag_access else NETWORK_ACCESS_BSDL_INSTRUCTION
         )
-        top_lines.append(f"        {instruction} {{ ScanInterface {{ {first_slot}; }} }}")
+        top_lines.append(f"        {instruction} {{ ScanInterface {{ {tdo_slot}.client; }} }}")
         top_lines.append("    }")
     top_lines.append("}")
 

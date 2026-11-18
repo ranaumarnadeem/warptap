@@ -36,11 +36,11 @@ from warptap.icl_emit import to_icl
 
 _HEADER = re.compile(r"AccessLink (\w+) Of (STD_1149_1_200[13]) \{")
 
-# case name -> the chain's first slot, which the emitted ScanInterface list names
-_FIRST_SLOT = {
-    "flat_read_write": "warptap_sib_sensor",
-    "nested_sib": "warptap_sib_outer",
-    "scan_mux": "warptap_scan_mux_mux_outer",
+# case name -> the client interface of the slot driving tdo, which the ScanInterface list names
+_TDO_SLOT_INTERFACE = {
+    "flat_read_write": "warptap_sib_status.client",
+    "nested_sib": "warptap_sib_leaf.client",
+    "scan_mux": "warptap_scan_mux_mux_outer.client",
 }
 
 
@@ -114,7 +114,7 @@ def test_emitted_access_link_parses_and_names_the_expected_things(
     assert consumed
     instruction = "IJTAG_ACCESS" if ijtag_access else "EXTEST"
     assert links == [
-        ("warptap_tap", entity or root.name, [(instruction, [_FIRST_SLOT[case]])]),
+        ("warptap_tap", entity or root.name, [(instruction, [_TDO_SLOT_INTERFACE[case]])]),
     ]
 
 
