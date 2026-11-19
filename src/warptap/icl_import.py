@@ -118,14 +118,18 @@ minutes at a small fraction of that size beforehand.
 message: a syntax error anywhere in a file (the vendored parser reads each file to its end and
 raises on one; it used to stop without an error at the first construct it couldn't parse and
 drop the rest of the file), a name it can't resolve, a failed ``assert`` in its own consistency
-checks (the message names the file and line), and its ``AccessLink`` gap (its lexer can't read
-an ``AccessLink`` block at all).
+checks (the message names the file and line), and a construct it reads but doesn't elaborate
+(:data:`NOT_ELABORATED`: an ``AccessLink``, a ``ClockMux``, an addressed instance, a broadcast,
+an instance or port source in a ``OneHotDataGroup``), none of which warptap's model holds
+either. An ``AccessLink`` is only a problem where the network uses it: one in a module the top
+doesn't instantiate is read and left alone.
 """
 
 from __future__ import annotations
 
 import contextlib
 import io
+import re
 import sys
 from pathlib import Path
 from typing import List, NamedTuple, Tuple
@@ -156,9 +160,8 @@ from warptap.icl_model import (
 class IclImportError(WarptapError):
     """Raised when the given ``.icl`` files don't describe a network warptap's model can hold,
     or the parser can't read them. A rejection's message starts with one of
-    :data:`REJECTION_REASONS`; the other messages are for a top module the files don't define,
-    the parser's ``AccessLink`` gap, and a network that fails
-    :func:`~warptap.icl_model.validate_physical_graph`."""
+    :data:`REJECTION_REASONS`; the other messages are for a top module the files don't define
+    and a network that fails :func:`~warptap.icl_model.validate_physical_graph`."""
 
 
 # Why a network can't be imported: a construct warptap's model has no place for, or ICL the
@@ -178,11 +181,12 @@ NON_REGISTER_SELECT = "a ScanMux selected by something other than a scan registe
 MULTI_VALUE_ARM = "a ScanMux arm selected by more than one value"
 TOO_FEW_ARMS = "a ScanMux with fewer than two arms that hold anything"
 NOT_A_TREE = "a scan path that is not a tree"
+NOT_ELABORATED = "an ICL construct the vendored parser doesn't elaborate"
 
 REJECTION_REASONS = (
     INVALID_ICL, NO_SCAN_PATH, UNSUPPORTED_SCAN_ELEMENT, PARTIAL_REGISTER, REGISTER_OUTSIDE_SLOT,
     REGISTERS_IN_SERIES, SIB_REGISTER_BEFORE_MUX, SIB_OPENS_ON_ZERO, FOREIGN_SELECT,
-    NON_REGISTER_SELECT, MULTI_VALUE_ARM, TOO_FEW_ARMS, NOT_A_TREE,
+    NON_REGISTER_SELECT, MULTI_VALUE_ARM, TOO_FEW_ARMS, NOT_A_TREE, NOT_ELABORATED,
 )
 """Every reason :func:`import_icl` rejects a network for, the start of each such message."""
 
@@ -641,7 +645,7 @@ def _construct_ijtag(icl_parser_module, top_module: str, icl_paths: List[Path]):
     """``icl_parser_module(top_module, icl_paths, build_register_model=False)``, with the
     parser's exceptions translated into an :class:`IclImportError` carrying its message: an
     ``AssertionError`` from one of its own consistency checks (named by file and line), a
-    ``ValueError`` (a syntax error, an unresolved name, or its ``AccessLink`` gap), and a
+    ``ValueError`` (a syntax error, an unresolved name, or a construct it doesn't elaborate), a
     ``KeyError`` (``Ijtag`` looks modules up in a plain dict, so a ``top_module`` the files
     don't define, or a module or parameter one of them uses but none defines, surfaces as
     one). Shared by both import entry points (:func:`import_icl` and
@@ -668,13 +672,16 @@ def _construct_ijtag(icl_parser_module, top_module: str, icl_paths: List[Path]):
         ) from exc
     except ValueError as exc:
         message = str(exc)
-        if "AccessLink" in message or (
-            "syntax errors" in message and _mentions_access_link(icl_paths)
-        ):
+        construct = _not_elaborated(message)
+        if construct is not None:
+            hint = (
+                " (warptap's own ICL imports when emitted with include_access_link=False)"
+                if construct == "AccessLink"
+                else ""
+            )
+            shown = message if len(message) <= 200 else message[:200] + "..."
             raise IclImportError(
-                "icl_parser does not read AccessLink blocks (its lexer takes the start of one as "
-                "a single token: a gap in the vendored tool, not in the ICL); re-emit or "
-                f"re-author the file with include_access_link=False. The parser said: {message}"
+                f"{NOT_ELABORATED}: {construct}{hint}. The parser said: {shown}"
             ) from exc
         raise IclImportError(f"{INVALID_ICL}: {message}") from exc
     except KeyError as exc:
@@ -690,8 +697,20 @@ def _construct_ijtag(icl_parser_module, top_module: str, icl_paths: List[Path]):
         ) from exc
 
 
-def _mentions_access_link(icl_paths: List[Path]) -> bool:
-    return any("AccessLink" in Path(p).read_text(encoding="utf-8", errors="replace") for p in icl_paths)
+_NOT_SUPPORTED = (
+    re.compile(r"^Not supported -> exit(\w+?)_def -> "),  # AccessLink, ClockMux
+    re.compile(r"^(Broadcast|Instance address|Instance|Post source) not supported in: "),
+)
+
+
+def _not_elaborated(message: str):
+    """The construct a parser ``ValueError`` says it doesn't elaborate, or ``None`` if the
+    message is about something else."""
+    for pattern in _NOT_SUPPORTED:
+        match = pattern.match(message)
+        if match:
+            return match.group(1)
+    return None
 
 
 def import_icl(

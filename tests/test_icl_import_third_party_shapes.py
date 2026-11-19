@@ -21,6 +21,7 @@ from warptap.icl_import import (
     MULTI_VALUE_ARM,
     NON_REGISTER_SELECT,
     NOT_A_TREE,
+    NOT_ELABORATED,
     PARTIAL_REGISTER,
     REGISTER_OUTSIDE_SLOT,
     REGISTERS_IN_SERIES,
@@ -292,6 +293,32 @@ Module Top {
 
 
 # -- controls: near misses each recognizer must reject ----------------------------------------
+
+CHIP_WITH_ACCESS_LINK = """
+Module Chip {
+    ScanInPort tdi;
+    ScanOutPort tdo { Source g.so; }
+    Instance g Of Gate { InputPort si = tdi; InputPort ret = r.so; }
+    Instance r Of Reg8 { InputPort si = g.out; }
+    AccessLink Tap Of STD_1149_1_2001 {
+        BSDLEntity Chip;
+        IJTAG_EN { ScanInterface { g; } }
+    }
+}
+"""
+
+
+def test_an_access_link_in_a_module_the_network_does_not_use_is_left_alone(tmp_path, icl_parser_module):
+    """The files can hold an AccessLink elsewhere, as a benchmark set's shared files do: only
+    the modules the top instantiates are elaborated."""
+    graph, _ = _import(tmp_path, CHIP_WITH_ACCESS_LINK + TWO_GATES, icl_parser_module)
+    assert [slot.sib_name for slot in graph.chain] == ["g1", "g2"]
+
+
+def test_control_an_access_link_in_the_network(tmp_path, icl_parser_module):
+    with pytest.raises(IclImportError, match=f"^{NOT_ELABORATED}: AccessLink \\(warptap's own"):
+        _import(tmp_path, CHIP_WITH_ACCESS_LINK, icl_parser_module, top="Chip")
+
 
 def test_control_a_register_on_the_path_outside_any_slot(tmp_path, icl_parser_module):
     """An always-on register: on the scan path, but not behind a SIB or ScanMux."""
