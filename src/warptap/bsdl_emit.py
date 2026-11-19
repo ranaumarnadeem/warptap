@@ -38,6 +38,11 @@ there is none to give them, and the ``DESIGN_WARNING`` says so.
 :data:`warptap.tap_model.IDCODE_VALUE`, is a placeholder, and only then does the output call it
 one.
 
+**TDO** is driven however the design's TAP was inserted: pass ``to_bsdl`` the same ``tdo_drive``.
+By default (``"tristate"``) the inserted TAP releases TDO outside Shift-IR/Shift-DR, as IEEE
+1149.1 requires, and the ``DESIGN_WARNING`` says nothing about it; ``"low"`` and
+``"enable_port"`` each get a sentence there saying how the pin is driven instead.
+
 **No independent BSDL parser validates this output.** The one candidate that would accept a
 TAP-only file, UrJTAG (its parser checks syntax and structure only), was installed and tried; the
 Ubuntu-packaged 0.10+r2007 build is unusable -- see ``tests/test_bsdl_emit.py``'s docstring for the
@@ -45,7 +50,8 @@ evidence. Standard-following parsers require the boundary register, so no indepe
 check conformance of this file anyway: it is non-conformant by design. What is checked instead:
 the emitted text is read back and compared with ``tap_model`` (``tests/test_bsdl_emit.py``), and
 every behavioral claim is verified by driving the real TAP RTL under Icarus
-(``tests/test_bsdl_emit_cross_sim.py``).
+(``tests/test_bsdl_emit_cross_sim.py``; the TDO pin of each ``tdo_drive``, on inserted designs,
+in ``tests/test_tdo_drive_cross_sim.py``).
 """
 
 from __future__ import annotations
@@ -58,6 +64,7 @@ from warptap.errors import WarptapError
 from warptap.tap_model import (
     CAPTURE_IR_PATTERN,
     DEFAULT_IR_WIDTH,
+    DEFAULT_TDO_DRIVE,
     IDCODE_VALUE,
     NETWORK_ACCESS_INSTRUCTION,
     OPCODE_EXTEST,
@@ -65,6 +72,7 @@ from warptap.tap_model import (
     OPCODE_SAMPLE_PRELOAD,
     Instruction,
     bypass_opcode,
+    check_tdo_drive,
     idcode_value_error,
     ijtag_access_opcode_error,
 )
@@ -121,7 +129,26 @@ def _vhdl_string(text: str, width: int = _PIN_MAP_STRING_WIDTH) -> str:
     return " &\n      ".join(f'"{piece}"' for piece in pieces)
 
 
-def _design_warning(placeholder_idcode: bool, ijtag_access_opcode: int | None) -> str:
+def _tdo_warning(tdo_drive: str) -> str:
+    """What the reader must know about the TDO pin, which only ``"tristate"`` makes conformant
+    on its own; empty for it."""
+    if tdo_drive == "low":
+        return (
+            "Not fully IEEE 1149.1 conformant: TDO is driven low, not tri-stated, outside the "
+            "shift states. "
+        )
+    if tdo_drive == "enable_port":
+        return (
+            "TDO is not tri-stated inside this design: it is driven at all times (low outside "
+            "the shift states), and the pad that drives the TDO pin must do the tri-state, "
+            "enabled by the design's tdo_oe output, which is high only in Shift-IR and Shift-DR. "
+        )
+    return ""
+
+
+def _design_warning(
+    placeholder_idcode: bool, ijtag_access_opcode: int | None, tdo_drive: str
+) -> str:
     """Everything a reader of this BSDL must know that the standard attributes can't say. Built
     from the same constants as the attributes above it so the two can't disagree."""
     ir_width = DEFAULT_IR_WIDTH
@@ -152,15 +179,13 @@ def _design_warning(placeholder_idcode: bool, ijtag_access_opcode: int | None) -
         "or BOUNDARY_REGISTER is declared, so a tool that requires a boundary register will "
         "reject this file. "
         + routing
-        + "Not fully IEEE 1149.1 conformant: TDO is driven low, not tri-stated, outside the "
-        "shift states"
+        + _tdo_warning(tdo_drive)
         + (
-            ", and the IDCODE value is a placeholder, not a registered manufacturer ID. "
+            "The IDCODE value is a placeholder, not a registered manufacturer ID. "
             if placeholder_idcode
-            else ". "
+            else ""
         )
-        +
-        f"PHYSICAL_PIN_MAP {_PHYSICAL_PIN_MAP} is a placeholder: no physical package is "
+        + f"PHYSICAL_PIN_MAP {_PHYSICAL_PIN_MAP} is a placeholder: no physical package is "
         "described."
     )
 
@@ -171,6 +196,7 @@ def to_bsdl(
     tck_max_freq_hz: float,
     idcode_value: int = IDCODE_VALUE,
     ijtag_access_opcode: int | None = None,
+    tdo_drive: str = DEFAULT_TDO_DRIVE,
 ) -> str:
     """Render the BSDL for the TAP warptap inserts, as the entity ``entity_name`` (use the same
     string passed to ``to_icl`` as its ``BSDLEntity`` -- the real top module's name).
@@ -192,8 +218,16 @@ def to_bsdl(
     instruction is declared at that opcode and ``REGISTER_ACCESS`` gives EXTEST, SAMPLE and
     PRELOAD the BYPASS register; an opcode no TAP can have raises :class:`BsdlEmitError`.
 
+    ``tdo_drive`` must be the one the design's TAP was inserted with
+    (:data:`warptap.tap_model.TDO_DRIVES`). The default, ``"tristate"``, gets no warning about
+    TDO: the pin is high impedance outside Shift-IR/Shift-DR, as IEEE 1149.1 requires. With
+    ``"low"`` the ``DESIGN_WARNING`` says the TAP is not fully conformant, TDO being driven low
+    there; with ``"enable_port"`` it says the tri-state is the pad's, enabled from ``tdo_oe``.
+    Anything else raises ValueError.
+
     See the module docstring for what this file is not (a chip-level BSDL) and what is and isn't
     independently validated."""
+    check_tdo_drive(tdo_drive)
     if problem := idcode_value_error(idcode_value):
         raise BsdlEmitError(problem)
     if ijtag_access_opcode is not None and (
@@ -302,7 +336,9 @@ def to_bsdl(
         " &\n".join(register_lines) + ";",
         "",
         f"  attribute DESIGN_WARNING of {name} : entity is",
-        "      " + _vhdl_string(_design_warning(placeholder_idcode, ijtag_access_opcode)) + ";",
+        "      "
+        + _vhdl_string(_design_warning(placeholder_idcode, ijtag_access_opcode, tdo_drive))
+        + ";",
         "",
         f"end {name};",
         "",

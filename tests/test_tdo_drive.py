@@ -10,6 +10,7 @@ import inspect
 
 import pytest
 
+from warptap.bsdl_emit import to_bsdl
 from warptap.bsr_insert import insert_bsr
 from warptap.bsr_plan import build_bsr_plan
 from warptap.netlist import Module, Netlist
@@ -69,7 +70,7 @@ def _drivers(top: Module, port: str) -> list[str]:
 def test_tristate_is_the_default_everywhere():
     assert TDO_DRIVES == ("tristate", "low", "enable_port")
     assert DEFAULT_TDO_DRIVE == "tristate"
-    for function in (insert_sib_network, insert_bsr, insert_test_access):
+    for function in (insert_sib_network, insert_bsr, insert_test_access, to_bsdl):
         assert inspect.signature(function).parameters["tdo_drive"].default == "tristate", function
 
 

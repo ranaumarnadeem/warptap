@@ -7,9 +7,10 @@
 //   reset line : pulses trst_n low; prints "RESET,<state>,<instruction>" sampled while it is
 //                still low (an asynchronous reset shows up immediately, no clock needed).
 //   normal line: applies tms/tdi/external_dr_tdo, lets combinational logic settle, samples
-//                tap_state/current_instruction/tdo (pre-edge -- the value a tester would read for
-//                this shift cycle), then pulses TCK and prints
-//                "TRACE,<state>,<instruction>,<tdo_pre>,<tdo_after_rise>,<tdo_after_fall>".
+//                tap_state/current_instruction/tdo/tdo_oe (pre-edge -- the value a tester would
+//                read for this shift cycle), then pulses TCK and prints
+//                "TRACE,<state>,<instruction>,<tdo_pre>,<tdo_after_rise>,<tdo_after_fall>,
+//                <tdo_oe_pre>,<tdo_oe_after_rise>,<tdo_oe_after_fall>" (one line).
 `timescale 1ns/1ps
 
 module tb_tap_core_bsdl;
@@ -21,6 +22,7 @@ module tb_tap_core_bsdl;
     reg trst_n = 1;
     reg external_dr_tdo = 0;
     wire tdo;
+    wire tdo_oe;
     wire [3:0] tap_state;
     wire [IR_WIDTH-1:0] current_instruction;
     wire capture_dr, shift_dr, update_dr;
@@ -34,6 +36,7 @@ module tb_tap_core_bsdl;
         .tdi(tdi),
         .trst_n(trst_n),
         .tdo(tdo),
+        .tdo_oe(tdo_oe),
         .tap_state(tap_state),
         .current_instruction(current_instruction),
         .capture_dr(capture_dr),
@@ -49,6 +52,7 @@ module tb_tap_core_bsdl;
     reg [3:0] state_pre;
     reg [IR_WIDTH-1:0] instr_pre;
     reg tdo_pre, tdo_rise, tdo_fall;
+    reg oe_pre, oe_rise, oe_fall;
 
     initial begin
         done = 0;
@@ -76,14 +80,18 @@ module tb_tap_core_bsdl;
                 state_pre = tap_state;
                 instr_pre = current_instruction;
                 tdo_pre = tdo;
+                oe_pre = tdo_oe;
                 tck = 1;
                 #1;
                 tdo_rise = tdo;
+                oe_rise = tdo_oe;
                 tck = 0;
                 #1;
                 tdo_fall = tdo;
-                $display("TRACE,%0d,%0d,%0d,%0d,%0d",
-                          state_pre, instr_pre, tdo_pre, tdo_rise, tdo_fall);
+                oe_fall = tdo_oe;
+                $display("TRACE,%0d,%0d,%0d,%0d,%0d,%0d,%0d,%0d",
+                          state_pre, instr_pre, tdo_pre, tdo_rise, tdo_fall,
+                          oe_pre, oe_rise, oe_fall);
             end
         end
 

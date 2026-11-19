@@ -20,9 +20,12 @@ Checked here:
   PRELOAD by default; IJTAG_ACCESS alone with it): TDO follows ``external_dr_tdo``.
 - IDCODE as the default instruction: Test-Logic-Reset selects it whether it's reached through TMS
   or through the TRST pin (active low).
-- The ``DESIGN_WARNING`` claim that TDO is low, not tri-stated, outside the shift states; and that
-  TDO changes on the falling edge of TCK only, as IEEE 1149.1 requires and the BSDL therefore
-  doesn't warn about (up to 0.0.5 it changed on the rising edge, and the warning said so).
+- How TDO is driven: ``tdo_oe``, the enable of the pin's tri-state driver, is high exactly in the
+  shift states (the default BSDL, which warns about nothing on TDO, and ``tdo_drive="enable_port"``'s
+  warning rely on it); ``tdo`` is low outside them (what ``tdo_drive="low"``'s warning says the pin
+  shows); and both change on the falling edge of TCK only, as IEEE 1149.1 requires and the BSDL
+  therefore doesn't warn about (up to 0.0.5 TDO changed on the rising edge, and the warning said
+  so). The pin each ``tdo_drive`` builds is simulated in ``tests/test_tdo_drive_cross_sim.py``.
 
 Not checkable by simulation, and not checked here: the ``TAP_SCAN_CLOCK`` frequency (timing is
 supplied by the integrator, not an RTL property), ``PHYSICAL_PIN_MAP``/``PIN_MAP`` (a placeholder
@@ -73,6 +76,9 @@ class Sample(NamedTuple):
     tdo_pre: int
     tdo_rise: int
     tdo_fall: int
+    oe_pre: int
+    oe_rise: int
+    oe_fall: int
 
 
 Entry = Tuple  # ("reset",) | ("tick", tms, tdi)
@@ -304,12 +310,18 @@ def test_a_tms_reset_and_the_trst_pin_both_select_idcode(bsdl, sim):
     assert (after_trst.state, after_trst.instr) == (_TLR, idcode)
 
 
-def test_tdo_is_low_outside_the_shift_states_and_changes_only_on_the_falling_edge(bsdl, sim):
+def test_tdo_oe_marks_the_shift_states_and_both_change_only_on_the_falling_edge(bsdl, sim):
     """Checked over a long run with a network instruction selected and external_dr_tdo held
-    high (so any leak of it onto TDO outside a shift state is visible): TDO is driven low, not
-    tri-stated or passed through, outside Shift-DR/Shift-IR (the DESIGN_WARNING claim); and it
-    never differs between just before and just after the rising edge, so it changes only at
-    the falling edge, as IEEE 1149.1 requires."""
+    high (so any leak of it onto TDO outside a shift state is visible):
+
+    - ``tdo_oe`` is high exactly while resident in Shift-DR/Shift-IR: the enable of the pin's
+      tri-state driver, the inserted ``$tribuf`` by default and the pad with
+      ``tdo_drive="enable_port"`` (whose DESIGN_WARNING says so);
+    - ``tdo`` is low outside them, never external_dr_tdo passed through: what
+      ``tdo_drive="low"`` puts on the pin, as its DESIGN_WARNING says;
+    - neither differs between just before and just after the rising edge, and after each falling
+      edge both are what the state the rising edge entered calls for, so they change only at the
+      falling edge, as IEEE 1149.1 requires."""
     length = bsdl.instruction_length
     network = _opcode(bsdl, _network_instructions(bsdl)[0])
     ops = _load_ir(network, length) + _scan_dr(16, 0xA5A5)
@@ -320,12 +332,17 @@ def test_tdo_is_low_outside_the_shift_states_and_changes_only_on_the_falling_edg
 
     assert {s.state for s in samples} == set(range(16)), "run must visit every TAP state"
     for i, s in enumerate(samples):
-        if s.state not in _SHIFT_STATES:
+        shifting = s.state in _SHIFT_STATES
+        assert s.oe_pre == int(shifting), f"tdo_oe is {s.oe_pre} pre-edge in state {s.state} (tick {i})"
+        if not shifting:
             assert s.tdo_pre == 0, f"TDO not low pre-edge in state {s.state} (tick {i})"
         assert s.tdo_pre == s.tdo_rise, f"TDO changed on the rising edge (tick {i})"
+        assert s.oe_pre == s.oe_rise, f"tdo_oe changed on the rising edge (tick {i})"
     for prev, nxt in zip(samples, samples[1:]):
+        assert prev.oe_fall == int(nxt.state in _SHIFT_STATES)
         if nxt.state not in _SHIFT_STATES:
             assert prev.tdo_fall == 0  # the falling edge after leaving a shift state drives it low
-    # ... and TDO really does change at falling edges (shifting IR/DR bits), so the equality
-    # above is not vacuous.
+    # ... and both really do change at falling edges (shifting IR/DR bits, entering and leaving
+    # the shift states), so the equalities above are not vacuous.
     assert any(s.tdo_rise != s.tdo_fall for s in samples)
+    assert {(s.oe_rise, s.oe_fall) for s in samples} >= {(0, 1), (1, 0)}

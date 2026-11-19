@@ -61,10 +61,9 @@ entity chip is
       "described by the companion ICL AccessLink on TDO, but only EXTEST " &
       "selects the network, so only under it does the network capture, " &
       "shift and update. Its length depends on SIB state, so it is not " &
-      "declared in REGISTER_ACCESS. Load EXTEST to reach that network. Not " &
-      "fully IEEE 1149.1 conformant: TDO is driven low, not tri-stated, " &
-      "outside the shift states, and the IDCODE value is a placeholder, " &
-      "not a registered manufacturer ID. PHYSICAL_PIN_MAP UNPACKAGED is a " &
-      "placeholder: no physical package is described.";
+      "declared in REGISTER_ACCESS. Load EXTEST to reach that network. The " &
+      "IDCODE value is a placeholder, not a registered manufacturer ID. " &
+      "PHYSICAL_PIN_MAP UNPACKAGED is a placeholder: no physical package " &
+      "is described.";
 
 end chip;
