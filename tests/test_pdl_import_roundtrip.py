@@ -115,9 +115,9 @@ def test_unsupported_statement_kind_raises_named_error(pdl_lexer_parser_classes)
     pdl_lexer_class, pdl_parser_class = pdl_lexer_parser_classes
     graph, root = build_sib_plan([], top_name="chip")
     interp = PDLInterpreter(graph, root)
-    with pytest.raises(PdlImportError, match="doesn't recognize"):
+    with pytest.raises(PdlImportError, match="iReset isn't supported"):
         import_pdl(
-            "iCall someProc;\n", interp,
+            "iReset;\n", interp,
             pdl_lexer_class=pdl_lexer_class, pdl_parser_class=pdl_parser_class,
         )
 
