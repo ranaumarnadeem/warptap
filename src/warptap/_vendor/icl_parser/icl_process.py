@@ -14,8 +14,8 @@ import logging
 import sys
 
 logger = logging.getLogger(__name__)
-logging.basicConfig(format='%(levelname)s:%(message)s', level=logging.INFO, encoding='utf-8')
-#logging.basicConfig(format='%(levelname)s:%(message)s', level=logging.DEBUG, encoding='utf-8')
+# Logging is configured by the program (see main.py), not on import: a library that calls
+# basicConfig configures the root logger of whatever application imports it.
 
 parallel_on: bool = False
 
@@ -49,7 +49,7 @@ class IclProcess(iclListener):
     def print_tree(self, node, indent=""):
         # Check if the node is a terminal node (i.e., has no children)
         if not isinstance(node, antlr4.tree.Tree.TerminalNode):
-            # logging.debug(f"{indent}{type(node).__name__} -> {node.getText()}")
+            # logger.debug(f"{indent}{type(node).__name__} -> {node.getText()}")
 
             # Indent for children
             child_indent = indent + "    "
@@ -118,7 +118,7 @@ class IclProcess(iclListener):
         self.icl_instance.add_icl_item(alias)
         
         self.result[ctx] = (alias_name, concat_sig, items)
-        logging.debug(f'{sys._getframe().f_code.co_name} -> {ctx.getText()} -> {self.result[ctx]}')
+        logger.debug(f'{sys._getframe().f_code.co_name} -> {ctx.getText()} -> {self.result[ctx]}')
 
     # hier_data_signal : (instance_name '.')* reg_port_signal_id ;    
     def exitHier_data_signal(self, ctx:iclParser.Hier_data_signalContext):
@@ -140,7 +140,7 @@ class IclProcess(iclListener):
         self.icl_instance.add_icl_item(icl_enum)
 
         self.result[ctx] = (enum_name, enum_items)
-        logging.debug(f'{sys._getframe().f_code.co_name} -> {ctx.getText()} -> {self.result[ctx]}')
+        logger.debug(f'{sys._getframe().f_code.co_name} -> {ctx.getText()} -> {self.result[ctx]}')
 
     # enum_name : SCALAR_ID ;
     def exitEnum_name(self, ctx:iclParser.Enum_nameContext):
@@ -172,7 +172,7 @@ class IclProcess(iclListener):
         #self.print_tree(ctx, "")
 
         self.result[ctx] =  (logicSignal_name, logic_expr)       
-        logging.debug(f'{sys._getframe().f_code.co_name} -> {ctx.getText()} -> {self.result[ctx]}')
+        logger.debug(f'{sys._getframe().f_code.co_name} -> {ctx.getText()} -> {self.result[ctx]}')
 
     # logicSignal_name : reg_port_signal_id;
     def exitLogicSignal_name(self, ctx:iclParser.LogicSignal_nameContext):
@@ -268,7 +268,7 @@ class IclProcess(iclListener):
             raise ValueError(f"Programming error")
 
         self.result[ctx] = sig
-        logging.debug(f'{sys._getframe().f_code.co_name} -> {ctx.getText()} -> {self.result[ctx]}')
+        logger.debug(f'{sys._getframe().f_code.co_name} -> {ctx.getText()} -> {self.result[ctx]}')
 
 
     # port_name : SCALAR_ID | vector_id ;
@@ -290,12 +290,12 @@ class IclProcess(iclListener):
             if (ctx.instance_name(index)):
                 item.add_hiearachy(ctx.instance_name(index).getText())
         self.result[ctx] = item
-        logging.debug(f'{sys._getframe().f_code.co_name} -> {ctx.getText()} -> {self.result[ctx]}')
+        logger.debug(f'{sys._getframe().f_code.co_name} -> {ctx.getText()} -> {self.result[ctx]}')
 
     # signal : (number | reg_port_signal_id | hier_port ) ;
     def exitSignal(self, ctx:iclParser.SignalContext):
         self.result[ctx] = self.result[ctx.getChild(0)]
-        logging.debug(f'{sys._getframe().f_code.co_name} -> {ctx.getText()} -> {self.result[ctx]}')
+        logger.debug(f'{sys._getframe().f_code.co_name} -> {ctx.getText()} -> {self.result[ctx]}')
 
     # data_signal : '~'? signal ;
     def exitData_signal(self, ctx:iclParser.Data_signalContext):
@@ -305,7 +305,7 @@ class IclProcess(iclListener):
             self.result[ctx].negate() 
         else:
             self.result[ctx] = self.result[ctx.signal()]
-        logging.debug(f'{sys._getframe().f_code.co_name} -> {ctx.getText()} -> {self.result[ctx]}')
+        logger.debug(f'{sys._getframe().f_code.co_name} -> {ctx.getText()} -> {self.result[ctx]}')
 
     # reset_signal : '~'? signal ;
     def exitReset_signal(self, ctx):
@@ -351,7 +351,7 @@ class IclProcess(iclListener):
                 concat.append(self.result[child])
 
         self.result[ctx] = ConcatSig(self.icl_instance, concat, concat_type)
-        logging.debug(f'{sys._getframe().f_code.co_name} -> {ctx.getText()} -> {self.result[ctx]} - {concat_type}')
+        logger.debug(f'{sys._getframe().f_code.co_name} -> {ctx.getText()} -> {self.result[ctx]} - {concat_type}')
 
     # concat_data_signal : data_signal ( ',' data_signal)*;  
     def exitConcat_data_signal(self, ctx): 
@@ -405,7 +405,7 @@ class IclProcess(iclListener):
             number = int(icl_number.get_bin_str(), 2)
 
         self.result[ctx] = number
-        logging.debug(f'{sys._getframe().f_code.co_name} -> {ctx.getText()} -> {self.result[ctx]}')
+        logger.debug(f'{sys._getframe().f_code.co_name} -> {ctx.getText()} -> {self.result[ctx]}')
 
     # sized_dec_num : size UNSIZED_DEC_NUM ;
     # sized_hex_num : size UNSIZED_HEX_NUM ;
@@ -424,7 +424,7 @@ class IclProcess(iclListener):
             raise ValueError(f"Programming error, cxt -> {ctx.getText()}")
             
         self.result[ctx] = number
-        logging.debug(f'{sys._getframe().f_code.co_name} -> {ctx.getText()} -> {self.result[ctx]}')
+        logger.debug(f'{sys._getframe().f_code.co_name} -> {ctx.getText()} -> {self.result[ctx]}')
 
     # unsized_number : pos_int | UNSIZED_DEC_NUM | UNSIZED_BIN_NUM | UNSIZED_HEX_NUM ;
     def exitUnsized_number(self, ctx:iclParser.Unsized_numberContext):
@@ -442,17 +442,17 @@ class IclProcess(iclListener):
             raise ValueError(f"Programming error, cxt -> {ctx.getText()}")
 
         self.result[ctx] = number
-        logging.debug(f'{sys._getframe().f_code.co_name} -> {ctx.getText()} -> {self.result[ctx]}')
+        logger.debug(f'{sys._getframe().f_code.co_name} -> {ctx.getText()} -> {self.result[ctx]}')
 
     # number : unsized_number | sized_number | integer_expr ;
     def exitNumber(self, ctx:iclParser.NumberContext):
         self.result[ctx] = self.result[ctx.getChild(0)]
-        logging.debug(f'{sys._getframe().f_code.co_name} -> {ctx.getText()} -> {self.result[ctx]}')
+        logger.debug(f'{sys._getframe().f_code.co_name} -> {ctx.getText()} -> {self.result[ctx]}')
 
     # integer_expr : integer_expr_lvl1 ;
     def exitInteger_expr(self, ctx:iclParser.Integer_exprContext):
         self.result[ctx] = self.result[ctx.integer_expr_lvl1()]
-        logging.debug(f'{sys._getframe().f_code.co_name} -> {ctx.getText()} -> {self.result[ctx]}')
+        logger.debug(f'{sys._getframe().f_code.co_name} -> {ctx.getText()} -> {self.result[ctx]}')
 
     # integer_expr_lvl1 : integer_expr_lvl2 ( ('+' | '-') integer_expr_lvl1 )? ;
     def exitInteger_expr_lvl1(self, ctx:iclParser.Integer_expr_lvl1Context):
@@ -477,7 +477,7 @@ class IclProcess(iclListener):
                 self.result[ctx] = self.result[ctx.integer_expr_arg()] % self.result[ctx.integer_expr_lvl2()]
         else:
             self.result[ctx] = self.result[ctx.integer_expr_arg()]
-        logging.debug(f'{sys._getframe().f_code.co_name} -> {ctx.getText()} -> {self.result[ctx]}')
+        logger.debug(f'{sys._getframe().f_code.co_name} -> {ctx.getText()} -> {self.result[ctx]}')
 
     # integer_expr_arg : integer_expr_paren | pos_int | parameter_ref ;
     def exitInteger_expr_arg(self, ctx:iclParser.Integer_expr_argContext):
@@ -487,7 +487,7 @@ class IclProcess(iclListener):
             self.result[ctx] = self.result[ctx.integer_expr_paren().integer_expr()]
         if(ctx.parameter_ref()):
             self.result[ctx] = self.record[ctx.parameter_ref()]
-        logging.debug(f'{sys._getframe().f_code.co_name} -> {ctx.getText()} -> {self.result[ctx]}')
+        logger.debug(f'{sys._getframe().f_code.co_name} -> {ctx.getText()} -> {self.result[ctx]}')
 
     # concat_number : '~'? number (',' '~'? number)* ;
     def exitConcat_number(self, ctx:iclParser.Concat_numberContext):
@@ -515,7 +515,7 @@ class IclProcess(iclListener):
             inv = 0
 
         self.result[ctx] = concat_number
-        logging.debug(f'{sys._getframe().f_code.co_name} -> {ctx.getText()} -> {self.result[ctx]}')
+        logger.debug(f'{sys._getframe().f_code.co_name} -> {ctx.getText()} -> {self.result[ctx]}')
 
     # concat_number_list : concat_number ( '|' concat_number )* ;
     def exitConcat_number_list(self, ctx:iclParser.Concat_number_listContext):
@@ -524,7 +524,7 @@ class IclProcess(iclListener):
             if (ctx.concat_number(index)):
                 self.result[ctx].append(self.result[ctx.concat_number(index)])
 
-        logging.debug(f'{sys._getframe().f_code.co_name} -> {ctx.getText()} -> {self.result[ctx]}')
+        logger.debug(f'{sys._getframe().f_code.co_name} -> {ctx.getText()} -> {self.result[ctx]}')
 
     # concat_string : (STRING | parameter_ref) (',' (STRING | parameter_ref) )* ;
     def exitConcat_string(self, ctx:iclParser.Concat_stringContext):
@@ -542,12 +542,12 @@ class IclProcess(iclListener):
                 else:
                     self.result[ctx] += self.record[ctx.parameter_ref(index)]
 
-        logging.debug(f'{sys._getframe().f_code.co_name} -> {ctx.getText()} -> {self.result[ctx]}')
+        logger.debug(f'{sys._getframe().f_code.co_name} -> {ctx.getText()} -> {self.result[ctx]}')
 
     # parameter_value : concat_string | concat_number;
     def exitParameter_value(self, ctx:iclParser.Parameter_valueContext):
         self.result[ctx] = self.result[ctx.getChild(0)]
-        logging.debug(f'{sys._getframe().f_code.co_name} -> {ctx.getText()} -> {self.result[ctx]}')
+        logger.debug(f'{sys._getframe().f_code.co_name} -> {ctx.getText()} -> {self.result[ctx]}')
         self.result["END"] = self.result[ctx]
 
 
@@ -560,11 +560,11 @@ class IclProcess(iclListener):
         if(ctx.parentCtx.getRuleIndex() != iclParser.RULE_parameter_override):
             self.icl_instance.add_parameter(parameter_name, parameter_data)
 
-        logging.debug(f'{sys._getframe().f_code.co_name} -> {ctx.getText()} -> {self.result[ctx]}')
+        logger.debug(f'{sys._getframe().f_code.co_name} -> {ctx.getText()} -> {self.result[ctx]}')
 
     def exitParameter_override(self, ctx:iclParser.Parameter_overrideContext):
         self.result[ctx] = self.result[ctx.getChild(0)]
-        logging.debug(f'{sys._getframe().f_code.co_name} -> {ctx.getText()} -> {self.result[ctx]}')
+        logger.debug(f'{sys._getframe().f_code.co_name} -> {ctx.getText()} -> {self.result[ctx]}')
 
     # localParameter_def : 'LocalParameter' parameter_name '=' parameter_value ';' ;
     def exitLocalParameter_def(self, ctx:iclParser.LocalParameter_defContext):
@@ -574,14 +574,14 @@ class IclProcess(iclListener):
         self.icl_instance.add_parameter(parameter_name, parameter_data)
 
         self.result[ctx] = {parameter_name: parameter_data}
-        logging.debug(f'{sys._getframe().f_code.co_name} -> {ctx.getText()} -> {self.result[ctx]}')
+        logger.debug(f'{sys._getframe().f_code.co_name} -> {ctx.getText()} -> {self.result[ctx]}')
 
     # parameter_ref : '$'(SCALAR_ID) ;
     def enterParameter_ref(self, ctx:iclParser.Parameter_refContext):
         parameter_name = ctx.SCALAR_ID().getText()
         self.record[ctx] = self.get_paramter_ref_value(parameter_name)
             
-        logging.debug(f'{sys._getframe().f_code.co_name} -> {ctx.getText()} -> {self.record[ctx]}')
+        logger.debug(f'{sys._getframe().f_code.co_name} -> {ctx.getText()} -> {self.record[ctx]}')
 
     def get_paramter_ref_value(self, parameter_name: str) -> IclNumber:
         result:IclNumber = None
@@ -728,15 +728,15 @@ class IclProcess(iclListener):
 
 
         """ 
-        logging.debug(data_reg)
-        logging.debug(reset_value)
-        logging.debug(default_value)
-        logging.debug(ref_enum)
-        logging.debug(attributes)
-        logging.debug(write_en)
-        logging.debug(write_source)
-        logging.debug(address)
-        logging.debug(ctx.getText())       
+        logger.debug(data_reg)
+        logger.debug(reset_value)
+        logger.debug(default_value)
+        logger.debug(ref_enum)
+        logger.debug(attributes)
+        logger.debug(write_en)
+        logger.debug(write_source)
+        logger.debug(address)
+        logger.debug(ctx.getText())       
         #input()
         """
 
@@ -767,7 +767,7 @@ class IclProcess(iclListener):
 
        
         self.icl_instance.add_icl_item(icl_data_register)
-        logging.debug(f'{sys._getframe().f_code.co_name} -> {ctx.getText()} -> {self.result[ctx]}')
+        logger.debug(f'{sys._getframe().f_code.co_name} -> {ctx.getText()} -> {self.result[ctx]}')
 
 
     # scanRegister_def : 'ScanRegister' scanRegister_name (';' |
@@ -850,7 +850,7 @@ class IclProcess(iclListener):
         self.icl_instance.add_icl_item(new_icl_item)
 
         self.result[ctx] = new_icl_item
-        logging.debug(f'{sys._getframe().f_code.co_name} -> {ctx.getText()} -> {self.result[ctx]}')
+        logger.debug(f'{sys._getframe().f_code.co_name} -> {ctx.getText()} -> {self.result[ctx]}')
 
     # scanMux_def : 'ScanMux' scanMux_name 'SelectedBy' scanMux_select '{' scanMux_selection+ '}' ;
     # scanMux_name : reg_port_signal_id ;
@@ -870,7 +870,7 @@ class IclProcess(iclListener):
         self.icl_instance.add_icl_item(new_icl_item)
 
         self.result[ctx] = new_icl_item
-        logging.debug(f'{sys._getframe().f_code.co_name} -> {ctx.getText()} -> {self.result[ctx]}')
+        logger.debug(f'{sys._getframe().f_code.co_name} -> {ctx.getText()} -> {self.result[ctx]}')
 
     # dataMux_def : 'DataMux' dataMux_name 'SelectedBy' dataMux_select '{' dataMux_selection+ '}' ;
     # dataMux_name : reg_port_signal_id ;
@@ -890,7 +890,7 @@ class IclProcess(iclListener):
         self.icl_instance.add_icl_item(new_icl_item)
 
         self.result[ctx] = new_icl_item
-        logging.debug(f'{sys._getframe().f_code.co_name} -> {ctx.getText()} -> {self.result[ctx]}')
+        logger.debug(f'{sys._getframe().f_code.co_name} -> {ctx.getText()} -> {self.result[ctx]}')
 
     # instance_def : 'Instance' instance_name 'Of' (namespace_name? '::')?
     #                 module_name (';' | ( '{' instance_item* '}' ) ) ;
@@ -967,7 +967,7 @@ class IclProcess(iclListener):
 
         if(parallel_on):
             # Parallel
-            logging.info(f"Adding ICL instance: {instance_name} for parrael processing ")
+            logger.info(f"Adding ICL instance: {instance_name} for parrael processing ")
             self.processes.append((icl_eval_lis, parser_tree))
         else:
             ## Single
@@ -975,14 +975,14 @@ class IclProcess(iclListener):
             module_idx = ",".join(module_idx)
             module_idx = f"{module_scope}-{module_name}-{module_idx}"
             if(not (module_idx in self.parsed_icl_modules)):
-                logging.info(f"Staring to process ICL instance {instance_name} in {self.icl_instance.get_hier()}")
+                logger.info(f"Staring to process ICL instance {instance_name} in {self.icl_instance.get_hier()}")
 
                 walker = ParseTreeWalker()
                 walker.walk(icl_eval_lis, parser_tree)
                 self.icl_instance.add_icl_item(icl_eval_lis.icl_instance)
                 self.parsed_icl_modules[module_idx] = icl_eval_lis.icl_instance
             else:
-                logging.info(f"Reusing processed ICL instance for {instance_name} in {self.icl_instance.get_hier()}, reused IclInstace {module_idx}")
+                logger.info(f"Reusing processed ICL instance for {instance_name} in {self.icl_instance.get_hier()}, reused IclInstace {module_idx}")
 
                 def mod_instance(inst, hier):
                     for x in inst.icl_items:
@@ -1008,13 +1008,13 @@ class IclProcess(iclListener):
     # module_def : 'Module' module_name '{' module_item* '}' ;
     def exitModule_def(self, ctx:iclParser.Module_defContext):
         if(parallel_on):
-            logging.info(f"Staring to parallel process all ICL instance in {self.icl_instance.get_hier()}")
+            logger.info(f"Staring to parallel process all ICL instance in {self.icl_instance.get_hier()}")
             from concurrent.futures import ThreadPoolExecutor
             with ThreadPoolExecutor() as executor:
                 results = list(executor.map(process_instance, self.processes))
                 for tmp in results:
                     self.icl_instance.add_icl_item(tmp)
-            logging.info(f"Fnished parallel processing all ICL instance in {self.icl_instance.get_hier()}")
+            logger.info(f"Fnished parallel processing all ICL instance in {self.icl_instance.get_hier()}")
 
     #module_item :   useNameSpace_def |
     #                port_def |
@@ -1528,7 +1528,7 @@ class IclProcess(iclListener):
             else:
                 self.icl_instance.add_icl_item(icl_item)
 
-            logging.debug(f'{sys._getframe().f_code.co_name} -> {ctx.getText()} -> {self.result[ctx]}')
+            logger.debug(f'{sys._getframe().f_code.co_name} -> {ctx.getText()} -> {self.result[ctx]}')
 
     # scanInterface_def : 'ScanInterface' scanInterface_name '{' scanInterface_item+ '}' ;
     # scanInterface_name : SCALAR_ID;
@@ -1624,7 +1624,7 @@ class IclProcess(iclListener):
         self.icl_instance.add_icl_item(scan_interface)
         self.result[ctx] = scan_interface
 
-        logging.debug(f'{sys._getframe().f_code.co_name} -> {ctx.getText()} -> {self.result[ctx]}')
+        logger.debug(f'{sys._getframe().f_code.co_name} -> {ctx.getText()} -> {self.result[ctx]}')
 
 
     # oneHotScanGroup_def : 'OneHotScanGroup' oneHotScanGroup_name '{' oneHotScanGroup_item+ '}' ;
@@ -1644,7 +1644,7 @@ class IclProcess(iclListener):
         self.icl_instance.add_icl_item(hot_scan)
         self.result[ctx] = hot_scan
 
-        logging.debug(f'{sys._getframe().f_code.co_name} -> {ctx.getText()} -> {self.result[ctx]}')
+        logger.debug(f'{sys._getframe().f_code.co_name} -> {ctx.getText()} -> {self.result[ctx]}')
 
 
     # oneHotDataGroup_def : 'OneHotDataGroup' oneHotDataGroup_name '{' oneHotDataGroup_item+ '}' ;
@@ -1673,7 +1673,7 @@ class IclProcess(iclListener):
                 raise ValueError(f"Non valid state")
 
         self.result[ctx] = one_hot_data
-        logging.debug(f'{sys._getframe().f_code.co_name} -> {ctx.getText()} -> {self.result[ctx]}')
+        logger.debug(f'{sys._getframe().f_code.co_name} -> {ctx.getText()} -> {self.result[ctx]}')
 
 
     # attribute_def : 'Attribute' attribute_name ('=' attribute_value )? ';' ;
@@ -1687,7 +1687,7 @@ class IclProcess(iclListener):
         # For exitPort_def
         self.module_item_attributes.append(self.result[ctx])
 
-        logging.debug(f'{sys._getframe().f_code.co_name} -> {ctx.getText()} -> {self.result[ctx]}')
+        logger.debug(f'{sys._getframe().f_code.co_name} -> {ctx.getText()} -> {self.result[ctx]}')
 
     # nameSpace_def : 'NameSpace' namespace_name? ';' ;
     # useNameSpace_def : 'UseNameSpace' namespace_name? ';' ;

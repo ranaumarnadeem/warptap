@@ -146,3 +146,25 @@ def test_a_missing_antlr_runtime_says_which_extra_to_install(tmp_path) -> None:
     last = _import_without("antlr4", _icl_file(tmp_path))
     assert last.startswith("ImportError: import_icl needs ANTLR's Python runtime")
     assert 'pip install "warptap[import]"' in last
+
+
+_RUN_AND_SHOW_LOGGING = r"""
+import logging, sys
+from pathlib import Path
+from warptap.icl_import import import_icl
+import_icl([Path(sys.argv[1])], "chip")
+print("root logger handlers:", logging.getLogger().handlers)
+"""
+
+
+def test_import_icl_prints_nothing_and_leaves_logging_alone(tmp_path) -> None:
+    """The parser prints every item it checks, and used to configure the root logger when
+    imported (``logging.basicConfig`` in ``icl_process.py``, now in the fork's ``main.py``).
+    A fresh interpreter, where nothing has configured logging, shows both."""
+    proc = subprocess.run(
+        [sys.executable, "-c", _RUN_AND_SHOW_LOGGING, str(_icl_file(tmp_path))],
+        capture_output=True, text=True, timeout=600,
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert proc.stdout == "root logger handlers: []\n"
+    assert proc.stderr == ""

@@ -107,6 +107,8 @@ assertion the vendored tool might still raise for a shape this project hasn't hi
 
 from __future__ import annotations
 
+import contextlib
+import io
 import sys
 from pathlib import Path
 from typing import List, Tuple
@@ -432,11 +434,15 @@ def _construct_ijtag(icl_parser_module, top_module: str, icl_paths: List[Path]):
     ``build_register_model=False`` for the same reason (a OneHotDataGroup needs it because it's
     scan-free by construction and the default crashes unconditionally for that shape; a
     SIB/ScanMux network needs it purely for performance, see module docstring), and both need
-    the identical exception translation."""
+    the identical exception translation.
+
+    The parser prints its progress and every item it checks to stdout; that output is
+    discarded, so importing a network prints nothing."""
     try:
-        return icl_parser_module(
-            top_module, [str(p) for p in icl_paths], build_register_model=False
-        )
+        with contextlib.redirect_stdout(io.StringIO()):
+            return icl_parser_module(
+                top_module, [str(p) for p in icl_paths], build_register_model=False
+            )
     except AssertionError as exc:
         raise IclImportError(
             "icl_parser's own retargeting-graph construction (IclRegisterModel) failed for "
