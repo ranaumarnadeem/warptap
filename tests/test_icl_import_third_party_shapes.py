@@ -18,6 +18,7 @@ from icl_reimport import reimport
 
 from warptap.icl_import import (
     FOREIGN_SELECT,
+    INVALID_ICL,
     MULTI_VALUE_ARM,
     NON_REGISTER_SELECT,
     NOT_A_TREE,
@@ -318,6 +319,26 @@ def test_an_access_link_in_a_module_the_network_does_not_use_is_left_alone(tmp_p
 def test_control_an_access_link_in_the_network(tmp_path, icl_parser_module):
     with pytest.raises(IclImportError, match=f"^{NOT_ELABORATED}: AccessLink \\(warptap's own"):
         _import(tmp_path, CHIP_WITH_ACCESS_LINK, icl_parser_module, top="Chip")
+
+
+def test_control_a_construct_the_parser_has_no_handler_for(tmp_path, icl_parser_module):
+    """The parser reads a ToClockPort's Source but stores nothing for it, so elaborating one
+    fails on the missing result: named as not elaborated, not as invalid ICL."""
+    top = TWO_GATES.replace(
+        "    ScanOutPort tdo { Source g2.so; }\n",
+        "    ScanOutPort tdo { Source g2.so; }\n    ClockPort ref;\n    ToClockPort out { Source ref; }\n",
+    )
+    with pytest.raises(IclImportError, match=f"^{NOT_ELABORATED}: ToClockPort_source \\(the parser"):
+        _import(tmp_path, top, icl_parser_module)
+
+
+def test_control_a_parameter_defined_twice(tmp_path, icl_parser_module):
+    top = TWO_GATES.replace(
+        "    ScanOutPort tdo { Source g2.so; }\n",
+        "    ScanOutPort tdo { Source g2.so; }\n    Parameter n = 1;\n    Parameter n = 2;\n",
+    )
+    with pytest.raises(IclImportError, match=f"^{INVALID_ICL}: Parameter n is defined more than once in module Top"):
+        _import(tmp_path, top, icl_parser_module)
 
 
 def test_control_a_register_on_the_path_outside_any_slot(tmp_path, icl_parser_module):

@@ -119,9 +119,9 @@ message: a syntax error anywhere in a file (the vendored parser reads each file 
 raises on one; it used to stop without an error at the first construct it couldn't parse and
 drop the rest of the file), a name it can't resolve, a failed ``assert`` in its own consistency
 checks (the message names the file and line), and a construct it reads but doesn't elaborate
-(:data:`NOT_ELABORATED`: an ``AccessLink``, a ``ClockMux``, an addressed instance, a broadcast,
-an instance or port source in a ``OneHotDataGroup``), none of which warptap's model holds
-either. An ``AccessLink`` is only a problem where the network uses it: one in a module the top
+(:data:`NOT_ELABORATED`: an ``AccessLink``, a ``ClockMux``, a ``ToClockPort`` with a ``Source``,
+an addressed instance, a broadcast, an instance or port source in a ``OneHotDataGroup``), none
+of which warptap's model holds either. An ``AccessLink`` is only a problem where the network uses it: one in a module the top
 doesn't instantiate is read and left alone.
 """
 
@@ -648,10 +648,11 @@ def _construct_ijtag(icl_parser_module, top_module: str, icl_paths: List[Path]):
     ``ValueError`` (a syntax error, an unresolved name, or a construct it doesn't elaborate), a
     ``KeyError`` (``Ijtag`` looks modules up in a plain dict, so a ``top_module`` the files
     don't define, or a module or parameter one of them uses but none defines, surfaces as
-    one). Shared by both import entry points (:func:`import_icl` and
-    :func:`import_one_hot_data_group`), which both need ``build_register_model=False``: a
-    OneHotDataGroup is scan-free, which the register model can't build, and for a scan network
-    it is only a cost (see module docstring).
+    one, and so does a parse-tree node its processor has no handler for), and the bare
+    ``Exception`` its few remaining checks raise. Shared by both import entry points
+    (:func:`import_icl` and :func:`import_one_hot_data_group`), which both need
+    ``build_register_model=False``: a OneHotDataGroup is scan-free, which the register model
+    can't build, and for a scan network it is only a cost (see module docstring).
 
     The parser prints its progress and every item it checks to stdout; that output is
     discarded, so importing a network prints nothing."""
@@ -686,6 +687,15 @@ def _construct_ijtag(icl_parser_module, top_module: str, icl_paths: List[Path]):
         raise IclImportError(f"{INVALID_ICL}: {message}") from exc
     except KeyError as exc:
         missing = exc.args[0] if exc.args else None
+        if hasattr(missing, "getRuleIndex"):
+            # A parse-tree node the processor stores no result for: a construct it parses but
+            # has no handler for (a ToClockPort's Source, for one).
+            rule = type(missing).__name__
+            rule = rule[: -len("Context")] if rule.endswith("Context") else rule
+            raise IclImportError(
+                f"{NOT_ELABORATED}: {rule} (the parser has no handler for it), in "
+                f"{missing.getText()[:120]!r}"
+            ) from exc
         scope, _, name = top_module.rpartition("::")
         if missing in (top_module, name, scope or "root"):
             raise IclImportError(
@@ -695,6 +705,12 @@ def _construct_ijtag(icl_parser_module, top_module: str, icl_paths: List[Path]):
             f"{INVALID_ICL}: the vendored parser found no definition of {missing!r} while "
             f"elaborating {top_module!r}"
         ) from exc
+    except Exception as exc:  # noqa: BLE001
+        if type(exc) is not Exception:
+            raise
+        # The parser raises a bare Exception for a few checks of its own: a name defined twice
+        # in a module, a port split into overlapping or gapped parts.
+        raise IclImportError(f"{INVALID_ICL}: {exc}") from exc
 
 
 _NOT_SUPPORTED = (
