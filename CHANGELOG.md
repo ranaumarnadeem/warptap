@@ -43,7 +43,6 @@ implementation stage.
   always reported the placeholder IDCODE.
 - `warptap.bsr_plan.BsrPort`, `BsrCell.bit` and `BsrPlan.ports`; `warptap.netlist.PortInfo`'s
   `offset` and `upto`, the declared range Yosys records.
-
 - **`tdo_drive`** on `insert_sib_network`, `insert_bsr`, `insert_test_access` and `to_bsdl`:
   `"tristate"` (the default), `"low"`, or `"enable_port"`, which keeps `tdo` driven and adds a
   `tdo_oe` output for a pad cell (`to_bsdl` then says the pad does the tri-state). Any other
@@ -62,6 +61,18 @@ implementation stage.
   still selects another build. `scripts/vendor_icl_parser.py` refreshes the copy, and a test
   fails while it differs from the submodule.
 - **Python 3.13.** CI runs the suite on 3.10, 3.11, 3.12 and 3.13.
+- **Gate-level evidence on IHP SG13G2** (tests only; nothing in the library changes).
+  `tests/gate_level.py` maps an inserted design's netlist to SG13G2 standard cells with Yosys,
+  keeping warptap's `keep_hierarchy` modules as blocks and every tri-state driver as an
+  `sg13g2_ebufn_2`, and simulates the result with the library's own cell models in their
+  power-aware mode. `tests/test_gate_level_sg13g2.py` reruns the TDO, boundary-register, BC_7,
+  `uart_tx` and `mem_subsystem_mbist` cross-simulations on the mapped netlists, unchanged, and
+  requires their traces to match the RTL runs. `tests/test_sta_sg13g2.py` times the mapped
+  designs with OpenSTA at TCK 50 MHz and requires every setup, hold, recovery, removal,
+  pulse-width and period check to pass at the slow and fast corners (worst setup slack about
+  6.5 ns; the fastest passing TCK is about 145 MHz); it skips without OpenSTA. CI fetches the
+  five library files at a pinned IHP-Open-PDK commit, checked by git blob SHA, and checks out
+  alexforencich/verilog-uart, so the `uart_tx` cross-simulations run there too.
 
 ### Changed
 
