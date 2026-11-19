@@ -34,6 +34,8 @@ at half and falls at three quarters; `to_stil` below says why. A `Runtest` or `P
 many cycles is written as one `Loop`. Releases up to 0.0.3 compared TDO after the rising edge,
 so on warptap's TAP of those releases, which changed TDO on that edge, every compare checked the
 next bit. The TAP has changed TDO on the falling edge since 0.0.6, as IEEE 1149.1 requires.
+Outside Shift-IR/Shift-DR TDO is not compared (`X`): the inserted TAP releases it there by
+default ([The TDO pin](insertion.md#the-tdo-pin)).
 
 ::: warptap.tap_ir
     options:

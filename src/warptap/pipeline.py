@@ -20,7 +20,13 @@ from warptap.icl_model import ModuleInstance, PhysicalGraph
 from warptap.netlist import Netlist
 from warptap.sib_insert import SibInsertError, insert_sib_network
 from warptap.sib_plan import HierarchySpec, InstrumentSpec, build_sib_plan
-from warptap.tap_model import IDCODE_VALUE, idcode_value_error, ijtag_access_opcode_error
+from warptap.tap_model import (
+    DEFAULT_TDO_DRIVE,
+    IDCODE_VALUE,
+    check_tdo_drive,
+    idcode_value_error,
+    ijtag_access_opcode_error,
+)
 from warptap.yosys_io import ingest, write_verilog_from_json
 
 # Public alias for what build_sib_plan itself calls the private ``_Spec`` union
@@ -44,6 +50,7 @@ def insert_test_access(
     chip_reset: str | None = None,
     chip_reset_active_low: bool = True,
     ijtag_access_opcode: int | None = None,
+    tdo_drive: str = DEFAULT_TDO_DRIVE,
 ) -> Tuple[str, PhysicalGraph, ModuleInstance]:
     """Ingest ``sources``, build the SIB/instrument network ``specs`` describes, insert it into
     ``top_module``, and return the synthesizable inserted Verilog text plus the
@@ -87,7 +94,13 @@ def insert_test_access(
     and EXTEST/SAMPLE/PRELOAD then select BYPASS (see
     :func:`~warptap.sib_insert.insert_sib_network`); off by default. An opcode it can't take
     raises :class:`~warptap.sib_insert.SibInsertError` before anything is ingested.
+
+    ``tdo_drive`` says how the ``tdo`` pin is driven (see
+    :func:`~warptap.sib_insert.insert_sib_network`): ``"tristate"`` by default, high impedance
+    outside Shift-IR/Shift-DR; ``"low"`` or ``"enable_port"`` otherwise. Anything else raises
+    ValueError before anything is ingested. Give :func:`~warptap.bsdl_emit.to_bsdl` the same value.
     """
+    check_tdo_drive(tdo_drive)
     if problem := idcode_value_error(idcode_value):
         raise SibInsertError(problem)
     if ijtag_access_opcode is not None and (
@@ -110,6 +123,7 @@ def insert_test_access(
         chip_reset=chip_reset,
         chip_reset_active_low=chip_reset_active_low,
         ijtag_access_opcode=ijtag_access_opcode,
+        tdo_drive=tdo_drive,
     )
     inserted_verilog = write_verilog_from_json(
         netlist.to_json(), yosys_command=yosys_command

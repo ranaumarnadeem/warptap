@@ -22,6 +22,8 @@ import random
 import tempfile
 from pathlib import Path
 
+from tdo_trace import model_tdo, tdo_bit
+
 from warptap.netlist import Netlist
 from warptap.sib_insert import insert_sib_network
 from warptap.sib_model import SibNetworkRegister
@@ -77,7 +79,9 @@ def _run_inserted(fixtures_dir, yosys_command, iverilog_command, vvp_command, ne
         if not line.startswith("TRACE,"):
             continue
         _, state, instr, cap, shift, upd, tdo, y = line.split(",")
-        trace.append((int(state), int(instr), int(cap), int(shift), int(upd), int(tdo), int(y)))
+        trace.append(
+            (int(state), int(instr), int(cap), int(shift), int(upd), tdo_bit(state, tdo), int(y))
+        )
     return trace
 
 
@@ -176,7 +180,9 @@ def _run_on_tap_model(stim, graph) -> list[tuple[int, int, int, int, int, int]]:
             shift_dr = int(pre_state is TapState.SHIFT_DR)
             update_dr = int(pre_state is TapState.UPDATE_DR)
             tdo = model.tick(tms, tdi)
-        trace.append((pre_state.value, pre_instr, capture_dr, shift_dr, update_dr, tdo))
+        trace.append(
+            (pre_state.value, pre_instr, capture_dr, shift_dr, update_dr, model_tdo(pre_state, tdo))
+        )
     return trace
 
 

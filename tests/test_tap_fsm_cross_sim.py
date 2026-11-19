@@ -1,7 +1,8 @@
 """RTL/Python behavioral equivalence tests (implementation_plan.md §7 Stage 2): the actual
 drift-prevention mechanism between rtl/tap_core.v and warptap.tap_model.TapModel. Both are
 driven, cycle-for-cycle, with identical TMS/TDI stimulus, and their per-cycle
-(state, instruction, capture_dr, shift_dr, update_dr, tdo) traces are asserted equal.
+(state, instruction, capture_dr, shift_dr, update_dr, tdo, tdo_oe) traces are asserted equal,
+``tdo_oe`` against :func:`warptap.tap_model.drives_tdo` of the state the cycle is spent in.
 
 A structural table diff (tests/test_tap_fsm_table.py) can't catch e.g. a capture/shift/update
 strobe wired to the wrong state in the RTL's `case` statement even when the state table
@@ -18,7 +19,7 @@ import pytest
 
 from warptap import sim_io
 from warptap.tap_fsm import TapState, next_state
-from warptap.tap_model import IDCODE_VALUE, OPCODE_EXTEST, OPCODE_IDCODE, TapModel
+from warptap.tap_model import IDCODE_VALUE, OPCODE_EXTEST, OPCODE_IDCODE, TapModel, drives_tdo
 from warptap.yosys_io import ingest
 
 _RTL_PATH = Path(__file__).resolve().parent.parent / "src" / "warptap" / "rtl" / "tap_core.v"
@@ -114,6 +115,7 @@ def run_on_model(stimulus: list[tuple], model: TapModel) -> list[tuple]:
                 int(pre_state is TapState.SHIFT_DR),
                 int(pre_state is TapState.UPDATE_DR),
                 tdo,
+                int(drives_tdo(pre_state)),
             )
         )
     return trace
@@ -146,8 +148,10 @@ def run_on_rtl(
     for line in stdout.splitlines():
         if not line.startswith("TRACE,"):
             continue
-        _, state, instr, cap, shift, upd, tdo = line.split(",")
-        trace.append((int(state), int(instr), int(cap), int(shift), int(upd), int(tdo)))
+        _, state, instr, cap, shift, upd, tdo, tdo_oe = line.split(",")
+        trace.append(
+            (int(state), int(instr), int(cap), int(shift), int(upd), int(tdo), int(tdo_oe))
+        )
     return trace
 
 
@@ -197,15 +201,19 @@ def test_every_tap_core_register_is_reset_by_trst_n(yosys_command):
     mod = ingest([_RTL_PATH], "tap_core", yosys_command=yosys_command)["modules"]["tap_core"]
     trst_n = mod["ports"]["trst_n"]["bits"]
     flops = [cell for cell in mod["cells"].values() if "dff" in cell["type"]]
-    # state, ir_shift, current_instruction_r, idcode_shift, bypass_bit, and tdo
-    assert len(flops) == 6
+    # state, ir_shift, current_instruction_r, idcode_shift, bypass_bit, tdo and tdo_oe
+    assert len(flops) == 7
     for cell in flops:
         assert cell["type"] == "$adff"
         assert cell["connections"]["ARST"] == trst_n
         assert int(cell["parameters"]["ARST_POLARITY"], 2) == 0
-    # Only tdo is clocked on the falling edge (IEEE 1149.1); everything else on the rising one.
+    # Only tdo and tdo_oe are clocked on the falling edge (IEEE 1149.1); everything else on the
+    # rising one. Both reset low: an inserted tri-state pin starts released.
     falling = [cell for cell in flops if int(cell["parameters"]["CLK_POLARITY"], 2) == 0]
-    assert [cell["connections"]["Q"] for cell in falling] == [mod["ports"]["tdo"]["bits"]]
+    assert sorted(cell["connections"]["Q"] for cell in falling) == sorted(
+        [mod["ports"]["tdo"]["bits"], mod["ports"]["tdo_oe"]["bits"]]
+    )
+    assert all(int(cell["parameters"]["ARST_VALUE"], 2) == 0 for cell in falling)
 
 
 def test_tap_core_ingests_via_yosys(yosys_command):

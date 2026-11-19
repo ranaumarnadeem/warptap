@@ -14,6 +14,7 @@ module tb_tap_core;
     reg tdi = 0;
     reg trst_n = 1;
     wire tdo;
+    wire tdo_oe;
     wire [3:0] tap_state;
     wire [IR_WIDTH-1:0] current_instruction;
     wire capture_dr, shift_dr, update_dr;
@@ -24,6 +25,7 @@ module tb_tap_core;
         .tdi(tdi),
         .trst_n(trst_n),
         .tdo(tdo),
+        .tdo_oe(tdo_oe),
         .tap_state(tap_state),
         .current_instruction(current_instruction),
         .capture_dr(capture_dr),
@@ -58,9 +60,9 @@ module tb_tap_core;
                 tms = tms_in[0];
                 tdi = tdi_in[0];
                 #1; // let combinational logic settle before sampling
-                $display("TRACE,%0d,%0d,%0d,%0d,%0d,%0d",
+                $display("TRACE,%0d,%0d,%0d,%0d,%0d,%0d,%0d",
                           tap_state, current_instruction, capture_dr, shift_dr,
-                          update_dr, tdo);
+                          update_dr, tdo, tdo_oe);
                 tck = 1;
                 #1;
                 tck = 0;

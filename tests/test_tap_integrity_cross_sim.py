@@ -12,8 +12,10 @@ from __future__ import annotations
 
 import tempfile
 from pathlib import Path
+from typing import Optional
 
 import pytest
+from tdo_trace import tdo_bit
 
 from warptap.icl_model import (
     InstrumentDirection,
@@ -79,9 +81,10 @@ def _inserted(
 def _observed_tdo(
     fixtures_dir, iverilog_command, vvp_command, design: str, verilog: str,
     program: IntegrityProgram,
-) -> list[int]:
-    """One TDO per program cycle, sampled before the rising edge. The design's own reset
-    follows TRST; trivial's a/b inputs stay 0."""
+) -> list[Optional[int]]:
+    """One TDO per program cycle, sampled before the rising edge (``None`` outside the
+    shift states, where the pin is released). The design's own reset follows TRST;
+    trivial's a/b inputs stay 0."""
     if design == "real_signal":
         testbench, extra = "tb_real_signal.v", ""
     else:
@@ -96,9 +99,9 @@ def _observed_tdo(
             iverilog_command=iverilog_command,
             vvp_command=vvp_command,
         )
-    tdo = [line.split(",")[6] for line in stdout.splitlines() if line.startswith("TRACE,")]
-    assert len(tdo) == len(program.cycles)
-    return [int(v) if v in ("0", "1") else -1 for v in tdo]
+    rows = [line.split(",") for line in stdout.splitlines() if line.startswith("TRACE,")]
+    assert len(rows) == len(program.cycles)
+    return [tdo_bit(row[1], row[6]) for row in rows]
 
 
 @pytest.mark.parametrize("ijtag_access_opcode", [None, OPCODE_IJTAG_ACCESS], ids=["extest", "ijtag"])

@@ -16,6 +16,7 @@ import tempfile
 from pathlib import Path
 
 import pytest
+from tdo_trace import tdo_bit
 
 from warptap.icl_model import InstrumentDirection, SignalBinding
 from warptap.netlist import Netlist
@@ -125,7 +126,7 @@ def _run_on_rtl(fixtures_dir, iverilog_command, vvp_command, verilog, segments):
         )
     trace = [line.split(",") for line in stdout.splitlines() if line.startswith("TRACE,")]
     trace = trace[len(_RESET_LEAD_IN):]
-    tdo = [int(t[6]) for t in trace]
+    tdo = [tdo_bit(t[1], t[6]) for t in trace]
     observed = [
         sum(bit << i for i, bit in enumerate(tdo[start : start + bits]))
         for start, bits in ranges

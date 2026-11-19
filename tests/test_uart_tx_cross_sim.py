@@ -37,6 +37,8 @@ import tempfile
 from pathlib import Path
 from typing import List, Tuple
 
+from tdo_trace import tdo_bit
+
 from warptap.icl_model import InstrumentDirection, SignalBinding
 from warptap.netlist import Netlist
 from warptap.pdl_interpreter import PDLInterpreter
@@ -249,8 +251,8 @@ def test_uart_tx_transmits_the_written_byte_on_real_rtl(
     for line in stdout.splitlines():
         if not line.startswith("TRACE,"):
             continue
-        _, _state, _instr, _cap, _shift, _upd, tdo, txd, _busy = line.split(",")
-        tdo_by_cycle.append(_parse_bit(tdo))
+        _, state, _instr, _cap, _shift, _upd, tdo, txd, _busy = line.split(",")
+        tdo_by_cycle.append(tdo_bit(state, tdo))
         txd_by_cycle.append(_parse_bit(txd))
     tdo_by_cycle = tdo_by_cycle[len(_RESET_LEAD_IN):]
     txd_by_cycle = txd_by_cycle[len(_RESET_LEAD_IN):]

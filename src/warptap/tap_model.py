@@ -66,6 +66,38 @@ def idcode_value_error(value: object) -> str | None:
     return None
 
 
+TDO_DRIVES = ("tristate", "low", "enable_port")
+"""How an inserted TAP drives its ``tdo`` pin, the values of the ``tdo_drive`` keyword of
+:func:`~warptap.sib_insert.insert_sib_network`, :func:`~warptap.bsr_insert.insert_bsr`,
+:func:`~warptap.pipeline.insert_test_access` and :func:`~warptap.bsdl_emit.to_bsdl`:
+
+- ``"tristate"`` (the default): a tri-state driver on the pin, enabled by ``rtl/tap_core.v``'s
+  ``tdo_oe``, so TDO is high impedance outside Shift-IR/Shift-DR, as IEEE 1149.1 requires.
+- ``"low"``: the pin is driven at all times, low outside the shift states (warptap 0.0.6 and
+  earlier). Not IEEE 1149.1 conformant, and two such devices can't share a TDO line.
+- ``"enable_port"``: the pin is driven at all times and ``tdo_oe`` is brought out as a top-level
+  output too, for a design that is a core rather than the whole chip: the pad that drives the
+  chip's TDO pin takes its tri-state enable from it."""
+
+DEFAULT_TDO_DRIVE = "tristate"
+
+
+def check_tdo_drive(tdo_drive: object) -> str:
+    """``tdo_drive``, if it is one of :data:`TDO_DRIVES`, else ValueError naming them."""
+    if not isinstance(tdo_drive, str) or tdo_drive not in TDO_DRIVES:
+        raise ValueError(
+            f"tdo_drive must be one of {', '.join(repr(d) for d in TDO_DRIVES)}, got {tdo_drive!r}"
+        )
+    return tdo_drive
+
+
+def drives_tdo(state: TapState) -> bool:
+    """Whether TDO carries a bit in a TCK cycle spent in ``state``: only in Shift-IR and Shift-DR
+    (IEEE 1149.1). ``rtl/tap_core.v``'s ``tdo_oe`` is this, registered on the falling edge from
+    the state the TAP is in, so it holds for each cycle the TAP is resident in ``state``."""
+    return state in (TapState.SHIFT_IR, TapState.SHIFT_DR)
+
+
 def bypass_opcode(ir_width: int) -> int:
     """BYPASS must decode to all-1s for whatever IR width is configured: computed, not
     hardcoded, since the mandate is about the pattern, not a fixed bit width."""
@@ -304,8 +336,9 @@ class TapModel:
     def tick(self, tms: int, tdi: int = 0) -> int:
         """Step one TCK rising edge. `tms`/`tdi` are the values sampled on this edge;
         returns the TDO value for this cycle (only meaningful while resident in
-        Shift-IR/Shift-DR: other states return 0, since real TAPs don't guarantee a
-        protocol-significant TDO value outside a shift state either)."""
+        Shift-IR/Shift-DR: other states return 0, the value rtl/tap_core.v's ``tdo`` output
+        holds there. The pin itself is released in those states (:func:`drives_tdo`) unless
+        the TAP was inserted with ``tdo_drive="low"``, which drives that 0 onto it)."""
         old_state = self.state
         tdo = 0
 

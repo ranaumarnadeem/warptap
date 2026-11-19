@@ -16,6 +16,7 @@ import tempfile
 from pathlib import Path
 
 import pytest
+from tdo_trace import model_tdo, tdo_bit
 from test_sib_insert_extest_select_cross_sim import (
     _ALL_ONES,
     _SPECS,
@@ -220,7 +221,7 @@ def test_a_random_walk_matches_the_model_every_cycle(
             int(state is TapState.SHIFT_DR),
             int(state is TapState.UPDATE_DR),
         )
-        expected.append((*row, model.tick(tms, tdi)))
+        expected.append((*row, model_tdo(state, model.tick(tms, tdi))))
 
     rows = _RESET_LEAD_IN + [(tms, tdi, 1, 1) for tms, tdi in walk]
     with tempfile.TemporaryDirectory(prefix="warptap-ijtag-access-walk-") as tmpdir:
@@ -233,7 +234,9 @@ def test_a_random_walk_matches_the_model_every_cycle(
             vvp_command=vvp_command,
         )
     trace = [line.split(",")[1:7] for line in stdout.splitlines() if line.startswith("TRACE,")]
-    observed = [tuple(int(v) for v in t) for t in trace[len(_RESET_LEAD_IN):]]
+    observed = [
+        (*(int(v) for v in t[:5]), tdo_bit(t[0], t[5])) for t in trace[len(_RESET_LEAD_IN):]
+    ]
 
     assert observed == expected
     loaded = [row[1] for row in expected]

@@ -20,6 +20,15 @@
 // next rising edge (a tester, or the next device's TDI in a board chain) gets half a TCK period
 // of setup and hold. Up to warptap 0.0.5 it was driven straight from the mux below and changed
 // just after the rising edge, which left only clock-to-output delay as hold time.
+//
+// tdo_oe is high while TDO carries a bit: registered on the same falling edge as tdo, from the
+// state the TAP is resident in, so it rises at the falling edge after the TAP enters Shift-IR or
+// Shift-DR and falls at the falling edge after it leaves. IEEE 1149.1 wants TDO released (high
+// impedance) outside those two states; this module drives tdo at all times (low outside them)
+// and leaves the tri-state to its instantiator, so it never contains a tri-state driver itself.
+// warptap's insertions put a $tribuf on the top-level tdo pin with tdo_oe as its enable, or, by
+// request, bring tdo_oe out for a pad cell, or leave it unconnected and the pin driven low
+// outside the shift states, as up to warptap 0.0.6 (their tdo_drive keyword).
 module tap_core #(
     parameter IR_WIDTH = 4,
     parameter [IR_WIDTH-1:0] OPCODE_EXTEST = 4'b0000,
@@ -33,6 +42,7 @@ module tap_core #(
     input  wire tdi,
     input  wire trst_n,
     output reg  tdo,
+    output reg  tdo_oe,
 
     // Debug/verification ports -- not part of the JTAG pin interface, but what
     // tests/test_tap_fsm_cross_sim.py samples to diff against TapModel.
@@ -169,12 +179,16 @@ module tap_core #(
 
     // ... launched on the falling edge (see the header): during each cycle, before its rising
     // edge, TDO shows the bit that edge shifts out -- what TapModel.tick() returns before it
-    // mutates its own registers.
+    // mutates its own registers. tdo_oe goes with it: high for exactly the cycles spent in
+    // Shift-IR/Shift-DR (warptap.tap_model.drives_tdo).
     always @(negedge tck or negedge trst_n) begin
-        if (!trst_n)
+        if (!trst_n) begin
             tdo <= 1'b0;
-        else
+            tdo_oe <= 1'b0;
+        end else begin
             tdo <= tdo_next;
+            tdo_oe <= (state == SHIFT_IR) || (state == SHIFT_DR);
+        end
     end
 
 endmodule

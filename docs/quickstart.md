@@ -64,6 +64,11 @@ inserted_verilog, graph, root = insert_test_access(
 The TAP's IDCODE defaults to a placeholder; pass `idcode_value=` (32 bits, bit 0 set) to use
 your own, and give [`to_bsdl`](reference/bsdl.md) the same value.
 
+The TAP's `tdo` pin is tri-stated outside Shift-IR and Shift-DR, as IEEE 1149.1 requires. If the
+design is a core rather than the whole chip, pass `tdo_drive="enable_port"`: `tdo` is then always
+driven and a `tdo_oe` output enables the pad's tri-state instead (see
+[The TDO pin](reference/insertion.md#the-tdo-pin)). Give `to_bsdl` the same value.
+
 ### 3. Drive it
 
 `PDLInterpreter` is a small state machine over four commands: `iTarget` selects which

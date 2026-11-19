@@ -24,6 +24,7 @@ import tempfile
 from pathlib import Path
 
 import yaml
+from tdo_trace import tdo_bit
 
 from warptap.icl_model import InstrumentDirection, SignalBinding
 from warptap.netlist import Netlist
@@ -200,8 +201,8 @@ def test_self_repair_start_write_and_busy_read_on_real_mem_subsystem_mbist(
     for line in stdout.splitlines():
         if not line.startswith("TRACE,"):
             continue
-        _, _state, _instr, _cap, _shift, _upd, tdo, _rdata = line.split(",")
-        tdo_by_cycle.append(int(tdo))
+        _, state, _instr, _cap, _shift, _upd, tdo, _rdata = line.split(",")
+        tdo_by_cycle.append(tdo_bit(state, tdo))
     tdo_by_cycle = tdo_by_cycle[len(_RESET_LEAD_IN):]
 
     observed_by_shift_op = correlate_observed(ir_ops, tdo_by_cycle)

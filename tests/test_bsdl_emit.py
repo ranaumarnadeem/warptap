@@ -272,3 +272,47 @@ def test_ijtag_access_design_warning_names_the_network_instruction_and_bypass():
 def test_an_opcode_no_tap_can_give_ijtag_access_is_refused(opcode):
     with pytest.raises(BsdlEmitError, match="IJTAG_ACCESS opcode"):
         _emit(ijtag_access_opcode=opcode)
+
+
+# --- tdo_drive -----------------------------------------------------------------------------------
+
+_TDO_DRIVEN_LOW = (
+    "Not fully IEEE 1149.1 conformant: TDO is driven low, not tri-stated, outside the shift states."
+)
+
+
+def test_the_default_tristate_tap_gets_no_warning_about_tdo():
+    warning = parse_bsdl(_emit()).design_warning
+    assert "conformant" not in warning
+    assert "tri-stat" not in warning
+    assert "tdo_oe" not in warning
+
+
+def test_low_says_the_tap_is_not_fully_conformant():
+    assert _TDO_DRIVEN_LOW in parse_bsdl(_emit(tdo_drive="low")).design_warning
+
+
+def test_enable_port_says_the_pad_does_the_tri_state_from_tdo_oe():
+    warning = parse_bsdl(_emit(tdo_drive="enable_port")).design_warning
+    assert "TDO is not tri-stated inside this design" in warning
+    assert (
+        "the pad that drives the TDO pin must do the tri-state, enabled by the design's tdo_oe "
+        "output, which is high only in Shift-IR and Shift-DR." in warning
+    )
+    assert "conformant" not in warning
+
+
+@pytest.mark.parametrize("tdo_drive", ["low", "enable_port"])
+@pytest.mark.parametrize("emit", [_emit, _emit_ijtag_access], ids=["extest", "ijtag_access"])
+def test_tdo_drive_changes_nothing_but_the_design_warning(emit, tdo_drive):
+    default, other = emit().splitlines(), emit(tdo_drive=tdo_drive).splitlines()
+    header = next(i for i, line in enumerate(default) if "attribute DESIGN_WARNING" in line) + 1
+    assert other[:header] == default[:header]
+    assert other[-2:] == default[-2:] == ["", "end chip;"]
+    assert other != default
+
+
+@pytest.mark.parametrize("value", ["tri-state", "Tristate", None, 1])
+def test_an_unknown_tdo_drive_is_refused(value):
+    with pytest.raises(ValueError, match="'tristate', 'low', 'enable_port'"):
+        _emit(tdo_drive=value)

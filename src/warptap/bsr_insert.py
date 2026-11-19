@@ -20,7 +20,8 @@ from pathlib import Path
 from warptap.bsr_plan import BsrFunction, BsrPlan
 from warptap.errors import WarptapError
 from warptap.netlist import Bit, Module, Netlist
-from warptap.tap_ports import TCK, TDI, TDO, TMS, TRST_N
+from warptap.tap_model import DEFAULT_TDO_DRIVE, check_tdo_drive
+from warptap.tap_ports import TCK, TDI, TMS, TRST_N, add_tdo_pin
 from warptap.yosys_io import ingest
 
 _RTL_DIR = Path(__file__).resolve().parent / "rtl"
@@ -100,11 +101,13 @@ def insert_bsr(
     ir_width: int = DEFAULT_IR_WIDTH,
     opcode_extest: int = DEFAULT_OPCODE_EXTEST,
     yosys_command: str | None = None,
+    tdo_drive: str = DEFAULT_TDO_DRIVE,
 ) -> None:
     """Insert a TAP + boundary-scan chain into ``netlist``'s ``top`` module,
     matching ``plan`` (from ``bsr_plan.build_bsr_plan``). Adds five new top-level
-    JTAG ports (tck/tms/tdi/trst_n/tdo). Every scanned port's *original* bits stay
-    fully wired to whatever originally drove/read them: output3 pins get
+    JTAG ports (tck/tms/tdi/trst_n/tdo, plus tdo_oe with ``tdo_drive="enable_port"``).
+    Every scanned port's *original* bits stay fully wired to whatever originally
+    drove/read them: output3 pins get
     ``detach_port``-ed (the real pin becomes new bits driven through a tri-state
     buffer), but their old bits remain the cell's functional passthrough input, so
     normal-mode (``trst_n`` asserted) behavior is provably unchanged; see
@@ -113,7 +116,14 @@ def insert_bsr(
     ``ir_width``/``opcode_extest`` must match ``rtl/tap_core.v``'s actual compiled
     parameters (its own defaults, currently; see the module-level constants above)
     since this function never overrides them on the instance.
+
+    ``tdo_drive`` says how the ``tdo`` pin is driven, exactly as for
+    :func:`warptap.sib_insert.insert_sib_network`: ``"tristate"`` (the default, high
+    impedance outside Shift-IR/Shift-DR), ``"low"`` (warptap 0.0.6's behavior) or
+    ``"enable_port"`` (driven, plus a ``tdo_oe`` output for a pad cell). Anything else raises
+    ValueError.
     """
+    check_tdo_drive(tdo_drive)
     top_mod = netlist.module(top)
     port_bits_by_name = {p.name: p.bits for p in top_mod.ports()}
     # ^ snapshot BEFORE any detach_port calls below, so output3 cells see each
@@ -128,7 +138,7 @@ def insert_bsr(
     tms_bits = top_mod.add_port(TMS, "input")
     tdi_bits = top_mod.add_port(TDI, "input")
     trst_n_bits = top_mod.add_port(TRST_N, "input")
-    tdo_bits = top_mod.add_port(TDO, "output")
+    tdo_connections = add_tdo_pin(top_mod, tdo_drive)
 
     # Allocated up front (bit IDs, not drivers) so the chain-building loop below can
     # reference them before tap_core itself is instantiated at the end, once the
@@ -314,13 +324,14 @@ def insert_bsr(
         _TAP_CORE,
         port_directions={
             "tck": "input", "tms": "input", "tdi": "input", "trst_n": "input",
-            "tdo": "output", "tap_state": "output", "current_instruction": "output",
+            **dict.fromkeys(tdo_connections, "output"),
+            "tap_state": "output", "current_instruction": "output",
             "capture_dr": "output", "shift_dr": "output", "update_dr": "output",
             "external_dr_tdo": "input",
         },
         connections={
             "tck": tck_bits, "tms": tms_bits, "tdi": tdi_bits, "trst_n": trst_n_bits,
-            "tdo": tdo_bits, "tap_state": tap_state_bits,
+            **tdo_connections, "tap_state": tap_state_bits,
             "current_instruction": current_instruction_bits,
             "capture_dr": capture_dr_bits, "shift_dr": shift_dr_bits,
             "update_dr": update_dr_bits,
