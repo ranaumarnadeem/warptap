@@ -7,9 +7,13 @@ didn't write) builds the scan path from that text; each test reads the path it w
 first, from the bit names of the vectors it generates. Its solved bit values are not used: its
 retargeting solver is not reliable on these networks, its path building is.
 
-Each walk runs in a Python process of its own. The parser keeps state between ``Ijtag``
-objects in one process: after ``test_icl_emit_1500.py``'s networks it walks only the SIB bit of
-this one, so in the suite's own process the result would depend on what ran before.
+The walks used to run in a Python process of their own. Every ``Ijtag`` built its solvers in
+Z3's one shared default context, and with several equally cheap models the one Z3 returned
+depended on what earlier ``Ijtag`` objects had left there: after ``test_icl_emit_1500.py``'s
+networks the walk below saw only the SIB bit, though the problem handed to Z3 was byte-identical.
+The fork now gives each retargeter its own context, so the walks run in the suite's process, and
+``test_the_walk_does_not_depend_on_what_the_parser_built_before`` keeps it that way. Against the
+fork before that change (7b8ef6c), that test fails with ``['warptap_sib_x.SR_0000']``.
 
 Control: the 0.0.5 declaration (``[width-1:0]``) makes the parser walk one bit of the register,
 the one SI and SO both named, so it sees a 2-bit chain where the RTL has 4.
@@ -17,33 +21,18 @@ the one SI and SO both named, so it sees a 2-bit chain where the RTL has 4.
 
 from __future__ import annotations
 
-import json
-import subprocess
-import sys
-from pathlib import Path
+import contextlib
+import io
 
 import pytest
 
+from test_icl_emit_1500 import BLOCK, OTHER, PINS
 from warptap.icl_emit import to_icl
+from warptap.icl_emit_1500 import to_icl_1500, to_icl_1500_chain
 from warptap.icl_model import InstrumentDirection, SignalBinding
 from warptap.sib_plan import InstrumentSpec, build_sib_plan
 
 _WIDTH = 3
-
-_WALK_SCRIPT = r"""
-import contextlib, io, json, sys
-sys.path.insert(0, sys.argv[1])
-from src.ijtag import Ijtag
-icl_path, operation, target = sys.argv[2:5]
-with contextlib.redirect_stdout(io.StringIO()):
-    ijtag = Ijtag("chip", [icl_path])
-    getattr(ijtag, operation)(target, "0b110")
-    ijtag.iApply()
-    steps = ijtag.getiApplyVectors()
-print("@@STEPS@@" + json.dumps(
-    [[s.type_of_chain, [list(c.in_data_names) for c in s.chain.values()]] for s in steps]
-))
-"""
 
 
 def _network(direction: InstrumentDirection):
@@ -55,24 +44,18 @@ def _network(direction: InstrumentDirection):
 
 
 def _walked_bits(ijtag_class, text: str, tmp_path, direction: InstrumentDirection) -> list:
-    """The bit names of the parser's DR scan for one access to instrument ``x``, from a fresh
-    process. ``ijtag_class`` (the ``icl_parser_module`` fixture) locates the parser and makes
-    the test fail or skip as every other parser test does when it is missing."""
-    parser_root = Path(sys.modules[ijtag_class.__module__].__file__).resolve().parents[1]
+    """The bit names of the parser's DR scan for one access to instrument ``x``."""
     path = tmp_path / "chip.icl"
     path.write_text(text, encoding="utf-8")
     operation = "iWrite" if direction is InstrumentDirection.WRITE else "iRead"
-    proc = subprocess.run(
-        [sys.executable, "-c", _WALK_SCRIPT, str(parser_root), str(path), operation,
-         "warptap_instr_x.DR"],
-        capture_output=True, text=True, timeout=300,
-    )
-    marker = [line for line in proc.stdout.splitlines() if line.startswith("@@STEPS@@")]
-    assert proc.returncode == 0 and marker, proc.stdout + proc.stderr
-    steps = json.loads(marker[-1][len("@@STEPS@@"):])
-    assert steps and all(chain_type == "DR" for chain_type, _ in steps), steps
-    (names,) = steps[-1][1]
-    return names
+    with contextlib.redirect_stdout(io.StringIO()):
+        ijtag = ijtag_class("chip", [str(path)])
+        getattr(ijtag, operation)("warptap_instr_x.DR", "0b110")
+        ijtag.iApply()
+        steps = ijtag.getiApplyVectors()
+    assert steps and all(s.type_of_chain == "DR" for s in steps), steps
+    (chain,) = steps[-1].chain.values()
+    return list(chain.in_data_names)
 
 
 @pytest.mark.parametrize(
@@ -98,3 +81,22 @@ def test_the_0_0_5_declaration_hides_all_but_one_bit(icl_parser_module, tmp_path
     assert old != text
     walked = _walked_bits(icl_parser_module, old, tmp_path, InstrumentDirection.WRITE)
     assert walked == ["warptap_instr_x.SR_0002", "warptap_sib_x.SR_0000"]
+
+
+def test_the_walk_does_not_depend_on_what_the_parser_built_before(icl_parser_module, tmp_path):
+    graph, root = _network(InstrumentDirection.WRITE)
+    text = to_icl(graph, root, include_access_link=False)
+    before = _walked_bits(icl_parser_module, text, tmp_path, InstrumentDirection.WRITE)
+    others = [
+        (to_icl_1500(BLOCK), "blk"),
+        (to_icl_1500_chain([BLOCK, OTHER], top="soc", pins=PINS), "soc"),
+    ]
+    for k, (other, top) in enumerate(others):
+        path = tmp_path / f"other_{k}.icl"
+        path.write_text(other, encoding="utf-8")
+        with contextlib.redirect_stdout(io.StringIO()):
+            icl_parser_module(top, [str(path)])
+    after = _walked_bits(icl_parser_module, text, tmp_path, InstrumentDirection.WRITE)
+    assert after == before == [f"warptap_instr_x.SR_{k:04d}" for k in range(_WIDTH)] + [
+        "warptap_sib_x.SR_0000"
+    ]

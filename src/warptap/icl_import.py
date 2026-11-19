@@ -4,6 +4,11 @@ against), never touching raw ICL text directly -- extending this project's estab
 "shell out to a real independent tool, never round-trip through a self-written parser"
 discipline to *parsing*, not just validation.
 
+**Which copy of the parser**: warptap ships one inside its own package (:mod:`warptap._vendor`,
+a byte-for-byte copy of the submodule's, checked by ``tests/test_vendored_icl_parser.py``), and
+the importers use it unless given another ``Ijtag`` class. It needs only ANTLR's Python runtime
+(the ``import`` extra): the importers never build the parser's z3-based retargeting model.
+
 **Scope, narrowed deliberately, matching the approved plan's own language**: this recognizes
 only *warptap's own canonical SIB-network shape* -- a top module whose direct children are
 :data:`~warptap.icl_emit.SIB_MODULE_TYPE`-typed instances chained ``InputPort SI = <prev>.SO;``
@@ -102,10 +107,13 @@ assertion the vendored tool might still raise for a shape this project hasn't hi
 
 from __future__ import annotations
 
+import contextlib
+import io
 import sys
 from pathlib import Path
 from typing import List, Tuple
 
+from warptap import _vendor
 from warptap.errors import WarptapError
 from warptap.icl_emit import (
     INSTRUMENT_MODULE_PREFIX,
@@ -426,11 +434,15 @@ def _construct_ijtag(icl_parser_module, top_module: str, icl_paths: List[Path]):
     ``build_register_model=False`` for the same reason (a OneHotDataGroup needs it because it's
     scan-free by construction and the default crashes unconditionally for that shape; a
     SIB/ScanMux network needs it purely for performance, see module docstring), and both need
-    the identical exception translation."""
+    the identical exception translation.
+
+    The parser prints its progress and every item it checks to stdout; that output is
+    discarded, so importing a network prints nothing."""
     try:
-        return icl_parser_module(
-            top_module, [str(p) for p in icl_paths], build_register_model=False
-        )
+        with contextlib.redirect_stdout(io.StringIO()):
+            return icl_parser_module(
+                top_module, [str(p) for p in icl_paths], build_register_model=False
+            )
     except AssertionError as exc:
         raise IclImportError(
             "icl_parser's own retargeting-graph construction (IclRegisterModel) failed for "
@@ -456,12 +468,16 @@ def _construct_ijtag(icl_parser_module, top_module: str, icl_paths: List[Path]):
 
 
 def import_icl(
-    icl_paths: List[Path], top_module: str, *, icl_parser_module
+    icl_paths: List[Path], top_module: str, *, icl_parser_module=None
 ) -> Tuple[PhysicalGraph, ModuleInstance]:
-    """Parse ``icl_paths`` entirely via ``icl_parser_module`` (the vendored ``Ijtag`` class,
-    injected the same way ``tests/conftest.py``'s ``icl_parser_module`` fixture already
-    provides it to Stage 10's validation tests) and convert the result into warptap's own
-    :class:`~warptap.icl_model.PhysicalGraph`/:class:`~warptap.icl_model.ModuleInstance`.
+    """Parse ``icl_paths`` entirely via ``icl_parser_module`` and convert the result into
+    warptap's own :class:`~warptap.icl_model.PhysicalGraph`/
+    :class:`~warptap.icl_model.ModuleInstance`.
+
+    ``icl_parser_module`` is an ``icl_parser`` ``Ijtag`` class. It defaults to the copy warptap
+    ships (:mod:`warptap._vendor`), which needs the ``import`` extra
+    (``pip install "warptap[import]"``); pass another, such as a development checkout's, to
+    parse with that instead, as ``tests/conftest.py``'s ``icl_parser_module`` fixture does.
 
     Raises :class:`IclImportError` for: a real ``icl_parser`` gap (its own retargeting-graph
     ``AssertionError``, or its "Not supported" ``AccessLink`` rejection -- both already
@@ -474,6 +490,8 @@ def import_icl(
     instrument) is detected structurally and recursed into -- matching
     :mod:`warptap.icl_emit`'s own emission the other direction.
     """
+    if icl_parser_module is None:
+        icl_parser_module = _vendor.ijtag("import_icl")
     ijtag = _construct_ijtag(icl_parser_module, top_module, icl_paths)
 
     top = ijtag.icl_instance
@@ -517,11 +535,12 @@ def _one_hot_item_classes(icl_parser_module):
 
 
 def import_one_hot_data_group(
-    icl_paths: List[Path], module_name: str, *, icl_parser_module
+    icl_paths: List[Path], module_name: str, *, icl_parser_module=None
 ) -> OneHotDataGroup:
     """Parse ``icl_paths`` and recover the single :class:`~warptap.icl_model.OneHotDataGroup`
     declared in ``module_name`` -- the mirror-image recognition path to
-    :func:`~warptap.icl_emit.render_one_hot_data_group_module`.
+    :func:`~warptap.icl_emit.render_one_hot_data_group_module`. ``icl_parser_module`` defaults
+    to the vendored parser, as for :func:`import_icl`.
 
     Returns a single :class:`~warptap.icl_model.OneHotDataGroup`, not a tuple of them, even
     though the plan that originally sketched this function's signature drafted a plural
@@ -574,6 +593,8 @@ def import_one_hot_data_group(
     importer accepts arbitrary ``.icl`` input, matching :func:`import_icl`'s own "recognize
     warptap's own canonical shape, reject anything else" discipline.
     """
+    if icl_parser_module is None:
+        icl_parser_module = _vendor.ijtag("import_one_hot_data_group")
     ijtag = _construct_ijtag(icl_parser_module, module_name, icl_paths)
     top = ijtag.icl_instance
     IclOneHotDataGroup, IclDataRegister = _one_hot_item_classes(icl_parser_module)

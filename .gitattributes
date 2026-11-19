@@ -7,3 +7,7 @@
 # otherwise turn LF into CRLF and break the byte-for-byte comparisons).
 tests/fixtures/golden_icl/* -text
 tests/fixtures/golden_bsdl/* -text
+
+# The vendored parser is a byte-for-byte copy of the submodule's files, four of which are CRLF
+# (tests/test_vendored_icl_parser.py compares them): never let git rewrite its line endings.
+src/warptap/_vendor/icl_parser/** -text

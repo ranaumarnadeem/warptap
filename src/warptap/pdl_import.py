@@ -49,6 +49,7 @@ from __future__ import annotations
 
 import re
 
+from warptap import _vendor
 from warptap.errors import WarptapError
 from warptap.pdl_interpreter import PDLInterpreter
 
@@ -137,14 +138,16 @@ def _replay_command(cmd_ctx, interp: PDLInterpreter, current_target) -> None:
     )
 
 
-def import_pdl(pdl_text: str, interp: PDLInterpreter, *, pdl_lexer_class, pdl_parser_class) -> None:
+def import_pdl(
+    pdl_text: str, interp: PDLInterpreter, *, pdl_lexer_class=None, pdl_parser_class=None
+) -> None:
     """Replay ``pdl_text`` against ``interp`` (an already-constructed
     :class:`~warptap.pdl_interpreter.PDLInterpreter` over the caller's own graph/root), one
     line at a time, exactly as if each statement had been typed as a direct method call.
     ``pdl_lexer_class``/``pdl_parser_class`` are the compiled grammar's own ``pdlLexer``/
-    ``pdlParser`` classes, injected the same way :func:`~warptap.icl_import.import_icl`
-    accepts its own ``icl_parser_module`` -- see ``tests/conftest.py`` for how a caller/test
-    imports them from the vendored submodule.
+    ``pdlParser`` classes. Both default to the copy warptap ships (:mod:`warptap._vendor`,
+    needs ``pip install "warptap[import]"``); pass both to parse with another build, as
+    ``tests/conftest.py`` does with the submodule's.
 
     Raises :class:`PdlImportError` for anything outside v1 scope (see module docstring) or a
     line the compiled grammar itself rejects as invalid PDL syntax; lets any error from
@@ -152,6 +155,13 @@ def import_pdl(pdl_text: str, interp: PDLInterpreter, *, pdl_lexer_class, pdl_pa
     ``iTarget``) propagate unwrapped, matching this project's own "let a lower layer's own
     precisely-named exception through rather than re-wrapping it into something vaguer"
     convention (e.g. ``pdl_interpreter.iTarget`` itself already does this)."""
+    if (pdl_lexer_class is None) != (pdl_parser_class is None):
+        raise TypeError(
+            "pass both pdl_lexer_class and pdl_parser_class, or neither: a lexer and parser "
+            "from different builds of the grammar disagree on token types"
+        )
+    if pdl_lexer_class is None:
+        pdl_lexer_class, pdl_parser_class = _vendor.pdl_lexer_and_parser("import_pdl")
     from antlr4 import CommonTokenStream, InputStream
     from antlr4.error.ErrorListener import ErrorListener
 

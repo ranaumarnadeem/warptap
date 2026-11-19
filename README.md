@@ -32,7 +32,9 @@ Design-for-test (DFT) instruments such as MBIST controllers, scan compression an
 pip install warptap
 ```
 
-Needs a real `yosys` on `PATH` (shelled out to, never bundled).
+Needs a real `yosys` on `PATH` (shelled out to, never bundled). Reading ICL and PDL back in
+(`import_icl`, `import_pdl`) also needs ANTLR's Python runtime, for the parser warptap ships:
+`pip install "warptap[import]"`.
 
 warptap is a Python library. A `warptap` CLI entry point exists but is not stable yet: today
 it only prints its version and help, with no subcommands.
@@ -86,11 +88,13 @@ python3 -m venv .venv && ./.venv/bin/pip install -e '.[dev]'
 ```
 
 `third_party/icl_parser` is a git submodule (an ICL/PDL parser the grammar and import tests run
-against). In an existing clone, and in every `git worktree`, run
-`git submodule update --init third_party/icl_parser` first. The `dev` extra installs its Python
-dependencies (`antlr4-python3-runtime==4.7.2`, `z3-solver`, `sympy`, `networkx`). Without the
-submodule or those packages the parser tests fail with that instruction;
-`WARPTAP_ALLOW_MISSING_ICL_PARSER=1` makes them skip instead.
+against, and the source of the copy warptap ships in `src/warptap/_vendor`). In an existing
+clone, and in every `git worktree`, run `git submodule update --init third_party/icl_parser`
+first. The `dev` extra installs its Python dependencies (`antlr4-python3-runtime==4.13.2`,
+`z3-solver`, `sympy`, `networkx`). Without the submodule or those packages the parser tests fail
+with that instruction; `WARPTAP_ALLOW_MISSING_ICL_PARSER=1` makes them skip instead. After moving
+the submodule, refresh the shipped copy with `python scripts/vendor_icl_parser.py`; a test fails
+until the two match.
 
 If a real `yosys` isn't available at all, `WARPTAP_YOSYS_CMD` can point at any
 Yosys-compatible executable, and `tests/conftest.py` falls back to a pip-installed

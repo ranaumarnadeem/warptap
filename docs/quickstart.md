@@ -9,6 +9,10 @@ netlist ingest and re-emission, and never bundles it. If nothing is found on `PA
 `WARPTAP_YOSYS_CMD` to point at any Yosys-compatible executable, or install the `yowasp-yosys`
 WASM build as a fallback.
 
+To read ICL and PDL back in ([`import_icl`/`import_pdl`](guide/icl-pdl-import.md)), install the
+`import` extra, which adds ANTLR's Python runtime for the parser warptap ships:
+`pip install "warptap[import]"`.
+
 ## The core pipeline
 
 Insert a JTAG/IJTAG test-access network into your design, then either drive it with

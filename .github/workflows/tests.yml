@@ -13,9 +13,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # The oldest Python pyproject.toml accepts, and the one releases are tested on.
-        # third_party/icl_parser still imports typing.io, which Python 3.13 removed.
-        python-version: ["3.10", "3.12"]
+        # Every Python pyproject.toml lists, from the oldest it accepts.
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
     env:
       # The apt OpenOCD: the OSS CAD Suite's own build, first on PATH, has no dummy adapter,
       # which the SVF checks run on.
