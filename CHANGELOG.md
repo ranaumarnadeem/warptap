@@ -16,8 +16,33 @@ implementation stage.
   of its own.
 - **`rtl/tap_core.v` has a new output port, `tdo_oe`, after `tdo`.** An instance connected
   by position needs updating.
+- **`insert_bsr`'s boundary register changes only under EXTEST and SAMPLE/PRELOAD.** Its cells
+  took `tap_core`'s capture/shift/update strobes, which fire in every DR scan, so a scan under
+  IDCODE or BYPASS overwrote what PRELOAD had set: on `tests/fixtures/trivial.v`, an IDCODE
+  scan between PRELOAD and EXTEST turned `y` from the preloaded 0 to 1. IEEE 1149.1 requires a
+  register the instruction doesn't select to keep its outputs.
+- **Every BSDL's `DESIGN_WARNING` says when updates land.** The instruction register and every
+  update stage latch on the rising edge of TCK that leaves Update-IR or Update-DR, half a TCK
+  period after IEEE 1149.1's falling edge in those states, so a tester that stops TCK in one of
+  them sees the change only at the next rising edge. Found by ebyst, which stops there; patterns
+  that keep TCK running, warptap's own included, see no difference. The timing itself is
+  unchanged.
 
 ### Added
+
+- **`to_bsdl(..., boundary=plan)`: a chip-level BSDL for a boundary-scan design.** Given the
+  plan `insert_bsr` was called with, the file declares every port with its declared range
+  (`bit_vector(3 downto 0)`, `bit_vector(0 to 1)`), the boundary register cell by cell, numbered
+  from TDO as BSDL requires, with each output's control cell and the value that disables it,
+  and `REGISTER_ACCESS` giving EXTEST, SAMPLE and PRELOAD the boundary register. Ports left off
+  the register are named in the `DESIGN_WARNING`. Checked against the inserted RTL with every
+  bit taken from the file, and by ebyst, an open-source boundary-scan tool that builds its own
+  model of the device from the file, validates the chain (IR length, IDCODE) and drives and
+  reads every pin of the simulated design.
+- **`insert_bsr(..., idcode_value=)`**, as for `insert_sib_network`: it took none, so its TAP
+  always reported the placeholder IDCODE.
+- `warptap.bsr_plan.BsrPort`, `BsrCell.bit` and `BsrPlan.ports`; `warptap.netlist.PortInfo`'s
+  `offset` and `upto`, the declared range Yosys records.
 
 - **`tdo_drive`** on `insert_sib_network`, `insert_bsr`, `insert_test_access` and `to_bsdl`:
   `"tristate"` (the default), `"low"`, or `"enable_port"`, which keeps `tdo` driven and adds a
@@ -61,6 +86,12 @@ implementation stage.
   logger themselves on first use; an application calling `logging.basicConfig` after its first
   import then got no effect. The fork now leaves logging to its own `main.py` and logs through
   its module logger, and the importers discard what the parser prints.
+- **`insert_bsr` failed on multi-bit ports.** `build_bsr_plan` gave each port one cell whatever
+  its width. `insert_bsr` then raised `BsrInsertError` for a multi-bit inout (its driver search
+  expected a 1-bit `$mux`), wired a multi-bit output's whole port to one 1-bit `$tribuf`, which
+  Yosys refused to write, and wired a multi-bit input's whole port to one cell's 1-bit input.
+  Every bit now has its own cells, each output or inout bit its own control cell, and each port
+  is detached from the design's driver once.
 
 ## [0.0.6] - 2026-11-19
 
