@@ -66,6 +66,13 @@ def idcode_value_error(value: object) -> str | None:
     return None
 
 
+def drives_tdo(state: TapState) -> bool:
+    """Whether TDO carries a bit in a TCK cycle spent in ``state``: only in Shift-IR and Shift-DR
+    (IEEE 1149.1). ``rtl/tap_core.v``'s ``tdo_oe`` is this, registered on the falling edge from
+    the state the TAP is in, so it holds for each cycle the TAP is resident in ``state``."""
+    return state in (TapState.SHIFT_IR, TapState.SHIFT_DR)
+
+
 def bypass_opcode(ir_width: int) -> int:
     """BYPASS must decode to all-1s for whatever IR width is configured: computed, not
     hardcoded, since the mandate is about the pattern, not a fixed bit width."""
