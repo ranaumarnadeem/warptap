@@ -1,5 +1,7 @@
 import os
 import threading
+
+from antlr4.error.ErrorListener import ErrorListener
 from typing import TYPE_CHECKING
 
 from .icl_parser.iclLexer import iclLexer
@@ -14,6 +16,17 @@ from .icl_process import *
 if TYPE_CHECKING:
     from .icl_register_model import IclRegisterModel
     from .icl_retargeting import IclRetargeting
+
+class _SyntaxErrors(ErrorListener):
+    """Collects the lexer's and parser's syntax errors instead of printing them."""
+
+    def __init__(self):
+        super().__init__()
+        self.messages: list[str] = []
+
+    def syntaxError(self, recognizer, offendingSymbol, line, column, msg, e):
+        self.messages.append(f"line {line}:{column} {msg}")
+
 
 class Ijtag:
 
@@ -214,19 +227,38 @@ class Ijtag:
         def __pre_process_file(icl_file, results, index):
             print(f"Pre processing file: {icl_file}")
 
-            pre = IclPreProcess()
-            pre.modules = {"root": {}}
-            stream = CommonTokenStream(iclLexer(FileStream(icl_file, encoding='utf-8')))
-            parser_tree = iclParser(stream).icl_source()
-            walker = ParseTreeWalker()
-            walker.walk(pre, parser_tree)
-            results[index] = pre.modules
+            # Each file is read to its end, and any syntax error is an error: the default
+            # listener only prints, and the parse went on without whatever it couldn't match.
+            # Errors are handed back to the calling thread, which raises them.
+            try:
+                errors = _SyntaxErrors()
+                lexer = iclLexer(FileStream(icl_file, encoding='utf-8'))
+                lexer.removeErrorListeners()
+                lexer.addErrorListener(errors)
+                parser = iclParser(CommonTokenStream(lexer))
+                parser.removeErrorListeners()
+                parser.addErrorListener(errors)
+                parser_tree = parser.icl_file()
+                if errors.messages:
+                    raise ValueError(
+                        f"syntax errors in ICL file {icl_file}: " + "; ".join(errors.messages)
+                    )
+                pre = IclPreProcess()
+                pre.modules = {"root": {}}
+                walker = ParseTreeWalker()
+                walker.walk(pre, parser_tree)
+                results[index] = pre.modules
+            except Exception as exc:
+                results[index] = exc
 
         results = [None] * len(icl_files)
         threads = [threading.Thread(target=__pre_process_file, args=(f, results, i)) for i, f in enumerate(icl_files)]
 
         for t in threads: t.start()
         for t in threads: t.join()
+        for r in results:
+            if isinstance(r, Exception):
+                raise r
 
         # Merge in order
         all_icl_modules = {"root": {}}
