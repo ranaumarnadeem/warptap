@@ -72,3 +72,6 @@ warptap = ["rtl/*.v", "py.typed", "_vendor/icl_parser/LICENSE", "_vendor/icl_par
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "slow: takes minutes (the largest ITC'16 benchmark networks); deselect with -m 'not slow'",
+]
