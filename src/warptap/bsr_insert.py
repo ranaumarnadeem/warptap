@@ -20,10 +20,13 @@ from pathlib import Path
 from warptap.bsr_plan import BsrFunction, BsrPlan
 from warptap.errors import WarptapError
 from warptap.netlist import Bit, Module, Netlist, PortInfo
+from warptap.sib_insert import _import_tap_core
 from warptap.tap_model import (
     DEFAULT_TDO_DRIVE,
+    IDCODE_VALUE,
     OPCODE_SAMPLE_PRELOAD,
     check_tdo_drive,
+    idcode_value_error,
 )
 from warptap.tap_ports import TCK, TDI, TMS, TRST_N, add_tdo_pin
 from warptap.yosys_io import ingest
@@ -124,6 +127,7 @@ def insert_bsr(
     opcode_extest: int = DEFAULT_OPCODE_EXTEST,
     yosys_command: str | None = None,
     tdo_drive: str = DEFAULT_TDO_DRIVE,
+    idcode_value: int = IDCODE_VALUE,
 ) -> None:
     """Insert a TAP + boundary-scan chain into ``netlist``'s ``top`` module,
     matching ``plan`` (from ``bsr_plan.build_bsr_plan``). Adds five new top-level
@@ -150,15 +154,23 @@ def insert_bsr(
     impedance outside Shift-IR/Shift-DR), ``"low"`` (warptap 0.0.6's behavior) or
     ``"enable_port"`` (driven, plus a ``tdo_oe`` output for a pad cell). Anything else raises
     ValueError.
+
+    ``idcode_value`` is the IDCODE the TAP reports, as for
+    :func:`warptap.sib_insert.insert_sib_network`: a 32-bit value with bit 0 set, else
+    :class:`BsrInsertError`. Give :func:`warptap.bsdl_emit.to_bsdl` the same value.
     """
     check_tdo_drive(tdo_drive)
+    if problem := idcode_value_error(idcode_value):
+        raise BsrInsertError(problem)
     top_mod = netlist.module(top)
     port_info_by_name = {p.name: p for p in top_mod.ports()}
     port_bits_by_name = {name: p.bits for name, p in port_info_by_name.items()}
     # ^ snapshot BEFORE any detach_port calls below, so output3 cells see each
     # port's ORIGINAL functional-drive bits, not a port added in this same pass.
 
-    _import_template(netlist, _TAP_CORE, yosys_command=yosys_command)
+    _import_tap_core(
+        netlist, idcode_value=idcode_value, ijtag_access_opcode=None, yosys_command=yosys_command
+    )
     _import_template(netlist, _BC1_SHIFT_ONLY, yosys_command=yosys_command)
     _import_template(netlist, _BC1_FULL, yosys_command=yosys_command)
     _import_template(netlist, _BC7_BIDIR, yosys_command=yosys_command)
