@@ -5,6 +5,43 @@ implementation stage.
 
 ## [Unreleased]
 
+### Added
+
+- **`import_icl`, `import_one_hot_data_group` and `import_pdl` work after
+  `pip install "warptap[import]"`.** They needed a clone of the icl_parser fork on `sys.path`.
+  warptap now ships a copy of that parser (MIT) in `warptap/_vendor`, taken from the fork its
+  `third_party/icl_parser` submodule pins, and the importers parse with it when given no parser
+  classes. The `import` extra installs the one thing the copy needs, ANTLR's 4.13 runtime;
+  without it, or with another minor version, the importers raise `ImportError` naming the
+  extra. Passing `icl_parser_module=`, or both `pdl_lexer_class=` and `pdl_parser_class=`,
+  still selects another build. `scripts/vendor_icl_parser.py` refreshes the copy, and a test
+  fails while it differs from the submodule.
+- **Python 3.13.** CI runs the suite on 3.10, 3.11, 3.12 and 3.13.
+
+### Changed
+
+- **The vendored parser is regenerated with ANTLR 4.13.2**, and the `dev` extra pins
+  `antlr4-python3-runtime==4.13.2` instead of 4.7.2. The 4.7.2 code imported `typing.io`, which
+  Python 3.13 removed. The parser now imports its z3/sympy/networkx retargeting model only when
+  it builds one, which warptap's importers never do.
+
+### Fixed
+
+- **The vendored parser's retargeting result depended on what ran earlier in the same
+  process.** Every `Ijtag` built its solvers in Z3's shared default context, and when several
+  models were equally cheap, the one Z3 returned depended on what earlier `Ijtag` objects had
+  left there: after two IEEE 1500 networks, the walk through a 3-bit instrument saw only the
+  SIB bit, although the problem handed to Z3 was byte-identical. Each retargeter now has its
+  own Z3 context (fixed in the fork), and the scan-order tests run in the suite's process
+  instead of in subprocesses. warptap's importers never build the retargeter, so their results
+  were not affected.
+- **`import_icl` printed the parser's debug output and configured the application's root
+  logger.** The parser prints every item it checks, called `logging.basicConfig(level=INFO)`
+  when imported, and logged through module-level `logging` calls, which configure the root
+  logger themselves on first use; an application calling `logging.basicConfig` after its first
+  import then got no effect. The fork now leaves logging to its own `main.py` and logs through
+  its module logger, and the importers discard what the parser prints.
+
 ## [0.0.6] - 2026-11-19
 
 ### Behavior changes
