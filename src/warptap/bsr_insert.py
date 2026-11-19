@@ -19,8 +19,15 @@ from pathlib import Path
 
 from warptap.bsr_plan import BsrFunction, BsrPlan
 from warptap.errors import WarptapError
-from warptap.netlist import Bit, Module, Netlist
-from warptap.tap_model import DEFAULT_TDO_DRIVE, check_tdo_drive
+from warptap.netlist import Bit, Module, Netlist, PortInfo
+from warptap.sib_insert import _import_tap_core
+from warptap.tap_model import (
+    DEFAULT_TDO_DRIVE,
+    IDCODE_VALUE,
+    OPCODE_SAMPLE_PRELOAD,
+    check_tdo_drive,
+    idcode_value_error,
+)
 from warptap.tap_ports import TCK, TDI, TMS, TRST_N, add_tdo_pin
 from warptap.yosys_io import ingest
 
@@ -38,37 +45,55 @@ class BsrInsertError(WarptapError):
     port, rather than guessing and silently emitting something wrong."""
 
 
-def _find_existing_tristate_driver(
-    top_mod: Module, port_bits: list[Bit]
-) -> tuple[list[Bit], list[Bit]]:
-    """Find the cell driving `port_bits` through the standard
-    ``assign io = enable ? drive_val : 1'bz;`` idiom. Returns
-    ``(drive_value_bits, enable_bits)``. Raises :class:`BsrInsertError`, naming the
-    port bits, if no such driver is found or its polarity isn't the expected
+def _find_existing_tristate_driver(top_mod: Module, bit: Bit) -> tuple[list[Bit], list[Bit]]:
+    """Find the cell driving port bit ``bit`` through the standard
+    ``assign io = enable ? drive_val : 1'bz;`` idiom: a ``$mux`` whose ``Y`` includes the bit
+    (a multi-bit ``io`` is one wide ``$mux`` sharing its ``S``). Returns
+    ``(drive_value_bits, enable_bits)``, one bit each. Raises :class:`BsrInsertError`,
+    naming the bit, if no such driver is found or its polarity isn't the expected
     ``S ? B : A``-with-``A=="z"`` shape (any other shape is a real, distinct case
     this v1 doesn't attempt to guess at)."""
     for cell in top_mod.data.get("cells", {}).values():
         if cell.get("type") != "$mux":
             continue
         connections = cell.get("connections", {})
-        if connections.get("Y") != list(port_bits):
+        y_bits = connections.get("Y", [])
+        if bit not in y_bits:
             continue
+        lane = y_bits.index(bit)
         a_bits, b_bits, s_bits = (
             connections.get("A", []),
             connections.get("B", []),
             connections.get("S", []),
         )
-        if a_bits == ["z"]:
-            return b_bits, s_bits  # Y = S ? B : z -- driven (by B) when S=1
+        if a_bits[lane] == "z":
+            return [b_bits[lane]], s_bits  # Y = S ? B : z -- driven (by B) when S=1
         raise BsrInsertError(
-            f"found a $mux driving bits {port_bits} but its 'z' operand isn't in "
+            f"found a $mux driving bit {bit} but its 'z' operand isn't in "
             "the expected position (A) -- polarity not handled by this v1"
         )
     raise BsrInsertError(
-        f"no existing tri-state driver ($mux with a 'z' operand) found for bits "
-        f"{port_bits} -- bidir port insertion needs the design's own drive-value/"
+        f"no existing tri-state driver ($mux with a 'z' operand) found for bit "
+        f"{bit} -- bidir port insertion needs the design's own drive-value/"
         "enable signals to preserve, and none could be found"
     )
+
+
+def _bit_position(port: PortInfo, bit: int | None) -> int:
+    """Where port bit ``bit`` (an HDL bit number, or None for a 1-bit port) sits in
+    ``port.bits``."""
+    if bit is None:
+        if len(port.bits) != 1:
+            raise BsrInsertError(
+                f"a cell for port {port.name!r} names no bit, but the port is "
+                f"{len(port.bits)} bits wide: build the plan with build_bsr_plan"
+            )
+        return 0
+    index = bit - port.offset
+    position = len(port.bits) - 1 - index if port.upto else index
+    if not 0 <= position < len(port.bits):
+        raise BsrInsertError(f"port {port.name!r} has no bit {bit}")
+    return position
 
 # Must match rtl/tap_core.v's own parameter defaults: v1 never overrides them on the
 # hierarchical instance (plan §2: avoids an unverified per-instance-parameter-override
@@ -102,6 +127,7 @@ def insert_bsr(
     opcode_extest: int = DEFAULT_OPCODE_EXTEST,
     yosys_command: str | None = None,
     tdo_drive: str = DEFAULT_TDO_DRIVE,
+    idcode_value: int = IDCODE_VALUE,
 ) -> None:
     """Insert a TAP + boundary-scan chain into ``netlist``'s ``top`` module,
     matching ``plan`` (from ``bsr_plan.build_bsr_plan``). Adds five new top-level
@@ -111,7 +137,13 @@ def insert_bsr(
     ``detach_port``-ed (the real pin becomes new bits driven through a tri-state
     buffer), but their old bits remain the cell's functional passthrough input, so
     normal-mode (``trst_n`` asserted) behavior is provably unchanged; see
-    ``tests/test_bsr_insert_equivalence.py``.
+    ``tests/test_bsr_insert_equivalence.py``. Each cell serves one port bit, so a
+    multi-bit port is scanned bit by bit.
+
+    The boundary register is the data register of EXTEST and SAMPLE/PRELOAD only: its cells
+    capture, shift and update only under those two instructions, so a scan under IDCODE or
+    BYPASS leaves the values a PRELOAD set, as IEEE 1149.1 requires of a register the
+    instruction doesn't select.
 
     ``ir_width``/``opcode_extest`` must match ``rtl/tap_core.v``'s actual compiled
     parameters (its own defaults, currently; see the module-level constants above)
@@ -122,14 +154,23 @@ def insert_bsr(
     impedance outside Shift-IR/Shift-DR), ``"low"`` (warptap 0.0.6's behavior) or
     ``"enable_port"`` (driven, plus a ``tdo_oe`` output for a pad cell). Anything else raises
     ValueError.
+
+    ``idcode_value`` is the IDCODE the TAP reports, as for
+    :func:`warptap.sib_insert.insert_sib_network`: a 32-bit value with bit 0 set, else
+    :class:`BsrInsertError`. Give :func:`warptap.bsdl_emit.to_bsdl` the same value.
     """
     check_tdo_drive(tdo_drive)
+    if problem := idcode_value_error(idcode_value):
+        raise BsrInsertError(problem)
     top_mod = netlist.module(top)
-    port_bits_by_name = {p.name: p.bits for p in top_mod.ports()}
+    port_info_by_name = {p.name: p for p in top_mod.ports()}
+    port_bits_by_name = {name: p.bits for name, p in port_info_by_name.items()}
     # ^ snapshot BEFORE any detach_port calls below, so output3 cells see each
     # port's ORIGINAL functional-drive bits, not a port added in this same pass.
 
-    _import_template(netlist, _TAP_CORE, yosys_command=yosys_command)
+    _import_tap_core(
+        netlist, idcode_value=idcode_value, ijtag_access_opcode=None, yosys_command=yosys_command
+    )
     _import_template(netlist, _BC1_SHIFT_ONLY, yosys_command=yosys_command)
     _import_template(netlist, _BC1_FULL, yosys_command=yosys_command)
     _import_template(netlist, _BC7_BIDIR, yosys_command=yosys_command)
@@ -162,6 +203,50 @@ def insert_bsr(
         connections={"A": current_instruction_bits, "B": opcode_bits, "Y": extest_mode_bits},
     )
 
+    # tap_core raises capture_dr/shift_dr/update_dr in every DR scan, whatever the
+    # instruction (its header says so): the cells get them only while EXTEST or SAMPLE/PRELOAD,
+    # the instructions whose data register this chain is, is the current instruction.
+    sample_preload_bits = top_mod.new_wire(1, name="warptap_sample_preload_mode")
+    sample_preload_opcode: list[Bit] = [
+        str((OPCODE_SAMPLE_PRELOAD >> i) & 1) for i in range(ir_width)
+    ]
+    top_mod.add_cell(
+        "warptap_sample_preload_decode",
+        "$eq",
+        parameters={
+            "A_SIGNED": 0, "B_SIGNED": 0,
+            "A_WIDTH": ir_width, "B_WIDTH": ir_width, "Y_WIDTH": 1,
+        },
+        port_directions={"A": "input", "B": "input", "Y": "output"},
+        connections={
+            "A": current_instruction_bits, "B": sample_preload_opcode, "Y": sample_preload_bits,
+        },
+    )
+    selected_bits = top_mod.new_wire(1, name="warptap_bsr_selected")
+    top_mod.add_cell(
+        "warptap_bsr_select",
+        "$or",
+        parameters={"A_SIGNED": 0, "B_SIGNED": 0, "A_WIDTH": 1, "B_WIDTH": 1, "Y_WIDTH": 1},
+        port_directions={"A": "input", "B": "input", "Y": "output"},
+        connections={"A": extest_mode_bits, "B": sample_preload_bits, "Y": selected_bits},
+    )
+    gated: dict[str, list[Bit]] = {}
+    for strobe, raw_bits in (
+        ("capture_dr", capture_dr_bits), ("shift_dr", shift_dr_bits), ("update_dr", update_dr_bits)
+    ):
+        gated[strobe] = top_mod.new_wire(1, name=f"warptap_bsr_{strobe}")
+        top_mod.add_cell(
+            f"warptap_bsr_{strobe}_gate",
+            "$and",
+            parameters={"A_SIGNED": 0, "B_SIGNED": 0, "A_WIDTH": 1, "B_WIDTH": 1, "Y_WIDTH": 1},
+            port_directions={"A": "input", "B": "input", "Y": "output"},
+            connections={"A": raw_bits, "B": selected_bits, "Y": gated[strobe]},
+        )
+    # The cells below take these; tap_core's own outputs drive the raw wires.
+    cell_capture_bits, cell_shift_bits, cell_update_bits = (
+        gated["capture_dr"], gated["shift_dr"], gated["update_dr"]
+    )
+
     prev_so: list[Bit] = tdi_bits
     control_pin_out: dict[int, list[Bit]] = {}  # cell_number -> that control cell's pin_out
     control_instance_by_number: dict[int, str] = {}  # cell_number -> its own instance name
@@ -176,12 +261,25 @@ def insert_bsr(
         c.disable_cell_index: c.function for c in plan.cells if c.disable_cell_index is not None
     }
 
+    detached_pins: dict[str, list[Bit]] = {}
+
+    def _real_pin(port_name: str) -> list[Bit]:
+        """The port's bits as the pin itself, detached from the design's own driver the first
+        time one of its output3/bidir cells asks: detaching again would strand the bits the
+        earlier cells' tri-state buffers drive."""
+        if port_name not in detached_pins:
+            top_mod.detach_port(port_name)  # the old bits stay alive via port_bits_by_name
+            detached_pins[port_name] = top_mod.port_bits(port_name)
+        return detached_pins[port_name]
+
     for cell in plan.cells:
         instance_name = f"warptap_bsr_{cell.cell_number}"
         cell_attrs = {
             "warptap_bsr_cell_number": cell.cell_number,
             "warptap_bsr_port_name": cell.port_name,
         }
+        if cell.function is not BsrFunction.CONTROL:
+            position = _bit_position(port_info_by_name[cell.port_name], cell.bit)
 
         if cell.function is BsrFunction.INPUT:
             so_bits = top_mod.new_wire(1, name=f"{instance_name}_so")
@@ -194,9 +292,9 @@ def insert_bsr(
                     "tck": "input", "trst_n": "input",
                 },
                 connections={
-                    "pi": port_bits_by_name[cell.port_name],
+                    "pi": [port_bits_by_name[cell.port_name][position]],
                     "si": prev_so, "so": so_bits,
-                    "capture_dr": capture_dr_bits, "shift_dr": shift_dr_bits,
+                    "capture_dr": cell_capture_bits, "shift_dr": cell_shift_bits,
                     "tck": tck_bits, "trst_n": trst_n_bits,
                 },
                 attributes=cell_attrs,
@@ -225,8 +323,8 @@ def insert_bsr(
                 connections={
                     "func_in": func_in_connection,
                     "si": prev_so, "so": so_bits, "pin_out": pin_out_bits,
-                    "capture_dr": capture_dr_bits, "shift_dr": shift_dr_bits,
-                    "update_dr": update_dr_bits, "extest_mode": extest_mode_bits,
+                    "capture_dr": cell_capture_bits, "shift_dr": cell_shift_bits,
+                    "update_dr": cell_update_bits, "extest_mode": extest_mode_bits,
                     "tck": tck_bits, "trst_n": trst_n_bits,
                 },
                 attributes=cell_attrs,
@@ -238,9 +336,9 @@ def insert_bsr(
                 control_instance_by_number[cell.cell_number] = instance_name
 
         elif cell.function is BsrFunction.OUTPUT3:
-            func_in_bits = port_bits_by_name[cell.port_name]  # old bits, still fully driven
-            top_mod.detach_port(cell.port_name)  # old bits kept alive via func_in_bits above
-            new_pin_bits = top_mod.port_bits(cell.port_name)  # the real pin, now free to drive
+            # The old bit, still fully driven by the design, and the real pin bit, now free.
+            func_in_bits = [port_bits_by_name[cell.port_name][position]]
+            new_pin_bits = [_real_pin(cell.port_name)[position]]
             so_bits = top_mod.new_wire(1, name=f"{instance_name}_so")
             cell_pin_out_bits = top_mod.new_wire(1, name=f"{instance_name}_pin_out")
             top_mod.add_cell(
@@ -254,8 +352,8 @@ def insert_bsr(
                 connections={
                     "func_in": func_in_bits,
                     "si": prev_so, "so": so_bits, "pin_out": cell_pin_out_bits,
-                    "capture_dr": capture_dr_bits, "shift_dr": shift_dr_bits,
-                    "update_dr": update_dr_bits, "extest_mode": extest_mode_bits,
+                    "capture_dr": cell_capture_bits, "shift_dr": cell_shift_bits,
+                    "update_dr": cell_update_bits, "extest_mode": extest_mode_bits,
                     "tck": tck_bits, "trst_n": trst_n_bits,
                 },
                 attributes=cell_attrs,
@@ -272,10 +370,9 @@ def insert_bsr(
             prev_so = so_bits
 
         elif cell.function is BsrFunction.BIDIR:
-            old_bits = port_bits_by_name[cell.port_name]
-            func_in_bits, orig_enable_bits = _find_existing_tristate_driver(top_mod, old_bits)
-            top_mod.detach_port(cell.port_name)
-            new_pin_bits = top_mod.port_bits(cell.port_name)  # the real pin, now free to drive
+            old_bit = port_bits_by_name[cell.port_name][position]
+            func_in_bits, orig_enable_bits = _find_existing_tristate_driver(top_mod, old_bit)
+            new_pin_bits = [_real_pin(cell.port_name)[position]]  # the real pin, now free
             so_bits = top_mod.new_wire(1, name=f"{instance_name}_so")
             cell_pin_out_bits = top_mod.new_wire(1, name=f"{instance_name}_pin_out")
             top_mod.add_cell(
@@ -291,8 +388,8 @@ def insert_bsr(
                     "pin_in": new_pin_bits,  # always observes the real pin, drive-direction aside
                     "func_in": func_in_bits,
                     "si": prev_so, "so": so_bits, "pin_out": cell_pin_out_bits,
-                    "capture_dr": capture_dr_bits, "shift_dr": shift_dr_bits,
-                    "update_dr": update_dr_bits, "extest_mode": extest_mode_bits,
+                    "capture_dr": cell_capture_bits, "shift_dr": cell_shift_bits,
+                    "update_dr": cell_update_bits, "extest_mode": extest_mode_bits,
                     "tck": tck_bits, "trst_n": trst_n_bits,
                 },
                 attributes=cell_attrs,

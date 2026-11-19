@@ -23,6 +23,21 @@ _ATTRIBUTE = re.compile(
 _STRING = re.compile(r'"([^"]*)"')
 
 
+@dataclass(frozen=True)
+class BoundaryCell:
+    """One BOUNDARY_REGISTER entry: ``number (cell, port, function, safe[, ccell, disval,
+    rslt])``, with ``port`` as written (``"*"``, ``"a"`` or ``"d(3)"``)."""
+
+    number: int
+    cell: str
+    port: str
+    function: str
+    safe: str
+    ccell: Optional[int] = None
+    disval: Optional[int] = None
+    rslt: Optional[str] = None
+
+
 @dataclass
 class Bsdl:
     entity: str
@@ -37,6 +52,10 @@ class Bsdl:
     design_warning: str
     attribute_names: List[str] = field(default_factory=list)
     end_name: str = ""
+    # Each port's declared bit numbers, left to right; [] for a ``bit`` port.
+    port_bits: Dict[str, List[int]] = field(default_factory=dict)
+    boundary_length: Optional[int] = None
+    boundary_register: List[BoundaryCell] = field(default_factory=list)
 
 
 def _strip_comments(text: str) -> str:
@@ -55,14 +74,48 @@ def _entries(joined: str) -> Dict[str, List[str]]:
     return out
 
 
-def _ports(clean: str) -> Dict[str, str]:
-    port_block = re.search(r"\bport\s*\((.*?)\)\s*;", clean, re.DOTALL)
+_PORT = re.compile(
+    r"(\w+)\s*:\s*(in|out|inout|buffer|linkage)\s+"
+    r"(?:bit_vector\s*\(\s*(\d+)\s+(to|downto)\s+(\d+)\s*\)|bit\b)"
+)
+
+
+def _port_matches(clean: str):
+    # The clause ends at a line holding only ");": a bit_vector declaration ends in ");" too.
+    port_block = re.search(r"\bport\s*\((.*?)\n\s*\)\s*;", clean, re.DOTALL)
     if not port_block:
         raise ValueError("no port clause")
-    return {
-        m.group(1): m.group(2)
-        for m in re.finditer(r"(\w+)\s*:\s*(in|out)\s+bit", port_block.group(1))
-    }
+    return list(_PORT.finditer(port_block.group(1)))
+
+
+def _ports(clean: str) -> Dict[str, str]:
+    return {m.group(1): m.group(2) for m in _port_matches(clean)}
+
+
+def _port_bits(clean: str) -> Dict[str, List[int]]:
+    out: Dict[str, List[int]] = {}
+    for m in _port_matches(clean):
+        if m.group(3) is None:
+            out[m.group(1)] = []
+            continue
+        left, right = int(m.group(3)), int(m.group(5))
+        step = 1 if m.group(4) == "to" else -1
+        out[m.group(1)] = list(range(left, right + step, step))
+    return out
+
+
+_CELL = re.compile(r"(\d+)\s*\(((?:[^()]|\([^()]*\))*)\)")
+
+
+def _boundary_cells(joined: str) -> List[BoundaryCell]:
+    cells = []
+    for number, body in _CELL.findall(joined):
+        fields = [f.strip() for f in re.split(r",(?![^()]*\))", body)]
+        if len(fields) not in (4, 7):
+            raise ValueError(f"cell {number}: expected 4 or 7 fields, got {fields}")
+        extra = (int(fields[4]), int(fields[5]), fields[6]) if len(fields) == 7 else (None, None, None)
+        cells.append(BoundaryCell(int(number), *fields[:4], *extra))
+    return cells
 
 
 def _attributes(clean: str) -> Tuple[Dict[Tuple[str, str], str], List[str]]:
@@ -114,7 +167,68 @@ def parse_bsdl(text: str) -> Bsdl:
         design_warning=_joined_strings(entity_attr("DESIGN_WARNING")),
         attribute_names=names,
         end_name=end.group(1) if end else "",
+        port_bits=_port_bits(clean),
+        boundary_length=(
+            int(attrs[("BOUNDARY_LENGTH", entity.group(1))])
+            if ("BOUNDARY_LENGTH", entity.group(1)) in attrs
+            else None
+        ),
+        boundary_register=(
+            _boundary_cells(_joined_strings(attrs[("BOUNDARY_REGISTER", entity.group(1))]))
+            if ("BOUNDARY_REGISTER", entity.group(1)) in attrs
+            else []
+        ),
     )
+
+
+def _cell_port(port: str) -> Tuple[str, Optional[int]]:
+    m = re.fullmatch(r"(\w+)(?:\((\d+)\))?", port)
+    if not m:
+        raise ValueError(f"unparsable boundary cell port {port!r}")
+    return m.group(1), (int(m.group(2)) if m.group(2) is not None else None)
+
+
+def _boundary_problems(bsdl: Bsdl, tap_pins: set) -> List[str]:
+    """What IEEE 1149.1 requires of a BOUNDARY_REGISTER that a reader can check from the text."""
+    cells = bsdl.boundary_register
+    problems = []
+    if bsdl.boundary_length != len(cells):
+        problems.append(f"BOUNDARY_LENGTH {bsdl.boundary_length} but {len(cells)} cells")
+    numbers = sorted(c.number for c in cells)
+    if numbers != list(range(len(cells))):
+        problems.append(f"cell numbers are not exactly 0..{len(cells) - 1}")
+    by_number = {c.number: c for c in cells}
+    covered = set()
+    for c in cells:
+        if c.function in ("output3", "bidir"):
+            control = by_number.get(c.ccell)
+            if control is None or control.function != "control":
+                problems.append(f"cell {c.number}'s control cell {c.ccell} is not a control cell")
+            if c.rslt != "Z":
+                problems.append(f"cell {c.number} disables to {c.rslt}, not Z")
+        if c.port == "*":
+            if c.function != "control":
+                problems.append(f"cell {c.number} has no port but is not a control cell")
+            continue
+        name, bit = _cell_port(c.port)
+        if name not in bsdl.port_bits:
+            problems.append(f"cell {c.number} names undeclared port {name}")
+            continue
+        declared = bsdl.port_bits[name]
+        if (bit is None) != (not declared) or (bit is not None and bit not in declared):
+            problems.append(f"cell {c.number} names {c.port}, which port {name} does not have")
+        covered.add((name, bit))
+    for name, bits in bsdl.port_bits.items():
+        if name in tap_pins:
+            continue
+        for bit in bits or [None]:
+            if (name, bit) not in covered:
+                label = name if bit is None else f"{name}({bit})"
+                problems.append(f"port {label} has no boundary-register cell")
+    for name in ("EXTEST", "SAMPLE", "PRELOAD"):
+        if name not in bsdl.register_access.get("BOUNDARY", []):
+            problems.append(f"REGISTER_ACCESS does not give {name} the BOUNDARY register")
+    return problems
 
 
 # What IEEE 1149.1-2001 BSDL requires of every component, from the same secondary sources
@@ -168,7 +282,10 @@ def strict_problems(text: str, *, waive: Iterable[str] = ()) -> List[str]:
 
     ports = _ports(clean)
     tap_pins = {pin for attr, pin in attrs if attr in _TAP_SCAN}
-    problems += [f"port {port} is not a TAP pin" for port in ports if port not in tap_pins]
+    if "BOUNDARY_REGISTER" in names:
+        problems += _boundary_problems(parse_bsdl(text), tap_pins)
+    else:
+        problems += [f"port {port} is not a TAP pin" for port in ports if port not in tap_pins]
     generic = re.search(r'\bPHYSICAL_PIN_MAP\s*:\s*string\s*:=\s*"(\w+)"', clean)
     constant = generic and re.search(
         rf'\bconstant\s+{generic.group(1)}\s*:\s*PIN_MAP_STRING\s*:=\s*((?:"[^"]*"|[^";])*);',

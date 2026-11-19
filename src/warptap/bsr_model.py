@@ -38,6 +38,7 @@ class BoundaryScanRegister:
                     f"BoundaryScanRegister does not yet model {cell.function}"
                 )
         self._states = [_CellState(c) for c in plan.cells]
+        self._ports = {p.name: p for p in plan.ports}
         self._functional_inputs: dict[str, int] = {}
 
     def reset(self) -> None:
@@ -53,15 +54,20 @@ class BoundaryScanRegister:
 
     def set_functional_inputs(self, values: dict[str, int]) -> None:
         """Set the live value each INPUT/OUTPUT3 cell observes, keyed by the cell's
-        real ``port_name``. Call this every cycle before ticking the owning
-        ``TapModel``, mirroring how the real RTL's ``pi``/``func_in`` ports are
-        continuously live, not just sampled once at capture time."""
+        real ``port_name``: the whole port's value as an integer, its least significant bit
+        the port's first bit in Yosys order (``d[0]`` of ``input [3:0] d``). Call this every
+        cycle before ticking the owning ``TapModel``, mirroring how the real RTL's
+        ``pi``/``func_in`` ports are continuously live, not just sampled once at capture
+        time."""
         self._functional_inputs = values
 
     def _observed_value(self, cell: BsrCell) -> int:
         if cell.function is BsrFunction.CONTROL:
             return 1  # matches bsr_insert.py's fixed func_in for v1 control cells
-        return self._functional_inputs.get(cell.port_name, 0)
+        value = self._functional_inputs.get(cell.port_name, 0)
+        if cell.bit is None:
+            return value
+        return (value >> self._ports[cell.port_name].position(cell.bit)) & 1
 
     def capture(self) -> None:
         for state in self._states:
@@ -81,10 +87,13 @@ class BoundaryScanRegister:
             if state.cell.function in (BsrFunction.CONTROL, BsrFunction.OUTPUT3):
                 state.po = state.shift_ff
 
-    def pin_drive_value(self, port_name: str, *, extest_mode: bool) -> int | str | None:
-        """What ``port_name``'s real pin currently reads: the driven ``0``/``1``
-        value, or ``"z"`` if tri-stated (its paired control cell's effective
-        enable is 0). ``None`` if ``port_name`` isn't an OUTPUT3 port at all.
+    def pin_drive_value(
+        self, port_name: str, *, extest_mode: bool, bit: int | None = None
+    ) -> int | str | None:
+        """What ``port_name``'s real pin currently reads (bit ``bit`` of a multi-bit port,
+        its HDL bit number): the driven ``0``/``1`` value, or ``"z"`` if tri-stated (its
+        paired control cell's effective enable is 0). ``None`` if ``port_name`` isn't an
+        OUTPUT3 port at all.
 
         Mirrors ``y = EN ? A : 1'bz`` with both ``A`` (the output3 cell's
         ``pin_out``) and ``EN`` (the control cell's ``pin_out``) independently
@@ -97,6 +106,8 @@ class BoundaryScanRegister:
         output_state = None
         control_state = None
         for state in self._states:
+            if state.cell.bit != bit:
+                continue
             if state.cell.function is BsrFunction.OUTPUT3 and state.cell.port_name == port_name:
                 output_state = state
             elif (

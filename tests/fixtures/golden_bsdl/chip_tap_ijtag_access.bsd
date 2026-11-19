@@ -64,8 +64,13 @@ entity chip is
       "REGISTER_ACCESS. With no boundary register, EXTEST (0000) and " &
       "SAMPLE/PRELOAD (0010) select the 1-bit BYPASS register, as " &
       "REGISTER_ACCESS states, so a board-level EXTEST leaves the network " &
-      "untouched. The IDCODE value is a placeholder, not a registered " &
-      "manufacturer ID. PHYSICAL_PIN_MAP UNPACKAGED is a placeholder: no " &
-      "physical package is described.";
+      "untouched. The instruction register and every update stage latch on " &
+      "the rising edge of TCK that leaves Update-IR or Update-DR, half a " &
+      "TCK period after IEEE 1149.1's falling edge in those states: a " &
+      "tester that stops TCK in Update-IR or Update-DR sees the new " &
+      "instruction or outputs only at the next rising edge. The IDCODE " &
+      "value is a placeholder, not a registered manufacturer ID. " &
+      "PHYSICAL_PIN_MAP UNPACKAGED is a placeholder: no physical package " &
+      "is described.";
 
 end chip;

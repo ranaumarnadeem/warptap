@@ -27,6 +27,10 @@ class PortInfo(NamedTuple):
     name: str
     direction: str  # "input" | "output" | "inout"
     bits: list[Bit]
+    # The declared range, as Yosys records it: ``bits[i]`` is HDL bit ``offset + i``, or
+    # ``offset + len(bits) - 1 - i`` for an ``upto`` (``[lo:hi]``) declaration.
+    offset: int = 0
+    upto: bool = False
 
 
 class Module:
@@ -137,7 +141,9 @@ class Module:
         one would actively discard the ordering guarantee plan §3.1's deterministic
         BSR walk depends on."""
         return [
-            PortInfo(name, p["direction"], list(p["bits"]))
+            PortInfo(
+                name, p["direction"], list(p["bits"]), int(p.get("offset", 0)), bool(p.get("upto", 0))
+            )
             for name, p in self.data.get("ports", {}).items()
         ]
 

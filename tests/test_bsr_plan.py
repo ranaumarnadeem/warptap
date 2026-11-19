@@ -145,3 +145,46 @@ def test_v1_never_emits_clock_or_internal_function():
     functions = {c.function for c in plan.cells}
     assert BsrFunction.CLOCK not in functions
     assert BsrFunction.INTERNAL not in functions
+
+
+def _vector_module() -> Module:
+    """``input [7:4] b``, ``input [0:1] c`` (declared [lo:hi]), ``output [1:0] y``, ``input s``,
+    in Yosys's JSON shape: ``offset``/``upto`` as Yosys writes them."""
+    ports = {
+        "b": {"direction": "input", "bits": [2, 3, 4, 5], "offset": 4},
+        "c": {"direction": "input", "bits": [6, 7], "upto": 1},
+        "y": {"direction": "output", "bits": [8, 9]},
+        "s": {"direction": "input", "bits": [10]},
+    }
+    return Module("m", {"ports": ports, "cells": {}, "netnames": {}})
+
+
+def test_every_bit_of_a_multi_bit_port_gets_its_own_cells_named_by_its_hdl_bit():
+    plan = build_bsr_plan(_vector_module())
+    assert [(c.port_name, c.function, c.bit) for c in plan.cells] == [
+        ("b", BsrFunction.INPUT, 4), ("b", BsrFunction.INPUT, 5),
+        ("b", BsrFunction.INPUT, 6), ("b", BsrFunction.INPUT, 7),
+        # c is [0:1]: its first bit in Yosys order is c[1]
+        ("c", BsrFunction.INPUT, 1), ("c", BsrFunction.INPUT, 0),
+        ("y_oe", BsrFunction.CONTROL, 0), ("y", BsrFunction.OUTPUT3, 0),
+        ("y_oe", BsrFunction.CONTROL, 1), ("y", BsrFunction.OUTPUT3, 1),
+        ("s", BsrFunction.INPUT, None),
+    ]
+    assert [c.cell_number for c in plan.cells] == list(range(11))
+    outputs = [c for c in plan.cells if c.function is BsrFunction.OUTPUT3]
+    assert [c.disable_cell_index for c in outputs] == [6, 8]
+
+
+def test_the_plan_records_every_port_and_its_declared_range():
+    plan = build_bsr_plan(_vector_module(), clock_ports=frozenset({"s"}))
+    assert [(p.name, p.direction, p.width, p.offset, p.upto) for p in plan.ports] == [
+        ("b", "input", 4, 4, False),
+        ("c", "input", 2, 0, True),
+        ("y", "output", 2, 0, False),
+        ("s", "input", 1, 0, False),
+    ]
+    assert plan.skipped_ports == ["s"]
+    b, c = plan.ports[0], plan.ports[1]
+    assert [b.hdl_bit(p) for p in range(4)] == [4, 5, 6, 7]
+    assert [c.hdl_bit(p) for p in range(2)] == [1, 0]
+    assert all(port.position(port.hdl_bit(p)) == p for port in (b, c) for p in range(port.width))
