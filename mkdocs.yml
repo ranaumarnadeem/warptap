@@ -46,6 +46,7 @@ nav:
       - System-clock pulsing (-sck): guide/sck-clock-pulsing.md
       - Faultflow pattern retargeting: guide/faultflow-retargeting.md
       - IEEE 1500 wrappers: guide/ieee1500-wrapper.md
+      - Gate-level evidence (IHP SG13G2): guide/gate-level.md
   - API Reference:
       - Overview: reference/index.md
       - Netlist & Ingest: reference/netlist.md

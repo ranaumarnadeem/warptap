@@ -24,6 +24,11 @@ jobs:
       # and both pin warptap, so drift should show up here first.
       WARPTAP_FAULTFLOW_DIR: ${{ github.workspace }}/siblings/faultflow
       WARPTAP_OPENMBIST_DIR: ${{ github.workspace }}/siblings/autoMBIST
+      # alexforencich/verilog-uart (MIT), pinned: a second real design, for uart_tx's RTL and
+      # gate-level cross-sims.
+      WARPTAP_VERILOG_UART_DIR: ${{ github.workspace }}/siblings/verilog-uart
+      # IHP SG13G2's standard-cell liberty and Verilog models, for the gate-level checks.
+      WARPTAP_IHP_STDCELL_DIR: ${{ github.workspace }}/siblings/sg13g2_stdcell
     steps:
       - uses: actions/checkout@v4
         with:
@@ -37,6 +42,11 @@ jobs:
         with:
           repository: ranaumarnadeem/autoMBIST
           path: siblings/autoMBIST
+      - uses: actions/checkout@v4
+        with:
+          repository: alexforencich/verilog-uart
+          ref: 1b867e53af738e4a8bc7c839ca2f1c07f40382dc
+          path: siblings/verilog-uart
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
@@ -51,9 +61,14 @@ jobs:
       - name: Install warptap with its dev extra
         # jinja2: autoMBIST's generator, imported from its checkout by the design tests.
         run: python -m pip install -e ".[dev]" jinja2
+      - name: Fetch the IHP SG13G2 standard cells
+        # Five files at a pinned IHP-Open-PDK commit, each checked against its git blob SHA
+        # (tests/gate_level.py holds both).
+        run: python tests/gate_level.py fetch "$WARPTAP_IHP_STDCELL_DIR"
       - name: Run the test suite
-        # -rs lists every skip and why. The Jam STAPL player is not built here, so its 3
-        # tests skip, and so does the verilog-uart test.
+        # -rs lists every skip and why. The Jam STAPL player is not built here, so its 3 tests
+        # skip, and OpenSTA isn't either, so the STA tests skip: building it from source here
+        # would take longer than the suite itself (see docs/guide/gate-level.md).
         run: python -m pytest -q -rs
 
   docs:
