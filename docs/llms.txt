@@ -10,6 +10,7 @@
 - [ICL / PDL import](https://ranaumarnadeem.github.io/warptap/guide/icl-pdl-import/): reading ICL and PDL back in
 - [System-clock pulsing](https://ranaumarnadeem.github.io/warptap/guide/sck-clock-pulsing/): pulsing a functional clock from PDL (-sck)
 - [Faultflow pattern retargeting](https://ranaumarnadeem.github.io/warptap/guide/faultflow-retargeting/): driving faultflow scan patterns through the network
+- [Gate-level evidence](https://ranaumarnadeem.github.io/warptap/guide/gate-level/): inserted designs mapped to IHP SG13G2 cells, simulated and timed
 - [API reference](https://ranaumarnadeem.github.io/warptap/reference/): every public function and class
 - [Changelog](https://ranaumarnadeem.github.io/warptap/changelog/)
 
