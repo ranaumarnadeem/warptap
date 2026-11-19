@@ -1,5 +1,5 @@
 warptap's copy of icl_parser (MIT, see LICENSE in this directory).
 Upstream: https://github.com/Honza255/icl_parser
 Fork the copy is taken from: https://github.com/ranaumarnadeem/icl_parser
-Commit: 0fa6c6444ee2b40b467137761f1bea5cb004ac1a
+Commit: 2f817618341e1220ef955a1f9c4490c93aef1c0a
 Refreshed with scripts/vendor_icl_parser.py; do not edit these files here.

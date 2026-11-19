@@ -1,7 +1,10 @@
 import os
 import threading
 
+from antlr4.atn.PredictionMode import PredictionMode
 from antlr4.error.ErrorListener import ErrorListener
+from antlr4.error.ErrorStrategy import BailErrorStrategy, DefaultErrorStrategy
+from antlr4.error.Errors import ParseCancellationException
 from typing import TYPE_CHECKING
 
 from .icl_parser.iclLexer import iclLexer
@@ -235,10 +238,23 @@ class Ijtag:
                 lexer = iclLexer(FileStream(icl_file, encoding='utf-8'))
                 lexer.removeErrorListeners()
                 lexer.addErrorListener(errors)
-                parser = iclParser(CommonTokenStream(lexer))
+                tokens = CommonTokenStream(lexer)
+                parser = iclParser(tokens)
                 parser.removeErrorListeners()
-                parser.addErrorListener(errors)
-                parser_tree = parser.icl_file()
+                # Two-stage parse, as ANTLR documents it: SLL prediction first, which gives the
+                # tree full LL prediction would whenever it succeeds and stops at the first
+                # error; full LL only if it fails, with errors reported. Full-context prediction
+                # in the port-connection rules was most of the time a big file took to parse.
+                parser._interp.predictionMode = PredictionMode.SLL
+                parser._errHandler = BailErrorStrategy()
+                try:
+                    parser_tree = parser.icl_file()
+                except ParseCancellationException:
+                    parser._interp.predictionMode = PredictionMode.LL
+                    parser._errHandler = DefaultErrorStrategy()
+                    parser.reset()
+                    parser.addErrorListener(errors)
+                    parser_tree = parser.icl_file()
                 if errors.messages:
                     raise ValueError(
                         f"syntax errors in ICL file {icl_file}: " + "; ".join(errors.messages)
