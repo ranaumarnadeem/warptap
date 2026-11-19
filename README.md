@@ -20,7 +20,8 @@ Design-for-test (DFT) instruments such as MBIST controllers, scan compression an
 - IJTAG network insertion with SIBs and TDRs (IEEE 1687), including nested SIBs, multi-arm ScanMux and named sub-field addressing
 - Boundary-scan register insertion, as an alternative to the IJTAG network (a design gets one or the other)
 - ICL emission, and import of networks in warptap's own ICL shape
-- TAP-only BSDL emission, matching the instruction the ICL `AccessLink` names
+- BSDL emission: TAP-only for an IJTAG network, matching the instruction the ICL `AccessLink`
+  names, or chip-level with the boundary register for a boundary-scan design
 - PDL emission, import and an in-Python PDL interpreter
 - Pattern output: SVF, STAPL (with CRC16) and STIL
 - TAP and IJTAG network-integrity test programs, with the TDO they expect
@@ -67,7 +68,8 @@ so it fits a Yosys-based flow. The test suite synthesizes the inserted Verilog w
 does not run OpenROAD or LibreLane.
 
 **Which pattern formats can it produce for a tester?**
-SVF, STAPL and STIL. It also writes a TAP-only BSDL file describing the TAP it inserts.
+SVF, STAPL and STIL. It also writes a BSDL file describing the TAP it inserts, and the boundary
+register too for a boundary-scan design.
 
 **Does it work on gate-level netlists?**
 Yes, if Yosys can read the netlist: give it interface-only (`(* blackbox *)`) declarations for the
