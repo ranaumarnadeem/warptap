@@ -180,7 +180,7 @@ def _icl_parser_unavailable(message: str):
     )
 
 
-_PARSER_PACKAGES = "pip install -e '.[dev]' (antlr4-python3-runtime==4.7.2, z3-solver, sympy, networkx)"
+_PARSER_PACKAGES = "pip install -e '.[dev]' (antlr4-python3-runtime==4.13.2, z3-solver, sympy, networkx)"
 
 
 def _default_icl_parser_dir() -> Path:
@@ -210,12 +210,12 @@ def icl_parser_module(icl_parser_dir: Path):
     """``Ijtag`` (the vendored ``Honza255/icl_parser``'s own public API class) imported live
     from ``third_party/icl_parser`` -- MIT-licensed, git-submodule-vendored (see
     ``icl_parser_dir``), not pip-installable. Requires ``antlr4-python3-runtime`` (pinned to
-    4.7.2, matching the exact version the submodule's checked-in generated lexer/parser were
+    4.13.2, matching the exact version the submodule's checked-in generated lexer/parser were
     produced by -- ANTLR-generated code is not reliably forward/backward compatible across
-    runtime versions), ``z3-solver``, ``sympy``, and ``networkx`` -- dev/test only, never a
-    runtime dependency of warptap itself (``pyproject.toml``'s own ``dependencies = []`` stays
-    empty; they are in the ``dev`` extra). Fails when the submodule isn't checked out or any of
-    those aren't importable -- see ``_icl_parser_unavailable``."""
+    runtime versions), ``z3-solver``, ``sympy``, and ``networkx`` for its retargeting model --
+    dev/test only (they are in the ``dev`` extra; the ``import`` extra, for warptap's own
+    importers, needs only the ANTLR runtime). Fails when the submodule isn't checked out or any
+    of those aren't importable -- see ``_icl_parser_unavailable``."""
     src_dir = str(icl_parser_dir)
     if src_dir not in sys.path:
         sys.path.insert(0, src_dir)
@@ -233,8 +233,8 @@ def icl_parser_module(icl_parser_dir: Path):
 def pdl_parser_module(icl_parser_dir: Path):
     """A ``parse_pdl(text) -> list[str]`` callable backed by a real, independently-authored PDL
     grammar (``third_party/icl_parser/src/pdl_parser/pdl.g4``, a "PDL0 grammar v20130806") --
-    compiled here via ANTLR 4.7.2 (matching the same pinned version ``icl_parser_module`` uses)
-    after fixing several real bugs in the grammar file itself (an unterminated rule, an
+    compiled with ANTLR 4.7.2 first, regenerated with 4.13.2 since (matching the same pinned
+    version ``icl_parser_module`` uses), after fixing several real bugs in the grammar file itself (an unterminated rule, an
     undefined rule reference, two rule names -- ``range``/``format`` -- colliding with Python
     builtins under the Python3 target, a missing ``WS`` token before ``-sck``'s own port
     operand) and adding one new rule (see below) -- see ``pdl_emit.py``'s own module docstring
@@ -267,7 +267,7 @@ def pdl_parser_module(icl_parser_dir: Path):
     both lexer and parser errors are collected via a custom ``ErrorListener`` rather than
     letting ANTLR print to stderr, matching this project's other external-tool fixtures'
     "return something a test can assert on directly" convention. Requires
-    ``antlr4-python3-runtime==4.7.2`` (the same dependency ``icl_parser_module`` already needs)
+    ``antlr4-python3-runtime==4.13.2`` (the same dependency ``icl_parser_module`` already needs)
     -- fails when the submodule isn't checked out or that package isn't importable (see
     ``_icl_parser_unavailable``).
     """
