@@ -5,6 +5,8 @@ implementation stage.
 
 ## [Unreleased]
 
+## [0.0.6] - 2026-11-19
+
 ### Behavior changes
 
 - **The inserted TAP changes TDO on the falling edge of TCK, as IEEE 1149.1 requires.**
