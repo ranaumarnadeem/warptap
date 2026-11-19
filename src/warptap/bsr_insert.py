@@ -22,6 +22,7 @@ from warptap.errors import WarptapError
 from warptap.netlist import Bit, Module, Netlist, PortInfo
 from warptap.tap_model import (
     DEFAULT_TDO_DRIVE,
+    OPCODE_SAMPLE_PRELOAD,
     check_tdo_drive,
 )
 from warptap.tap_ports import TCK, TDI, TMS, TRST_N, add_tdo_pin
@@ -135,6 +136,11 @@ def insert_bsr(
     ``tests/test_bsr_insert_equivalence.py``. Each cell serves one port bit, so a
     multi-bit port is scanned bit by bit.
 
+    The boundary register is the data register of EXTEST and SAMPLE/PRELOAD only: its cells
+    capture, shift and update only under those two instructions, so a scan under IDCODE or
+    BYPASS leaves the values a PRELOAD set, as IEEE 1149.1 requires of a register the
+    instruction doesn't select.
+
     ``ir_width``/``opcode_extest`` must match ``rtl/tap_core.v``'s actual compiled
     parameters (its own defaults, currently; see the module-level constants above)
     since this function never overrides them on the instance.
@@ -185,6 +191,50 @@ def insert_bsr(
         connections={"A": current_instruction_bits, "B": opcode_bits, "Y": extest_mode_bits},
     )
 
+    # tap_core raises capture_dr/shift_dr/update_dr in every DR scan, whatever the
+    # instruction (its header says so): the cells get them only while EXTEST or SAMPLE/PRELOAD,
+    # the instructions whose data register this chain is, is the current instruction.
+    sample_preload_bits = top_mod.new_wire(1, name="warptap_sample_preload_mode")
+    sample_preload_opcode: list[Bit] = [
+        str((OPCODE_SAMPLE_PRELOAD >> i) & 1) for i in range(ir_width)
+    ]
+    top_mod.add_cell(
+        "warptap_sample_preload_decode",
+        "$eq",
+        parameters={
+            "A_SIGNED": 0, "B_SIGNED": 0,
+            "A_WIDTH": ir_width, "B_WIDTH": ir_width, "Y_WIDTH": 1,
+        },
+        port_directions={"A": "input", "B": "input", "Y": "output"},
+        connections={
+            "A": current_instruction_bits, "B": sample_preload_opcode, "Y": sample_preload_bits,
+        },
+    )
+    selected_bits = top_mod.new_wire(1, name="warptap_bsr_selected")
+    top_mod.add_cell(
+        "warptap_bsr_select",
+        "$or",
+        parameters={"A_SIGNED": 0, "B_SIGNED": 0, "A_WIDTH": 1, "B_WIDTH": 1, "Y_WIDTH": 1},
+        port_directions={"A": "input", "B": "input", "Y": "output"},
+        connections={"A": extest_mode_bits, "B": sample_preload_bits, "Y": selected_bits},
+    )
+    gated: dict[str, list[Bit]] = {}
+    for strobe, raw_bits in (
+        ("capture_dr", capture_dr_bits), ("shift_dr", shift_dr_bits), ("update_dr", update_dr_bits)
+    ):
+        gated[strobe] = top_mod.new_wire(1, name=f"warptap_bsr_{strobe}")
+        top_mod.add_cell(
+            f"warptap_bsr_{strobe}_gate",
+            "$and",
+            parameters={"A_SIGNED": 0, "B_SIGNED": 0, "A_WIDTH": 1, "B_WIDTH": 1, "Y_WIDTH": 1},
+            port_directions={"A": "input", "B": "input", "Y": "output"},
+            connections={"A": raw_bits, "B": selected_bits, "Y": gated[strobe]},
+        )
+    # The cells below take these; tap_core's own outputs drive the raw wires.
+    cell_capture_bits, cell_shift_bits, cell_update_bits = (
+        gated["capture_dr"], gated["shift_dr"], gated["update_dr"]
+    )
+
     prev_so: list[Bit] = tdi_bits
     control_pin_out: dict[int, list[Bit]] = {}  # cell_number -> that control cell's pin_out
     control_instance_by_number: dict[int, str] = {}  # cell_number -> its own instance name
@@ -232,7 +282,7 @@ def insert_bsr(
                 connections={
                     "pi": [port_bits_by_name[cell.port_name][position]],
                     "si": prev_so, "so": so_bits,
-                    "capture_dr": capture_dr_bits, "shift_dr": shift_dr_bits,
+                    "capture_dr": cell_capture_bits, "shift_dr": cell_shift_bits,
                     "tck": tck_bits, "trst_n": trst_n_bits,
                 },
                 attributes=cell_attrs,
@@ -261,8 +311,8 @@ def insert_bsr(
                 connections={
                     "func_in": func_in_connection,
                     "si": prev_so, "so": so_bits, "pin_out": pin_out_bits,
-                    "capture_dr": capture_dr_bits, "shift_dr": shift_dr_bits,
-                    "update_dr": update_dr_bits, "extest_mode": extest_mode_bits,
+                    "capture_dr": cell_capture_bits, "shift_dr": cell_shift_bits,
+                    "update_dr": cell_update_bits, "extest_mode": extest_mode_bits,
                     "tck": tck_bits, "trst_n": trst_n_bits,
                 },
                 attributes=cell_attrs,
@@ -290,8 +340,8 @@ def insert_bsr(
                 connections={
                     "func_in": func_in_bits,
                     "si": prev_so, "so": so_bits, "pin_out": cell_pin_out_bits,
-                    "capture_dr": capture_dr_bits, "shift_dr": shift_dr_bits,
-                    "update_dr": update_dr_bits, "extest_mode": extest_mode_bits,
+                    "capture_dr": cell_capture_bits, "shift_dr": cell_shift_bits,
+                    "update_dr": cell_update_bits, "extest_mode": extest_mode_bits,
                     "tck": tck_bits, "trst_n": trst_n_bits,
                 },
                 attributes=cell_attrs,
@@ -326,8 +376,8 @@ def insert_bsr(
                     "pin_in": new_pin_bits,  # always observes the real pin, drive-direction aside
                     "func_in": func_in_bits,
                     "si": prev_so, "so": so_bits, "pin_out": cell_pin_out_bits,
-                    "capture_dr": capture_dr_bits, "shift_dr": shift_dr_bits,
-                    "update_dr": update_dr_bits, "extest_mode": extest_mode_bits,
+                    "capture_dr": cell_capture_bits, "shift_dr": cell_shift_bits,
+                    "update_dr": cell_update_bits, "extest_mode": extest_mode_bits,
                     "tck": tck_bits, "trst_n": trst_n_bits,
                 },
                 attributes=cell_attrs,
