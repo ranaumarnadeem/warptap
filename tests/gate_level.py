@@ -136,6 +136,23 @@ def _candidate_dirs() -> Iterable[Path]:
                 yield version / SG13G2_REPO_DIR
 
 
+def fetch_sg13g2(dest: Path) -> Sg13g2:
+    """Download the five files at :data:`SG13G2_COMMIT` into ``dest`` (CI does this), refusing
+    any whose git blob SHA isn't the pinned one."""
+    import urllib.request
+
+    base = f"https://raw.githubusercontent.com/IHP-GmbH/IHP-Open-PDK/{SG13G2_COMMIT}/{SG13G2_REPO_DIR}"
+    for rel, sha in SG13G2_FILES.items():
+        with urllib.request.urlopen(f"{base}/{rel}", timeout=120) as response:
+            data = response.read()
+        got = git_blob_sha(data)
+        if got != sha:
+            raise RuntimeError(f"{rel}: downloaded blob {got}, expected {sha}")
+        (dest / rel).parent.mkdir(parents=True, exist_ok=True)
+        (dest / rel).write_bytes(data)
+    return Sg13g2(dest)
+
+
 def find_sg13g2() -> tuple[Optional[Sg13g2], str]:
     """The cell library, or ``None`` and why not. A directory whose files are missing or differ
     from the pinned ones is refused, not used."""
@@ -328,3 +345,11 @@ def run_gate_level(
             vvp_command=vvp_command,
         )
 
+
+if __name__ == "__main__":
+    import sys
+
+    if len(sys.argv) != 3 or sys.argv[1] != "fetch":
+        sys.exit("usage: python tests/gate_level.py fetch <directory>")
+    fetched = fetch_sg13g2(Path(sys.argv[2]))
+    print(f"IHP SG13G2 standard cells at {SG13G2_COMMIT[:12]} in {fetched.root}")
