@@ -12,7 +12,7 @@ Driving an inserted network, and PDL text emission/import.
 
 ::: warptap.pdl_import
     options:
-      members: [PdlImportError, import_pdl]
+      members: [PdlImportError, import_pdl, MAX_CALL_DEPTH]
 
 ::: warptap.pdl_verify
     options:

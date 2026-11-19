@@ -9,4 +9,4 @@ setup `import_icl` needs.
 
 ::: warptap.icl_import
     options:
-      members: [IclImportError, import_icl]
+      members: [IclImportError, import_icl, REJECTION_REASONS]
