@@ -61,7 +61,7 @@ warptap = "warptap.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-warptap = ["rtl/*.v", "py.typed"]
+warptap = ["rtl/*.v", "py.typed", "_vendor/icl_parser/LICENSE", "_vendor/icl_parser/SOURCE"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

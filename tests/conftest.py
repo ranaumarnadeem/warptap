@@ -187,10 +187,10 @@ def _default_icl_parser_dir() -> Path:
     if os.environ.get("WARPTAP_ICL_PARSER_DIR"):
         return Path(os.environ["WARPTAP_ICL_PARSER_DIR"])
     # tests/conftest.py -> tests -> tapestry -> third_party/icl_parser (a git submodule
-    # checked out inside this repo, unlike openmbist_dir's sibling-checkout convention --
-    # icl_parser is vendored, per implementation_plan.md §7 Stage 10's own reasoning: it has
-    # no setup.py/pyproject.toml, so pip install isn't available, and there's no established
-    # precedent here for silently copying external source with no update mechanism).
+    # checked out inside this repo, unlike openmbist_dir's sibling-checkout convention). It has
+    # no setup.py/pyproject.toml, so it can't be pip-installed; warptap ships a copy of it in
+    # src/warptap/_vendor, refreshed from this submodule by scripts/vendor_icl_parser.py and
+    # checked against it by tests/test_vendored_icl_parser.py.
     return Path(__file__).resolve().parents[1] / "third_party" / "icl_parser"
 
 
