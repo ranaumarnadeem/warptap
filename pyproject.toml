@@ -30,6 +30,9 @@ classifiers = [
 dependencies = []
 
 [project.optional-dependencies]
+# import_icl/import_pdl: the parser warptap ships (warptap/_vendor) was generated with ANTLR
+# 4.13.2, and generated code needs a runtime of the same minor version.
+import = ["antlr4-python3-runtime>=4.13.2,<4.14"]
 dev = [
     "pytest>=8",
     "yowasp-yosys",
