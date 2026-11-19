@@ -17,6 +17,9 @@ jobs:
         # third_party/icl_parser still imports typing.io, which Python 3.13 removed.
         python-version: ["3.10", "3.12"]
     env:
+      # The apt OpenOCD: the OSS CAD Suite's own build, first on PATH, has no dummy adapter,
+      # which the SVF checks run on.
+      WARPTAP_OPENOCD_CMD: /usr/bin/openocd
       # faultflow and autoMBIST, checked out below, for the cross-checks that need them.
       # Tracking their development branches is on purpose: warptap ports faultflow's models
       # and both pin warptap, so drift should show up here first.
