@@ -18,8 +18,8 @@ own committed value lives in.
 **A real, independent GRAMMAR *does* now exist**, though: that same submodule's
 ``src/pdl_parser/pdl.g4`` was a bare, never-compiled ANTLR grammar (a real "PDL0 grammar
 v20130806", not a stub) with zero generated lexer/parser code and zero Python wiring anywhere
-in that repository. Compiled here via ANTLR 4.7.2 (matching the exact version already pinned
-for the ICL grammar) after fixing several real bugs in the grammar file itself (an unterminated
+in that repository. Compiled here via ANTLR 4.7.2 (matching the exact version then pinned for
+the ICL grammar; both are regenerated with 4.13.2 since) after fixing several real bugs in the grammar file itself (an unterminated
 rule, an undefined rule reference, two rule names colliding with Python builtins in the Python3
 target, a missing ``WS`` token) and adding one new entry rule (see
 :func:`tests.conftest.pdl_parser_module`'s own docstring for why: invoking the grammar's bare
