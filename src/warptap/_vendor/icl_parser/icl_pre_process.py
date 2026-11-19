@@ -79,7 +79,7 @@ class IclPreProcess(iclListener):
             parameter_name = ctx.parameter_name().SCALAR_ID().getText()
 
             if(parameter_name in self.modules[self.module_definition_name_space][self.current_module_name]["parameters_parser_tree"]):
-                raise Exception("parameters_parser_tree already defined in module before")
+                raise Exception(f"Parameter {parameter_name} is defined more than once in module {self.current_module_name}")
             self.modules[self.module_definition_name_space][self.current_module_name]["parameters_parser_tree"][parameter_name] = ctx
 
     # localParameter_def : 'LocalParameter' parameter_name '=' parameter_value ';' ;
@@ -89,7 +89,7 @@ class IclPreProcess(iclListener):
             local_parameter_name = ctx.parameter_name().SCALAR_ID().getText()
 
             if(local_parameter_name in self.modules[self.module_definition_name_space][self.current_module_name]["local_parameters_parser_tree"]):
-                raise Exception("local_parameters_parser_tree already defined in module before")
+                raise Exception(f"LocalParameter {local_parameter_name} is defined more than once in module {self.current_module_name}")
             self.modules[self.module_definition_name_space][self.current_module_name]["local_parameters_parser_tree"][local_parameter_name] = ctx
 
     # instance_def : 'Instance' instance_name 'Of' (namespace_name? '::')?
@@ -104,5 +104,5 @@ class IclPreProcess(iclListener):
            namespace = self.instance_namespace
 
         if(isntace_name in self.modules[self.module_definition_name_space][self.current_module_name]["instances"]):
-            raise Exception("instances already defined in module before")
+            raise Exception(f"Instance {isntace_name} is defined more than once in module {self.current_module_name}")
         self.modules[self.module_definition_name_space][self.current_module_name]["instances"][isntace_name] = [namespace, module_name]
