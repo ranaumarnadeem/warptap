@@ -58,6 +58,12 @@ chain (IR length, IDCODE) and drives and reads every pin of the simulated design
 (``tests/test_bsdl_ebyst.py``, Python 3.13). The other candidates fall short: UrJTAG's
 Ubuntu-packaged build fails on every input, and cb_bsdl_parser crashes on a BC_7 cell and
 misreads multi-bit ports (``tests/test_bsdl_emit.py``'s docstring has the evidence).
+
+**When updates land.** The instruction register and every update stage latch on the rising edge
+of TCK that leaves Update-IR or Update-DR, half a TCK period after IEEE 1149.1's falling edge in
+those states. Patterns that keep TCK running see no difference; a tester that stops TCK in
+Update-IR or Update-DR (ebyst does) sees the change only at the next rising edge. Every file's
+``DESIGN_WARNING`` says so.
 """
 
 from __future__ import annotations
@@ -136,6 +142,14 @@ def _vhdl_string(text: str, width: int = _PIN_MAP_STRING_WIDTH) -> str:
     return " &\n      ".join(f'"{piece}"' for piece in pieces)
 
 
+_UPDATE_TIMING = (
+    "The instruction register and every update stage latch on the rising edge of TCK that leaves "
+    "Update-IR or Update-DR, half a TCK period after IEEE 1149.1's falling edge in those states: "
+    "a tester that stops TCK in Update-IR or Update-DR sees the new instruction or outputs only "
+    "at the next rising edge. "
+)
+
+
 def _tdo_warning(tdo_drive: str) -> str:
     """What the reader must know about the TDO pin, which only ``"tristate"`` makes conformant
     on its own; empty for it."""
@@ -187,6 +201,7 @@ def _design_warning(
         "reject this file. "
         + routing
         + _tdo_warning(tdo_drive)
+        + _UPDATE_TIMING
         + (
             "The IDCODE value is a placeholder, not a registered manufacturer ID. "
             if placeholder_idcode
@@ -210,6 +225,7 @@ def _boundary_design_warning(
             else ""
         )
         + _tdo_warning(tdo_drive)
+        + _UPDATE_TIMING
         + (
             "The IDCODE value is a placeholder, not a registered manufacturer ID. "
             if placeholder_idcode

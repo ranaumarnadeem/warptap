@@ -62,8 +62,12 @@ entity chip is
       "selects the network, so only under it does the network capture, " &
       "shift and update. Its length depends on SIB state, so it is not " &
       "declared in REGISTER_ACCESS. Load EXTEST to reach that network. The " &
-      "IDCODE value is a placeholder, not a registered manufacturer ID. " &
-      "PHYSICAL_PIN_MAP UNPACKAGED is a placeholder: no physical package " &
-      "is described.";
+      "instruction register and every update stage latch on the rising " &
+      "edge of TCK that leaves Update-IR or Update-DR, half a TCK period " &
+      "after IEEE 1149.1's falling edge in those states: a tester that " &
+      "stops TCK in Update-IR or Update-DR sees the new instruction or " &
+      "outputs only at the next rising edge. The IDCODE value is a " &
+      "placeholder, not a registered manufacturer ID. PHYSICAL_PIN_MAP " &
+      "UNPACKAGED is a placeholder: no physical package is described.";
 
 end chip;
