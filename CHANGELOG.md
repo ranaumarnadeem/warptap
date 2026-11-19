@@ -5,8 +5,28 @@ implementation stage.
 
 ## [Unreleased]
 
+### Behavior changes
+
+- **The inserted TAP tri-states TDO outside Shift-IR and Shift-DR, as IEEE 1149.1 requires.**
+  `insert_sib_network`, `insert_bsr` and `insert_test_access` put a `$tribuf` on the `tdo` pin,
+  enabled by `rtl/tap_core.v`'s new `tdo_oe`. A testbench that samples `tdo` outside the shift
+  states now reads `z` there, not 0. `tdo_drive="low"` keeps the 0.0.6 pin.
+- **`to_bsdl`'s `DESIGN_WARNING` no longer says the TAP is not fully IEEE 1149.1
+  conformant**, unless given `tdo_drive="low"`. The IDCODE placeholder note is now a sentence
+  of its own.
+- **`rtl/tap_core.v` has a new output port, `tdo_oe`, after `tdo`.** An instance connected
+  by position needs updating.
+
 ### Added
 
+- **`tdo_drive`** on `insert_sib_network`, `insert_bsr`, `insert_test_access` and `to_bsdl`:
+  `"tristate"` (the default), `"low"`, or `"enable_port"`, which keeps `tdo` driven and adds a
+  `tdo_oe` output for a pad cell (`to_bsdl` then says the pad does the tri-state). Any other
+  value raises `ValueError`.
+- **`tap_core`'s `tdo_oe`**: high while the TAP is in Shift-IR or Shift-DR, registered with
+  `tdo` on the falling edge of TCK, cleared by TRST.
+- `warptap.tap_model.TDO_DRIVES`, `DEFAULT_TDO_DRIVE`, `check_tdo_drive` and `drives_tdo`;
+  `warptap.tap_ports.TDO_OE` and `add_tdo_pin`.
 - **`import_icl`, `import_one_hot_data_group` and `import_pdl` work after
   `pip install "warptap[import]"`.** They needed a clone of the icl_parser fork on `sys.path`.
   warptap now ships a copy of that parser (MIT) in `warptap/_vendor`, taken from the fork its
