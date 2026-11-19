@@ -67,7 +67,7 @@ def idcode_value_error(value: object) -> str | None:
 
 
 TDO_DRIVES = ("tristate", "low", "enable_port")
-"""How an inserted TAP drives its ``tdo`` pin -- the ``tdo_drive`` keyword of
+"""How an inserted TAP drives its ``tdo`` pin, the values of the ``tdo_drive`` keyword of
 :func:`~warptap.sib_insert.insert_sib_network`, :func:`~warptap.bsr_insert.insert_bsr`,
 :func:`~warptap.pipeline.insert_test_access` and :func:`~warptap.bsdl_emit.to_bsdl`:
 
