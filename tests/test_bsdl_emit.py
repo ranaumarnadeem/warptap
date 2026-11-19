@@ -6,28 +6,30 @@ independently of ``bsdl_emit``), so a formatting slip or a wrong bit order in th
 here. The golden file only pins the exact format; it does not by itself prove the values are
 right -- the structural tests and ``test_bsdl_emit_cross_sim.py`` (real TAP RTL under Icarus) do.
 
-**No independent BSDL parser validates this output**, and that is stated plainly rather than
-worked around (the same discipline as the PDL-emit tests). What was tried:
+**Independent BSDL tools.** ebyst (MIT, Python 3.13) parses both kinds of file with a grammar
+the whole file must match, and drives a boundary-scan design's RTL from its own reading of the
+full BSDL: ``test_bsdl_ebyst.py``. The others tried fall short, stated plainly rather than worked
+around (the same discipline as the PDL-emit tests):
 
-- *UrJTAG* (``sudo apt install urjtag``, Ubuntu noble ``0.10+r2007-1.2build4``): the only
-  candidate found that would accept a TAP-only file (it checks syntax and structure, not
-  conformance). Both ``jtag``'s ``bsdl test``/``bsdl dump`` and ``bsdl2jtag`` are unusable here:
-  every input fails with "BSDL file ... contains errors in VHDL stage" and then SIGSEGV -- a
-  hand-written valid ``entity`` and a deliberately invalid one (missing ``;``) behave
-  identically, so the tool cannot tell good from bad. ``strace`` shows it opening the file and
-  then reading stdin, and ``gdb`` puts the crash in ``bsdl2jtag``'s own ``main`` on the error
-  path. A test built on it would prove nothing. Untried: building upstream UrJTAG from source.
+- *UrJTAG* (``sudo apt install urjtag``, Ubuntu noble ``0.10+r2007-1.2build4``): both ``jtag``'s
+  ``bsdl test``/``bsdl dump`` and ``bsdl2jtag`` are unusable here: every input fails with "BSDL
+  file ... contains errors in VHDL stage" and then SIGSEGV -- a hand-written valid ``entity``
+  and a deliberately invalid one (missing ``;``) behave identically, so the tool cannot tell
+  good from bad. ``strace`` shows it opening the file and then reading stdin, and ``gdb`` puts
+  the crash in ``bsdl2jtag``'s own ``main`` on the error path. Building upstream UrJTAG (last
+  commit 2022) needs ``autopoint``, ``libtool`` and ``gettext``, which need root here; read from
+  its source, its ``bsdl test`` checks syntax only.
 - *bsdl-parser* 0.1.1 (PyPI, cyrozap's grammar), installed in a throwaway Python 3.12 venv and run:
   its ``bsdl2json`` fails to import -- ``grako`` 3.99.9 does ``from collections import Mapping``,
   removed in Python 3.10. Its grammar also makes the boundary register mandatory.
-- *cb_bsdl_parser* 0.12.0 (PyPI), installed in a separate venv (it needs ANTLR runtime 4.13, which
-  conflicts with the 4.7.2 this suite pins) and run: ``CBBsdl(path, run_checks=False)`` raises
-  ``IndexError`` in ``build_bsr_content`` for this file, for a deliberately broken copy of it and
-  for plain garbage alike, and its lexer reports token errors on text inside BSDL string
-  literals (the ``/`` in "SAMPLE/PRELOAD", the ``+`` in ``1.000000e+07``).
+- *cb_bsdl_parser* 0.12.0 (PyPI, ANTLR runtime 4.13): on a TAP-only file
+  ``CBBsdl(path, run_checks=False)`` raises ``IndexError`` in ``build_bsr_content`` (it has no
+  boundary register to index), as it does for plain garbage. On a full file it raises
+  ``NotImplementedError`` for any ``bidir`` cell, rejects every boundary cell of a
+  ``bit_vector`` port (it builds no ports for a ``downto`` range, and keys ``to`` ports' bits
+  ``d.0`` but cells ``d(0)``), and never looks at syntax errors: a missing ``;`` merges two
+  statements silently. It checks pin, port and cell-count consistency only.
 - ``antlr/grammars-v4`` has no BSDL grammar.
-- Every standard-following parser requires ``BOUNDARY_LENGTH``/``BOUNDARY_REGISTER``, which this
-  TAP-only file deliberately omits, so no independent tool could check its conformance anyway.
 """
 
 from __future__ import annotations
