@@ -15,8 +15,8 @@ modules and macros, with one ``sg13g2_ebufn_2`` per tri-state driver of the desi
 What this shows, and what it doesn't: the inserted logic still behaves the same once it is made
 of real library cells, through Yosys's mapping, with the IHP cell models' logic. It does not
 show timing: the models' path delays are zero and Icarus does not run their timing checks, which
-is what the STA in ``test_gate_level_sg13g2.py`` is for. Nothing here is silicon or a
-commercial tool.
+is what the OpenSTA run (:func:`run_sta`, ``test_sta_sg13g2.py``) is for. Nothing here is
+silicon or a commercial tool.
 
 The cell models run in their power-aware mode (``USE_POWER_PINS``, every instance tied to VDD
 and VSS): in the other mode each output goes through a ``buf`` gate, which turns ``z`` into
@@ -40,6 +40,7 @@ import json
 import os
 import re
 import shutil
+import subprocess
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -343,6 +344,95 @@ def run_gate_level(
             extra_inputs=extra_inputs,
             iverilog_command=iverilog_command,
             vvp_command=vvp_command,
+        )
+
+
+STA_DIR = Path(__file__).resolve().parent / "fixtures" / "sta"
+
+
+def find_sta() -> Optional[str]:
+    """OpenSTA: ``WARPTAP_STA_CMD``, or ``sta`` on PATH."""
+    return os.environ.get("WARPTAP_STA_CMD") or shutil.which("sta")
+
+
+@dataclass(frozen=True)
+class StaResult:
+    """What ``fixtures/sta/sta.tcl`` printed: worst slack and total negative slack per check
+    direction and scene (``max_slack_slow``, ``min_slack_fast``, ...), the report lines of the
+    timing checks that fail and of the design-rule checks that fail (each empty when none
+    does), and the full report."""
+
+    values: Dict[str, float]
+    violators: str
+    design_rule_violators: str
+    report: str
+
+    @property
+    def setup_slack(self) -> float:
+        return self.values["max_slack_slow"]
+
+    @property
+    def hold_slack(self) -> float:
+        return self.values["min_slack_fast"]
+
+
+def _tcl_braced(value: str) -> str:
+    assert "{" not in value and "}" not in value, value
+    return "{" + value + "}"
+
+
+def run_sta(
+    mapped: Mapped,
+    lib: Sg13g2,
+    *,
+    tck_period: float,
+    functional_clocks: Dict[str, float],
+    sta_command: str,
+) -> StaResult:
+    """OpenSTA on ``mapped``'s netlist (as Yosys wrote it, no power pins) with
+    ``fixtures/sta/warptap.sdc``, at the slow and fast corners."""
+    with tempfile.TemporaryDirectory(prefix="warptap-sg13g2-sta-") as tmpdir:
+        tmp = Path(tmpdir)
+        files = [tmp / "netlist.v"]
+        files[0].write_text(mapped.verilog, encoding="utf-8")
+        if mapped.macro_stubs:
+            files.append(tmp / "macro_stubs.v")
+            files[1].write_text(mapped.macro_stubs, encoding="utf-8")
+        clocks = " ".join(f"{port} {period}" for port, period in functional_clocks.items())
+        driver = "\n".join([
+            f"set slow_lib {_tcl_braced(str(lib.slow_lib))}",
+            f"set fast_lib {_tcl_braced(str(lib.fast_lib))}",
+            "set netlist [list " + " ".join(_tcl_braced(str(f)) for f in files) + "]",
+            f"set top {_tcl_braced(mapped.top)}",
+            f"set sdc {_tcl_braced(str(STA_DIR / 'warptap.sdc'))}",
+            f"set tck_period {tck_period}",
+            f"set functional_clocks {{{clocks}}}",
+            f"set report {_tcl_braced(str(tmp / 'report.txt'))}",
+            f"source {_tcl_braced(str(STA_DIR / 'sta.tcl'))}",
+        ]) + "\n"
+        (tmp / "driver.tcl").write_text(driver, encoding="utf-8")
+        proc = subprocess.run(
+            [sta_command, "-no_init", "-no_splash", "-exit", "driver.tcl"],
+            capture_output=True, text=True, cwd=tmp, timeout=1800,
+        )
+        values = {}
+        for line in proc.stdout.splitlines():
+            if line.startswith("WARPTAP "):
+                _, name, value = line.split()
+                values[name] = float(value)
+        assert proc.returncode == 0 and values.get("done") == 1.0, proc.stdout + proc.stderr
+
+        def violated(name: str) -> str:
+            """The lines OpenSTA marks VIOLATED (it prints headers and "No paths found." when
+            there are none)."""
+            text = (tmp / name).read_text(encoding="utf-8")
+            return "\n".join(line for line in text.splitlines() if "VIOLATED" in line)
+
+        return StaResult(
+            values=values,
+            violators=violated("report.txt.violators"),
+            design_rule_violators=violated("report.txt.drv"),
+            report=(tmp / "report.txt").read_text(encoding="utf-8"),
         )
 
 
