@@ -104,12 +104,13 @@ unresolved path-selector error. Moving warptap's network into such a wrapper mod
 change every instance path in the ICL and PDL and still not be checkable, so it is not done.
 The top-level slots' ``SEL`` ports stay unbound in the ``Instance`` statements.
 
-**The vendored raw ICL parser cannot check any ordinarily formatted AccessLink**: its
-``AccessLinkGeneric_def`` is a *lexer* rule (``icl.g4:395-396``), so ``AccessLink X Of
-STD_1149_1_2001 `` lexes as one token and every such block -- including the published ones above
--- fails to parse. The claim in earlier versions of this docstring that the emitted block was
-"grammatically valid" was therefore never actually checked by that tool; the validation
-paragraph below covers ``include_access_link=False`` output only.
+**The vendored raw ICL parser checks the AccessLink's grammar only**: up to 0.0.6 it could not
+parse any ordinarily formatted AccessLink, because a *lexer* rule, ``AccessLinkGeneric_def``,
+took the ``AccessLink X Of STD_1149_1_2001`` header as one token (so earlier claims here that the
+block was "grammatically valid" had never been checked). The fork removed that rule, and
+``tests/test_icl_emit_access_link_syntax.py`` parses the emitted block as written. Its ``Ijtag``
+still doesn't elaborate an AccessLink (it raises "Not supported"), so the validation paragraph
+below covers ``include_access_link=False`` output only.
 
 **No confirmed real ICL mechanism exists for a READ instrument's fixed ``capture_value``
 stub** (a warptap-internal testing artifact with no real hardware counterpart) -- this

@@ -6,14 +6,10 @@ processor raises "Not supported" for any AccessLink -- with a collecting error l
 itself only prints syntax errors) and an explicit end-of-input check (``icl_source`` has no ``EOF``
 in its rule, so leftover unparsed text otherwise goes unnoticed).
 
-**A real limitation of that tool shapes this test.** ``AccessLinkGeneric_def`` in ``icl.g4`` is a
-*lexer* rule, so an ordinarily formatted ``AccessLink X Of STD_1149_1_2001 {`` header lexes as one
-token and fails to parse -- the same happens to every published example. The tool's own grammar
-comment (icl.g4:393-394) predicts it. The header's whitespace is therefore rewritten to ``/**/``
-before parsing, which makes the lexer take the intended tokens; nothing else is altered.
-``test_ordinary_formatting_is_not_parseable_by_the_vendored_lexer`` pins the limitation: if it
-starts failing, the vendored tool was fixed and the workaround (and the matching notes in
-``icl_emit``'s docstrings) can go.
+The text is parsed as emitted. Until the fork removed it, ``icl.g4`` had a *lexer* rule,
+``AccessLinkGeneric_def``, that took an ordinarily formatted ``AccessLink X Of STD_1149_1_2001 {``
+header as one token, so no AccessLink parsed, the published examples included, and this test
+rewrote the header's whitespace to ``/**/`` first.
 
 **What this proves and doesn't.** It shows the emitted block is accepted by an independently
 authored grammar for IEEE 1687's ``accessLink1149_def``, and -- via the controls below -- that the
@@ -26,15 +22,12 @@ set's ``MultiCoreAccessLink.icl``/``E30.icl``, MAST's test files) but are writte
 
 from __future__ import annotations
 
-import re
 from typing import List, Tuple
 
 import pytest
 from test_icl_emit_golden import CASES
 
 from warptap.icl_emit import to_icl
-
-_HEADER = re.compile(r"AccessLink (\w+) Of (STD_1149_1_200[13]) \{")
 
 # case name -> the client interface of the slot driving tdo, which the ScanInterface list names
 _TDO_SLOT_INTERFACE = {
@@ -43,10 +36,6 @@ _TDO_SLOT_INTERFACE = {
     "scan_mux": "warptap_scan_mux_mux_outer.client",
 }
 
-
-def _lexable(text: str) -> str:
-    """Rewrite the AccessLink header's whitespace to ``/**/`` (see the module docstring)."""
-    return _HEADER.sub(r"AccessLink/**/\1/**/Of/**/\2/**/{", text)
 
 
 @pytest.fixture
@@ -109,22 +98,13 @@ def test_emitted_access_link_parses_and_names_the_expected_things(
     text = to_icl(
         graph, root, include_access_link=True, bsdl_entity_name=entity, ijtag_access=ijtag_access
     )
-    errors, consumed, links = parse(_lexable(text))
+    errors, consumed, links = parse(text)
     assert errors == []
     assert consumed
     instruction = "IJTAG_ACCESS" if ijtag_access else "EXTEST"
     assert links == [
         ("warptap_tap", entity or root.name, [(instruction, [_TDO_SLOT_INTERFACE[case]])]),
     ]
-
-
-def test_ordinary_formatting_is_not_parseable_by_the_vendored_lexer(parse):
-    graph, root = CASES["flat_read_write"]()
-    errors, consumed, _ = parse(to_icl(graph, root, include_access_link=True))
-    assert errors or not consumed, (
-        "the vendored lexer now accepts an ordinarily formatted AccessLink: the icl.g4 lexer-rule "
-        "problem is fixed, so drop the /**/ workaround here and update icl_emit's docstrings"
-    )
 
 
 def _module(access_link_body: str) -> str:
@@ -144,7 +124,7 @@ def _module(access_link_body: str) -> str:
     )
 
 
-_LINK = "AccessLink/**/Tap/**/Of/**/STD_1149_1_2001/**/{ %s }"
+_LINK = "AccessLink Tap Of STD_1149_1_2001 { %s }"
 
 
 def test_control_published_shape_with_two_instructions_and_active_signals_parses(parse):
