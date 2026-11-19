@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import List, Tuple
 
 import pytest
+from tdo_trace import tdo_bit
 
 from warptap.faultflow_compaction import retarget_compacted_faultflow_patterns
 from warptap.icl_model import InstrumentDirection, SignalBinding
@@ -373,10 +374,7 @@ def test_compaction_retargeting_reads_the_real_xor_folded_value_on_real_rtl(
         if not line.startswith("TRACE,"):
             continue
         fields = line.split(",")
-        tdo = fields[6]
-        # See test_faultflow_compression_cross_sim.py's own decode loop for why X-coercion
-        # during pre-stimulus cycles is safe here too.
-        tdo_by_cycle.append(0 if tdo == "x" else int(tdo))
+        tdo_by_cycle.append(tdo_bit(fields[1], fields[6]))
     tdo_by_cycle = tdo_by_cycle[len(_RESET_LEAD_IN) :]
 
     observed = _correlate_skipping_pulses(ir_ops, tdo_by_cycle)

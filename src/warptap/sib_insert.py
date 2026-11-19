@@ -70,8 +70,14 @@ from pathlib import Path
 from warptap.errors import WarptapError
 from warptap.icl_model import ChainSlot, InstrumentDirection, PhysicalGraph, ScanMuxNode, SibNode
 from warptap.netlist import Bit, Module, Netlist
-from warptap.tap_model import IDCODE_VALUE, idcode_value_error, ijtag_access_opcode_error
-from warptap.tap_ports import TCK, TDI, TDO, TMS, TRST_N
+from warptap.tap_model import (
+    DEFAULT_TDO_DRIVE,
+    IDCODE_VALUE,
+    check_tdo_drive,
+    idcode_value_error,
+    ijtag_access_opcode_error,
+)
+from warptap.tap_ports import TCK, TDI, TMS, TRST_N, add_tdo_pin
 from warptap.yosys_io import ingest, ingest_with_params
 
 _RTL_DIR = Path(__file__).resolve().parent / "rtl"
@@ -623,12 +629,13 @@ def insert_sib_network(
     chip_reset: str | None = None,
     chip_reset_active_low: bool = True,
     ijtag_access_opcode: int | None = None,
+    tdo_drive: str = DEFAULT_TDO_DRIVE,
 ) -> None:
     """Insert a TAP + SIB network into ``netlist``'s ``top`` module, matching ``graph``
     (from ``sib_plan.build_sib_plan``). Adds five new top-level JTAG ports (tck/tms/tdi/
-    trst_n/tdo) -- ``top`` must not already have a TAP inserted (this function doesn't
-    coexist with ``bsr_insert.insert_bsr`` on the same module; implementation_plan.md §7
-    Stage 4 §1's documented scoping decision).
+    trst_n/tdo, plus tdo_oe with ``tdo_drive="enable_port"``) -- ``top`` must not already have
+    a TAP inserted (this function doesn't coexist with ``bsr_insert.insert_bsr`` on the same
+    module; implementation_plan.md §7 Stage 4 §1's documented scoping decision).
 
     ``top`` should be the same string passed as ``sib_plan.build_sib_plan``'s own
     ``top_name`` when that graph's accompanying :class:`~warptap.icl_model.ModuleInstance`
@@ -685,7 +692,15 @@ def insert_sib_network(
     or BYPASS's opcode, else :class:`SibInsertError`. Give :func:`warptap.bsdl_emit.to_bsdl`,
     ``TapModel`` and ``TapConfig`` the same value, and :func:`warptap.icl_emit.to_icl`
     ``ijtag_access=True``. Off by default, and then nothing changes.
+
+    ``tdo_drive`` says how the ``tdo`` pin is driven (:data:`warptap.tap_model.TDO_DRIVES`):
+    ``"tristate"``, the default, puts a ``$tribuf`` on it, enabled by ``tap_core``'s ``tdo_oe``,
+    so TDO is high impedance outside Shift-IR/Shift-DR as IEEE 1149.1 requires; ``"low"`` drives
+    it at all times, low outside the shift states, as warptap 0.0.6 did; ``"enable_port"`` drives
+    it at all times and adds a ``tdo_oe`` output for a pad cell to do the tri-state with. Give
+    :func:`warptap.bsdl_emit.to_bsdl` the same value. Anything else raises ValueError.
     """
+    check_tdo_drive(tdo_drive)
     if problem := idcode_value_error(idcode_value):
         raise SibInsertError(problem)
     if ijtag_access_opcode is not None and (
@@ -729,7 +744,7 @@ def insert_sib_network(
     tms_bits = top_mod.add_port(TMS, "input")
     tdi_bits = top_mod.add_port(TDI, "input")
     trst_n_bits = top_mod.add_port(TRST_N, "input")
-    tdo_bits = top_mod.add_port(TDO, "output")
+    tdo_connections = add_tdo_pin(top_mod, tdo_drive)
 
     tap_state_bits = top_mod.new_wire(4, name="warptap_tap_state")
     current_instruction_bits = top_mod.new_wire(ir_width, name="warptap_current_instruction")
@@ -804,13 +819,14 @@ def insert_sib_network(
         _TAP_CORE,
         port_directions={
             "tck": "input", "tms": "input", "tdi": "input", "trst_n": "input",
-            "tdo": "output", "tap_state": "output", "current_instruction": "output",
+            **dict.fromkeys(tdo_connections, "output"),
+            "tap_state": "output", "current_instruction": "output",
             "capture_dr": "output", "shift_dr": "output", "update_dr": "output",
             "external_dr_tdo": "input",
         },
         connections={
             "tck": tck_bits, "tms": tms_bits, "tdi": tdi_bits, "trst_n": trst_n_bits,
-            "tdo": tdo_bits, "tap_state": tap_state_bits,
+            **tdo_connections, "tap_state": tap_state_bits,
             "current_instruction": current_instruction_bits,
             "capture_dr": capture_dr_bits, "shift_dr": shift_dr_bits,
             "update_dr": update_dr_bits,

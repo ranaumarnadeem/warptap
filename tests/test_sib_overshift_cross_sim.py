@@ -11,6 +11,8 @@ from __future__ import annotations
 import tempfile
 from pathlib import Path
 
+from tdo_trace import tdo_bit
+
 from warptap.icl_model import InstrumentNode, PhysicalGraph, SibNode
 from warptap.netlist import Netlist
 from warptap.sib_insert import insert_sib_network
@@ -81,8 +83,8 @@ def run_on_rtl(fixtures_dir, yosys_command, iverilog_command, vvp_command, netli
     for line in stdout.splitlines():
         if not line.startswith("TRACE,"):
             continue
-        _, _state, _instr, _cap, _shift, _upd, tdo, _y = line.split(",")
-        tdo_by_cycle.append(int(tdo))
+        _, state, _instr, _cap, _shift, _upd, tdo, _y = line.split(",")
+        tdo_by_cycle.append(tdo_bit(state, tdo))
     tdo_by_cycle = tdo_by_cycle[len(reset_lead_in):]
 
     # The probe is the LAST ShiftIR/ShiftDR op in `ops` by construction (build_overshift_ops

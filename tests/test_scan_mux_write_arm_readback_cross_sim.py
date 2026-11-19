@@ -26,6 +26,8 @@ from __future__ import annotations
 import tempfile
 from pathlib import Path
 
+from tdo_trace import tdo_bit
+
 from warptap.icl_model import InstrumentDirection, ModuleInstance, ScanArm, ScanMuxNode, PhysicalGraph, SignalBinding
 from warptap.icl_model import InstrumentNode
 from warptap.netlist import Netlist
@@ -121,8 +123,8 @@ def _run_rtl_raw(fixtures_dir, yosys_command, iverilog_command, vvp_command, net
     for line in stdout.splitlines():
         if not line.startswith("TRACE,"):
             continue
-        _, _state, _instr, _cap, _shift, _upd, tdo, _status = line.split(",")
-        tdo_by_cycle.append(int(tdo))
+        _, state, _instr, _cap, _shift, _upd, tdo, _status = line.split(",")
+        tdo_by_cycle.append(tdo_bit(state, tdo))
     return tdo_by_cycle[len(_RESET_LEAD_IN):]
 
 

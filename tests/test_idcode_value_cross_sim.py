@@ -10,9 +10,11 @@ from __future__ import annotations
 
 import tempfile
 from pathlib import Path
+from typing import Optional
 
 import pytest
 from bsdl_reader import parse_bsdl
+from tdo_trace import tdo_bit
 
 from warptap.bsdl_emit import to_bsdl
 from warptap.icl_model import InstrumentDirection, SignalBinding
@@ -47,9 +49,10 @@ def custom(fixtures_dir, yosys_command):
     )
 
 
-def _tdo(verilog, rows, fixtures_dir, iverilog_command, vvp_command) -> list[int]:
-    """TDO per ``(tms, tdi, trst_n)`` row, sampled before the rising edge
-    (``tb_real_signal.v``; the design's own reset follows TRST)."""
+def _tdo(verilog, rows, fixtures_dir, iverilog_command, vvp_command) -> list[Optional[int]]:
+    """TDO per ``(tms, tdi, trst_n)`` row, sampled before the rising edge (``None`` outside
+    the shift states, where the pin is released; ``tb_real_signal.v``, the design's own
+    reset following TRST)."""
     lines = [f"{tms} {tdi} {trst_n} {trst_n}" for tms, tdi, trst_n in rows]
     with tempfile.TemporaryDirectory(prefix="warptap-idcode-") as tmpdir:
         path = Path(tmpdir) / "real_signal_inserted.v"
@@ -60,9 +63,9 @@ def _tdo(verilog, rows, fixtures_dir, iverilog_command, vvp_command) -> list[int
             iverilog_command=iverilog_command,
             vvp_command=vvp_command,
         )
-    tdo = [line.split(",")[6] for line in stdout.splitlines() if line.startswith("TRACE,")]
-    assert len(tdo) == len(rows)
-    return [int(v) if v in ("0", "1") else -1 for v in tdo]
+    trace = [line.split(",") for line in stdout.splitlines() if line.startswith("TRACE,")]
+    assert len(trace) == len(rows)
+    return [tdo_bit(t[1], t[6]) for t in trace]
 
 
 def _read_idcode_after_trst(verilog, fixtures_dir, iverilog_command, vvp_command) -> int:

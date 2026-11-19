@@ -11,11 +11,14 @@ import tempfile
 from pathlib import Path
 
 import pytest
+from tdo_trace import tdo_bit
 
 from warptap.bsr_insert import BsrInsertError, insert_bsr
 from warptap.bsr_plan import BsrFunction, build_bsr_plan
 from warptap.netlist import Module, Netlist
 from warptap.sim_io import run_verilog_testbench
+from warptap.tap_fsm import TapState
+from warptap.tap_model import drives_tdo
 from warptap.yosys_io import ingest, synthesize, write_verilog_from_json
 
 
@@ -29,6 +32,15 @@ def _parse_bit(token: str) -> int | str:
     its first real clock edge, or `io` while genuinely undriven): expected here,
     not a parsing edge case to special-case away."""
     return token if token in ("z", "x") else int(token)
+
+
+def _parse_tdo(state: str, tdo: str) -> int | str | None:
+    """``tdo`` checked as ``tdo_trace.tdo_bit`` checks it, except inside Shift-IR/Shift-DR:
+    there the chain can carry the 'z' the BC_7 cell captured from `io` while nothing drove
+    it, a data value and not the pin released, so it is parsed like any other net."""
+    if drives_tdo(TapState(int(state))):
+        return _parse_bit(tdo)
+    return tdo_bit(state, tdo)
 
 
 def _build_and_insert(fixtures_dir, yosys_command):
@@ -147,7 +159,7 @@ def _run_rtl(fixtures_dir, yosys_command, iverilog_command, vvp_command, netlist
         trace.append(
             (
                 _parse_bit(state), _parse_bit(instr), _parse_bit(cap), _parse_bit(shift),
-                _parse_bit(upd), _parse_bit(tdo), io, _parse_bit(sensed),
+                _parse_bit(upd), _parse_tdo(state, tdo), io, _parse_bit(sensed),
             )
         )
     return trace

@@ -10,6 +10,8 @@ from __future__ import annotations
 import tempfile
 from pathlib import Path
 
+from tdo_trace import model_tdo, tdo_bit
+
 from warptap.bsr_insert import insert_bsr
 from warptap.bsr_model import BoundaryScanRegister
 from warptap.bsr_plan import build_bsr_plan
@@ -129,7 +131,9 @@ def run_on_python(plan, stimulus) -> list[tuple]:
             y = bsr.pin_drive_value("y", extest_mode=extest_active)
             tdo = model.tick(tms, tdi)
 
-        trace.append((pre_state.value, pre_instr, capture_dr, shift_dr, update_dr, tdo, y))
+        trace.append(
+            (pre_state.value, pre_instr, capture_dr, shift_dr, update_dr, model_tdo(pre_state, tdo), y)
+        )
         functional.clock(rst_n, a, b)
 
     return trace
@@ -182,7 +186,9 @@ def run_on_rtl(netlist, yosys_command, iverilog_command, vvp_command, fixtures_d
         if not line.startswith("TRACE,"):
             continue
         _, state, instr, cap, shift, upd, tdo, y = line.split(",")
-        trace.append((int(state), int(instr), int(cap), int(shift), int(upd), int(tdo), _parse_bit(y)))
+        trace.append(
+            (int(state), int(instr), int(cap), int(shift), int(upd), tdo_bit(state, tdo), _parse_bit(y))
+        )
     return trace
 
 

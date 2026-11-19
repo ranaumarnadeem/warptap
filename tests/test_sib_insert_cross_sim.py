@@ -15,6 +15,8 @@ from __future__ import annotations
 import tempfile
 from pathlib import Path
 
+from tdo_trace import model_tdo, tdo_bit
+
 from warptap.netlist import Netlist
 from warptap.sib_insert import insert_sib_network
 from warptap.sib_model import SibNetworkRegister
@@ -138,7 +140,9 @@ def run_on_python(graph, stimulus) -> tuple[list[tuple], SibNetworkRegister]:
             shift_dr = int(pre_state is TapState.SHIFT_DR)
             update_dr = int(pre_state is TapState.UPDATE_DR)
             tdo = model.tick(tms, tdi)
-        trace.append((pre_state.value, pre_instr, capture_dr, shift_dr, update_dr, tdo))
+        trace.append(
+            (pre_state.value, pre_instr, capture_dr, shift_dr, update_dr, model_tdo(pre_state, tdo))
+        )
     return trace, reg
 
 
@@ -161,7 +165,7 @@ def run_on_rtl(netlist, yosys_command, iverilog_command, vvp_command, fixtures_d
         if not line.startswith("TRACE,"):
             continue
         _, state, instr, cap, shift, upd, tdo, _y = line.split(",")
-        trace.append((int(state), int(instr), int(cap), int(shift), int(upd), int(tdo)))
+        trace.append((int(state), int(instr), int(cap), int(shift), int(upd), tdo_bit(state, tdo)))
     return trace
 
 

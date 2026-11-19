@@ -12,6 +12,8 @@ from __future__ import annotations
 import tempfile
 from pathlib import Path
 
+from tdo_trace import tdo_bit
+
 from warptap.netlist import Netlist
 from warptap.pdl_interpreter import PDLInterpreter, _target_layout
 from warptap.sib_insert import insert_sib_network
@@ -89,8 +91,8 @@ def run_on_rtl(
     for line in stdout.splitlines():
         if not line.startswith("TRACE,"):
             continue
-        _, _state, _instr, _cap, _shift, _upd, tdo, _y = line.split(",")
-        tdo_by_cycle.append(int(tdo))
+        _, state, _instr, _cap, _shift, _upd, tdo, _y = line.split(",")
+        tdo_by_cycle.append(tdo_bit(state, tdo))
     # `cycles` (and therefore `ranges`) is indexed from 0 at the first real cycle, right
     # after the reset lead-in -- strip exactly that many trace rows before correlating.
     tdo_by_cycle = tdo_by_cycle[len(_RESET_LEAD_IN):]

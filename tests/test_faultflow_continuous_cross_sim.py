@@ -27,6 +27,7 @@ from compressed_netlist_helpers import (
     _stimulus_rows,
     _two_chain_core_json,
 )
+from tdo_trace import tdo_bit
 
 from warptap.faultflow_continuous import (
     ContinuousDecompressor,
@@ -222,10 +223,8 @@ def test_continuous_retargeting_loads_the_solved_words_on_real_rtl(
     for line in stdout.splitlines():
         if not line.startswith("TRACE,"):
             continue
-        _, _state, _instr, _cap, _shift, _upd, tdo, _so0, _so1 = line.split(",")
-        # Before the first clock edge the decompressor's unreset registers are X in
-        # gate-level sim; nothing asserted here reads that early (see the one-shot tier).
-        tdo_by_cycle.append(0 if tdo == "x" else int(tdo))
+        _, state, _instr, _cap, _shift, _upd, tdo, _so0, _so1 = line.split(",")
+        tdo_by_cycle.append(tdo_bit(state, tdo))
     tdo_by_cycle = tdo_by_cycle[len(_RESET_LEAD_IN) :]
 
     results = check_reads(ir_ops, _correlate_skipping_pulses(ir_ops, tdo_by_cycle))

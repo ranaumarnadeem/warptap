@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import List, Tuple
 
 import yaml
+from tdo_trace import tdo_bit
 
 from warptap.faultflow_retarget import retarget_faultflow_patterns
 from warptap.icl_model import InstrumentDirection, SignalBinding
@@ -233,8 +234,8 @@ def test_faultflow_pattern_drives_real_self_repair_start_and_reads_busy(
     for line in stdout.splitlines():
         if not line.startswith("TRACE,"):
             continue
-        _, _state, _instr, _cap, _shift, _upd, tdo, _rdata = line.split(",")
-        tdo_by_cycle.append(int(tdo))
+        _, state, _instr, _cap, _shift, _upd, tdo, _rdata = line.split(",")
+        tdo_by_cycle.append(tdo_bit(state, tdo))
     tdo_by_cycle = tdo_by_cycle[len(_RESET_LEAD_IN):]
 
     observed = _correlate_skipping_pulses(ir_ops, tdo_by_cycle)
