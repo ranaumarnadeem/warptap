@@ -52,9 +52,11 @@ implementation stage.
 ### Added
 
 - **A CI workflow** (`.github/workflows/tests.yml`): the full suite on every push and pull
-  request, on Python 3.10 and 3.12, with Icarus and OpenOCD from apt, `yowasp-yosys` as Yosys,
-  and faultflow (`dev`) and autoMBIST checked out for the cross-checks; plus a strict docs
-  build. Until now only the docs deploy and the PyPI publish ran on GitHub.
+  request, on Python 3.10 and 3.12, with native Yosys and Icarus from YosysHQ's OSS CAD Suite,
+  OpenOCD from apt, and faultflow (`dev`) and autoMBIST checked out for the cross-checks; plus
+  a strict docs build. Until now only the docs deploy and the PyPI publish ran on GitHub.
+  `yowasp-yosys` alone is not enough: faultflow's netlist generation, which two cross-sims
+  call, runs `yosys` on absolute paths the WebAssembly build cannot open.
 - The `dev` extra installs PyYAML, which the openMBIST design tests import; a fresh
   `pip install -e '.[dev]'` could not collect them.
 

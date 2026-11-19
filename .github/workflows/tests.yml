@@ -17,8 +17,6 @@ jobs:
         # third_party/icl_parser still imports typing.io, which Python 3.13 removed.
         python-version: ["3.10", "3.12"]
     env:
-      # No system Yosys here: the dev extra's yowasp-yosys (YosysHQ's WASM build) is the one.
-      WARPTAP_YOSYS_CMD: yowasp-yosys
       # faultflow and autoMBIST, checked out below, for the cross-checks that need them.
       # Tracking their development branches is on purpose: warptap ports faultflow's models
       # and both pin warptap, so drift should show up here first.
@@ -40,8 +38,14 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-      - name: Install Icarus Verilog and OpenOCD
-        run: sudo apt-get update && sudo apt-get install -y iverilog openocd
+      # Native Yosys and Icarus Verilog. The dev extra's yowasp-yosys is not enough: faultflow's
+      # netlist generation, which the compaction and continuous-decompressor cross-sims call,
+      # runs `yosys` by name on absolute paths, which the WebAssembly build cannot open.
+      - uses: YosysHQ/setup-oss-cad-suite@v4
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Install OpenOCD
+        run: sudo apt-get update && sudo apt-get install -y openocd
       - name: Install warptap with its dev extra
         # jinja2: autoMBIST's generator, imported from its checkout by the design tests.
         run: python -m pip install -e ".[dev]" jinja2
