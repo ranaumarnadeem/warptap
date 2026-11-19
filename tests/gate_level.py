@@ -117,6 +117,14 @@ class Sg13g2:
     def models(self) -> List[Path]:
         return [self.path("verilog/sg13g2_stdcell.v"), self.path("verilog/sg13g2_udp.v")]
 
+    def dont_use(self) -> frozenset:
+        """The cells the typical-corner liberty marks ``dont_use`` (fillers, decaps, clock
+        gates and the like)."""
+        text = self.typ_lib.read_text(encoding="utf-8")
+        starts = [(m.start(), m.group(1)) for m in re.finditer(r"\bcell\s*\(\s*\"?(\w+)\"?\s*\)", text)]
+        bodies = zip(starts, starts[1:] + [(len(text), None)])
+        return frozenset(name for (start, name), (end, _) in bodies if re.search(r"dont_use\s*:\s*true", text[start:end]))
+
 
 def _candidate_dirs() -> Iterable[Path]:
     if os.environ.get("WARPTAP_IHP_STDCELL_DIR"):
@@ -162,6 +170,7 @@ class Mapped:
     macros_verilog: str
     cells: Dict[str, Dict[str, int]]
     tristate_drivers: int
+    macro_stubs: str = ""  # the macros' ports only, for STA, which can't time a behavioral model
 
     def total(self, cell_type: str) -> int:
         return sum(counts.get(cell_type, 0) for counts in self.cells.values())
@@ -200,6 +209,9 @@ def map_to_sg13g2(
                 "write_verilog -noattr -selected macros.v",
                 "select -clear",
                 f"blackbox {names}",
+                f"select {names}",
+                "write_verilog -noattr -blackboxes -selected macro_stubs.v",
+                "select -clear",
             ]
         steps += [
             "read_liberty -lib -ignore_miss_dir typ.lib",
@@ -234,6 +246,7 @@ def map_to_sg13g2(
             macros_verilog=(tmp / "macros.v").read_text(encoding="utf-8") if macros else "",
             cells=cells,
             tristate_drivers=_count(tmp / "tristates.txt"),
+            macro_stubs=(tmp / "macro_stubs.v").read_text(encoding="utf-8") if macros else "",
         )
 
 
@@ -242,9 +255,13 @@ def _is_blackbox(module: dict) -> bool:
     return bool(int(value, 2) if isinstance(value, str) else value)
 
 
-def check_mapped(mapped: Mapped, macros: Sequence[str] = ()) -> None:
-    """Every module holds only library cells, the design's own modules and macros, and there
-    is one tri-state buffer per tri-state driver."""
+def check_mapped(mapped: Mapped, macros: Sequence[str] = (), lib: Optional[Sg13g2] = None) -> None:
+    """Every module holds only library cells, the design's own modules and macros, none of the
+    cells the library marks ``dont_use`` (when ``lib`` is given), and there is one tri-state
+    buffer per tri-state driver."""
+    if lib is not None:
+        used = {t for counts in mapped.cells.values() for t in counts} & lib.dont_use()
+        assert not used, f"dont_use cells in the mapped netlist: {sorted(used)}"
     for module, counts in mapped.cells.items():
         # A parameterized module's name starts with "$paramod", a generic cell type's with "$".
         generic = {t: n for t, n in counts.items() if t.startswith("$") and t not in mapped.cells}
@@ -310,3 +327,4 @@ def run_gate_level(
             iverilog_command=iverilog_command,
             vvp_command=vvp_command,
         )
+

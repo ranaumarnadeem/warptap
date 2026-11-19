@@ -87,7 +87,7 @@ class _Hooks:
                 netlist_json, _top_of(netlist_json), lib, macros=macros,
                 tbuf_techmap=tbuf_techmap, yosys_command=yosys_command,
             )
-            gl.check_mapped(mapped, macros)
+            gl.check_mapped(mapped, macros, lib)
             self.mapped.append(mapped)
             return gl.simulation_verilog(mapped)
 
@@ -162,7 +162,7 @@ def _tdo_samples(insertion, lib, fixtures_dir, yosys_command, iverilog_command, 
     stimulus = {"stimulus.txt": "\n".join(" ".join(map(str, r)) for r in tdo._stimulus()) + "\n"}
     bench_text = tdo._testbench(top, netlist_json["modules"][top]["ports"], tdo._ENABLE["tristate"])
     mapped = gl.map_to_sg13g2(netlist_json, top, lib, tbuf_techmap=tbuf_techmap, yosys_command=yosys_command)
-    gl.check_mapped(mapped)
+    gl.check_mapped(mapped, lib=lib)
     with tempfile.TemporaryDirectory(prefix="warptap-sg13g2-tdo-") as tmpdir:
         bench = Path(tmpdir) / "tb_tdo_drive.v"
         bench.write_text(bench_text, encoding="utf-8")
