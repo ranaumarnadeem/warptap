@@ -22,6 +22,11 @@ a placeholder whose manufacturer field lands in an assigned JEP106 slot, so set 
 anything you ship. `TapModel` and `tap_integrity.TapConfig` take the same `idcode_value` when
 modelling or testing that TAP.
 
+Give `to_bsdl` the same `tdo_drive` as well ([The TDO pin](insertion.md#the-tdo-pin)). By
+default the inserted TDO is tri-stated outside the shift states and the `DESIGN_WARNING` says
+nothing about it; with `"low"` it says the TAP is not fully IEEE 1149.1 conformant, and with
+`"enable_port"` that the pad does the tri-state, enabled by `tdo_oe`.
+
 ::: warptap.bsdl_emit
     options:
       members: [BsdlEmitError, to_bsdl]
