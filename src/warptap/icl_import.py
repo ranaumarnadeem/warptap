@@ -378,7 +378,44 @@ class _ScanPath:
             return f"{type(item).__name__} {item.get_name_with_hier()!r}"
         return "a select that never reaches a register"
 
-    def _element(self, node):
+    # -- the walk, on a stack of its own ------------------------------------------------------
+    #
+    # What comes before an element is found by walking back from it, and a SIB's bypass arm
+    # leads straight to the element before the SIB, so written as calls the walk would nest once
+    # per element along a chain: 4 Python frames per top-level slot. Python 3.10 crashes, out of
+    # C stack, at about 20000 frames (a few thousand top-level SIBs on Linux, fewer on Windows,
+    # whose stack is smaller). So the walk is written as generators: where a step needs the
+    # element that ends at a node, it yields the node, and _run computes that element on a stack
+    # of its own and sends it back, in the order the calls would have run.
+
+    def _run(self, steps):
+        """The result of ``steps``. Each node a step yields is answered with the element ending
+        at it (:meth:`_element_steps`), computed depth-first, as a call would be; an exception
+        goes back through the steps waiting on it, as it would through calls."""
+        stack = [steps]
+        value, error = None, None
+        while True:
+            try:
+                if error is None:
+                    request = stack[-1].send(value)
+                else:
+                    request = stack[-1].throw(error)
+            except StopIteration as done:
+                stack.pop()
+                if not stack:
+                    return done.value
+                value, error = done.value, None
+                continue
+            except Exception as exc:  # noqa: BLE001 -- handed to the step waiting on this one
+                stack.pop()
+                if not stack:
+                    raise
+                value, error = None, exc
+                continue
+            stack.append(self._element_steps(request))
+            value, error = None, None
+
+    def _element_steps(self, node):
         """The element of the path that ends at ``node``, the node before it, and the ports
         between the two."""
         key = id(node)
@@ -391,7 +428,7 @@ class _ScanPath:
         self._busy.add(key)
         try:
             if isinstance(node, self.c.scan_register):
-                result = self._register_element(node)
+                result = yield from self._register_element_steps(node)
             else:
                 result = self._bare_mux(node)
         finally:
@@ -399,11 +436,11 @@ class _ScanPath:
         self._elements[key] = result
         return result
 
-    def _register_element(self, register):
+    def _register_element_steps(self, register):
         ports: list = []
         source = self._source(register.get_instance(), register.scan_in, ports)
         if isinstance(source, self.c.scan_mux) and self._select_register(source) is register:
-            return self._slot(register, source)
+            return (yield from self._slot_steps(register, source))
         return _Register(register, tuple(ports)), source, tuple(ports)
 
     def _bare_mux(self, mux):
@@ -430,7 +467,7 @@ class _ScanPath:
             f"{select.get_name_with_hier()!r}"
         )
 
-    def _fork(self, nodes, mux):
+    def _fork_steps(self, nodes, mux):
         """Where the arms of ``mux`` start: the first node every arm's path reaches."""
         paths = [[node] for node in nodes]
         seen = [{id(node)} for node in nodes]
@@ -442,7 +479,7 @@ class _ScanPath:
             for k, path in enumerate(paths):
                 if path[-1] is _TOP_SCAN_IN:
                     continue
-                _, previous, _ = self._element(path[-1])
+                _, previous, _ = yield path[-1]
                 path.append(previous)
                 seen[k].add(id(previous))
                 moved = True
@@ -453,16 +490,16 @@ class _ScanPath:
                     f"{NOT_A_TREE}: the arms of {mux.get_name_with_hier()!r} never meet"
                 )
 
-    def _slot(self, register, mux):
+    def _slot_steps(self, register, mux):
         raw = []
         for values, concat in mux.mux_selects:
             ports: list = []
             node = self._source(concat.instance, self._single(concat, mux), ports)
             raw.append(([v.get_number() for v in values], node, tuple(ports)))
-        fork = self._fork([node for _, node, _ in raw], mux)
+        fork = yield from self._fork_steps([node for _, node, _ in raw], mux)
         arms, in_ports, first_ports = [], [], None
         for values, node, ports in raw:
-            content, start_ports = self.chain(node, ports, fork)
+            content, start_ports = yield from self._chain_steps(node, ports, fork)
             in_ports.extend(start_ports)
             if first_ports is None:
                 first_ports = start_ports
@@ -488,7 +525,7 @@ class _ScanPath:
             )
         return slot, fork, first_ports
 
-    def chain(self, node, ports, stop):
+    def _chain_steps(self, node, ports, stop):
         """The elements between ``stop`` and ``node`` (``node`` reached through ``ports``), TDI
         side first, each paired with the ports from it to what follows it; and the ports
         between ``stop`` and the first element."""
@@ -500,7 +537,7 @@ class _ScanPath:
                     f"{NOT_A_TREE}: a segment runs back to the top module's scan-in without "
                     "meeting the start of its SIB or ScanMux"
                 )
-            element, previous, previous_ports = self._element(node)
+            element, previous, previous_ports = yield node
             elements.append((element, out_ports))
             node, out_ports = previous, previous_ports
         elements.reverse()
@@ -511,7 +548,7 @@ class _ScanPath:
         (concat,) = self.scan_out.sources.values()
         ports: list = []
         node = self._source(concat.instance, self._single(concat, self.scan_out), ports)
-        elements, _ = self.chain(node, ports, _TOP_SCAN_IN)
+        elements, _ = self._run(self._chain_steps(node, ports, _TOP_SCAN_IN))
         return elements
 
 

@@ -18,6 +18,7 @@ flaky on a slower CI machine.
 
 from __future__ import annotations
 
+import sys
 import tempfile
 import time
 from pathlib import Path
@@ -52,3 +53,44 @@ def test_moderately_wide_multi_instrument_network_imports_quickly(icl_parser_mod
         "graph build (IclRegisterModel) is running again during import -- see this file's own "
         "module docstring and icl_import.py's for the fix this guards."
     )
+
+
+def _walk_depth(n: int, directory: Path, icl_parser_module) -> int:
+    """The deepest the Python stack gets while ``import_icl`` walks a flat network of ``n``
+    top-level SIBs, counted from the end of the parse."""
+    graph, root = build_sib_plan(
+        [InstrumentSpec(f"leaf_{i}", width=1, capture_value=0) for i in range(n)],
+        top_name="chip",
+    )
+    path = directory / f"flat_{n}.icl"
+    path.write_text(to_icl(graph, root, include_access_link=False), encoding="utf-8")
+    depth = [0, 0]  # now, deepest
+
+    def count(frame, event, arg):
+        if event == "call":
+            depth[0] += 1
+            depth[1] = max(depth[1], depth[0])
+        elif event == "return":
+            depth[0] -= 1
+
+    def parse_then_count(top, files, **kwargs):
+        ijtag = icl_parser_module(top, files, **kwargs)
+        sys.setprofile(count)
+        return ijtag
+
+    parse_then_count.__module__ = icl_parser_module.__module__  # import_icl finds the parser's classes by it
+    try:
+        imported, _ = import_icl([path], "chip", icl_parser_module=parse_then_count)
+    finally:
+        sys.setprofile(None)
+    assert [node.sib_name for node in imported.chain] == [node.sib_name for node in graph.chain]
+    return depth[1]
+
+
+def test_a_long_chain_is_walked_without_a_nested_call_per_element(tmp_path, icl_parser_module):
+    """The walk's deepest Python stack is the same for 60 top-level SIBs as for 20. Walked with
+    one nested call per element, it went 4 frames deeper per SIB, and Python 3.10 crashes at
+    about 20000 frames: a few thousand top-level SIBs."""
+    shallow = _walk_depth(20, tmp_path, icl_parser_module)
+    deep = _walk_depth(60, tmp_path, icl_parser_module)
+    assert deep <= shallow + 2, f"20 SIBs: {shallow} frames deep, 60 SIBs: {deep}"
