@@ -27,6 +27,12 @@ implementation stage.
   them sees the change only at the next rising edge. Found by ebyst, which stops there; patterns
   that keep TCK running, warptap's own included, see no difference. The timing itself is
   unchanged.
+- **`import_icl` accepts SIB and ScanMux networks whatever their names**, where it accepted
+  only warptap's own module names. Its messages are new: every rejection starts with an entry of
+  `icl_import.REJECTION_REASONS`, so match on that. A `ValueError` from the parser (an
+  unresolved name, for one) is now an `IclImportError` too.
+- **`import_pdl`'s messages changed**: an unsupported statement is reported as "<keyword> isn't
+  supported", and a syntax error against the whole text rather than one line.
 
 ### Added
 
@@ -73,6 +79,32 @@ implementation stage.
   6.5 ns; the fastest passing TCK is about 145 MHz); it skips without OpenSTA. CI fetches the
   five library files at a pinned IHP-Open-PDK commit, checked by git blob SHA, and checks out
   alexforencich/verilog-uart, so the `uart_tx` cross-simulations run there too.
+- **`import_icl` recognizes SIBs and ScanMuxes by their structure, not by warptap's names.** It
+  follows the scan path from the top module's scan-out back to its scan-in through ports, so
+  wrapper instances and sub-network modules are only wires to it. A SIB is a 1-bit scan
+  register fed by a 2-way ScanMux it selects (the SIB_mux_pre form, under any names); a ScanMux
+  slot is any other ScanMux whose output goes straight into its own select register, which may
+  sit in an instance of its own. Names are instance paths joined with `__`, with warptap's own
+  prefixes stripped at the top level, so warptap's own ICL imports exactly as before. A register
+  declared `[MSB:0]` is read from its scan-in end. What the model can't hold is rejected by
+  name: a scan register outside any SIB or ScanMux, registers in series in one segment, the
+  SIB_mux_post form, a select register that isn't right after its ScanMux, and the constructs
+  the parser doesn't elaborate (an `AccessLink` or `ClockMux` in the network, an addressed
+  instance, a `ToClockPort` with a `Source`).
+- **`icl_import.REJECTION_REASONS`**: every reason `import_icl` rejects a network for, each the
+  start of its message, which names the element by instance path.
+- **The ITC'16 IJTAG benchmark set is a test** (`tests/test_icl_import_itc16.py`), all 25
+  networks at a pinned commit of the parser author's `Fixes` branch. 2 import (`q12710`,
+  `t512505`), match a separate structural count and the parser's own inventory of scan
+  registers, and round-trip through `to_icl`. Of the other 23, 9 have scan registers outside
+  any SIB or ScanMux or in series behind one, 4 a ScanMux whose select register isn't right
+  after it, 1 a SIB_mux_post SIB, 3 a construct the parser doesn't elaborate, and 6 are invalid
+  ICL. The set has no license, so it is not vendored: the test skips without a checkout
+  (`WARPTAP_ITC16_DIR`), CI clones it on Python 3.12, and the 4 largest networks are marked
+  `slow`.
+- **`import_pdl` reads several statements per line, `iNote` (ignored), and `iProc`/`iCall`**,
+  with arguments bound in order, defaults, `$name` substitution, and calls nested up to
+  `pdl_import.MAX_CALL_DEPTH`.
 
 ### Changed
 
@@ -80,6 +112,11 @@ implementation stage.
   `antlr4-python3-runtime==4.13.2` instead of 4.7.2. The 4.7.2 code imported `typing.io`, which
   Python 3.13 removed. The parser now imports its z3/sympy/networkx retargeting model only when
   it builds one, which warptap's importers never do.
+- **ICL parsing is faster**: each file is parsed with ANTLR's SLL prediction first, and with full
+  LL prediction only if that fails, which gives the same tree whenever SLL succeeds. ITC'16's
+  `N132D4` went from 54 s to 15 s, and `FlexScan` from more than 30 minutes to about 5.
+- The vendored parser's errors for a `Parameter`, `LocalParameter` or `Instance` defined twice
+  name it and its module.
 
 ### Fixed
 
@@ -103,6 +140,16 @@ implementation stage.
   Yosys refused to write, and wired a multi-bit input's whole port to one cell's 1-bit input.
   Every bit now has its own cells, each output or inout bit its own control cell, and each port
   is detached from the design's driver once.
+- **The vendored ICL parser stopped silently at the first construct it couldn't match** and
+  dropped the rest of the file, and only printed syntax errors. It now reads each file to its
+  end and raises on a syntax error, which `import_icl` reports as invalid ICL.
+- **No `AccessLink` parsed with the vendored ICL grammar**: a lexer rule took the header of every
+  one, `AccessLink X Of STD_1149_1_2001` included, as a single token. The rule is gone, the
+  1149.1 form parses, and an `AccessLink` in a module the network doesn't use no longer stops
+  `import_icl`. `tests/test_icl_emit_access_link_syntax.py` now parses warptap's emitted block
+  as written.
+- **The vendored PDL grammar rejected a number that is a single `0` or `1`**, so
+  `iRunLoop 1 -tck;`, which `to_pdl` writes for a one-cycle run, was a syntax error.
 
 ## [0.0.6] - 2026-11-19
 
