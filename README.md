@@ -19,7 +19,7 @@ Design-for-test (DFT) instruments such as MBIST controllers, scan compression an
   outside the shift states, or brought out with a `tdo_oe` enable for a pad cell (`tdo_drive`)
 - IJTAG network insertion with SIBs and TDRs (IEEE 1687), including nested SIBs, multi-arm ScanMux and named sub-field addressing
 - Boundary-scan register insertion, as an alternative to the IJTAG network (a design gets one or the other)
-- ICL emission, and import of networks in warptap's own ICL shape
+- ICL emission, and import of SIB and ScanMux networks, recognized by structure rather than by name
 - BSDL emission: TAP-only for an IJTAG network, matching the instruction the ICL `AccessLink`
   names, or chip-level with the boundary register for a boundary-scan design
 - PDL emission, import and an in-Python PDL interpreter
@@ -58,8 +58,10 @@ included, are retargeted through it.
 
 **Is there an open-source alternative to Tessent IJTAG?**
 warptap covers IJTAG network insertion, ICL and PDL generation, and PDL execution for open flows,
-for the networks it inserts itself. It is not a general IEEE 1687 tool: ICL import recognizes
-only warptap's own network shape, and it does not retarget PDL across arbitrary third-party ICL
+for the networks it inserts itself. It is not a general IEEE 1687 tool: ICL import reads SIB and
+ScanMux networks whatever their names and module structure, but nothing warptap's model can't
+hold, such as a register outside any SIB or ScanMux or a select decoded elsewhere (2 of the 25
+ITC'16 benchmark networks import), and it does not retarget PDL across arbitrary third-party ICL
 hierarchies.
 
 **Can I use warptap with Yosys and OpenROAD / LibreLane?**

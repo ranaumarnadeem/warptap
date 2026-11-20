@@ -47,6 +47,15 @@ jobs:
           repository: alexforencich/verilog-uart
           ref: 1b867e53af738e4a8bc7c839ca2f1c07f40382dc
           path: siblings/verilog-uart
+      # The ITC'16 IJTAG benchmark set, for tests/test_icl_import_itc16.py: the parser author's
+      # Fixes branch, pinned (the test's table is for that commit). It is not vendored, having no
+      # license. One Python version is enough, and its largest networks take minutes to parse.
+      - name: Check out the ITC'16 benchmark set
+        if: matrix.python-version == '3.12'
+        run: |
+          git clone --quiet --branch Fixes https://gitlab.com/Honza255/benchmarks.git siblings/itc16
+          git -C siblings/itc16 checkout --quiet f4578a8e157ddd46e81a29ca684965490b0fdfa8
+          echo "WARPTAP_ITC16_DIR=$GITHUB_WORKSPACE/siblings/itc16" >> "$GITHUB_ENV"
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
@@ -68,7 +77,8 @@ jobs:
       - name: Run the test suite
         # -rs lists every skip and why. The Jam STAPL player is not built here, so its 3 tests
         # skip, and OpenSTA isn't either, so the STA tests skip: building it from source here
-        # would take longer than the suite itself (see docs/guide/gate-level.md).
+        # would take longer than the suite itself (see docs/guide/gate-level.md). The ITC'16
+        # tests skip except on 3.12, the one version the set is checked out for.
         run: python -m pytest -q -rs
 
   docs:

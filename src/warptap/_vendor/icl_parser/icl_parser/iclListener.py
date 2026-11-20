@@ -440,6 +440,15 @@ class iclListener(ParseTreeListener):
         pass
 
 
+    # Enter a parse tree produced by iclParser#icl_file.
+    def enterIcl_file(self, ctx:iclParser.Icl_fileContext):
+        pass
+
+    # Exit a parse tree produced by iclParser#icl_file.
+    def exitIcl_file(self, ctx:iclParser.Icl_fileContext):
+        pass
+
+
     # Enter a parse tree produced by iclParser#iclSource_items.
     def enterIclSource_items(self, ctx:iclParser.IclSource_itemsContext):
         pass

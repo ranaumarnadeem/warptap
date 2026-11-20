@@ -23,7 +23,7 @@ from pathlib import Path
 import pytest
 
 from warptap.icl_emit import to_icl
-from warptap.icl_import import IclImportError, import_icl
+from warptap.icl_import import NOT_ELABORATED, IclImportError, import_icl
 from warptap.icl_model import InstrumentDirection, SignalBinding
 from warptap.sib_plan import HierarchySpec, InstrumentSpec, build_sib_plan
 
@@ -142,9 +142,9 @@ def test_nested_network_round_trips_cleanly(icl_parser_module):
 
 
 def test_access_link_network_raises_named_error(icl_parser_module):
-    """A round trip emitted WITH the (default-on) AccessLink block hits icl_parser's own
-    confirmed "Not supported" gap (Stage 10) -- import_icl() must name this specifically, not
-    let a bare ValueError from third-party code surface unexplained."""
+    """A round trip emitted WITH the (default-on) AccessLink block: the parser reads the block
+    but doesn't elaborate it (it raises "Not supported"), and import_icl() names that, with the
+    way round it."""
     specs = [
         InstrumentSpec(
             "ctrl_write",
@@ -159,5 +159,9 @@ def test_access_link_network_raises_named_error(icl_parser_module):
 
     with tempfile.TemporaryDirectory(prefix="warptap-icl-import-") as tmpdir:
         path = _write_icl(icl_text, Path(tmpdir))
-        with pytest.raises(IclImportError, match="AccessLink"):
+        with pytest.raises(
+            IclImportError,
+            match=f"^{NOT_ELABORATED}: AccessLink \\(warptap's own ICL imports when emitted with "
+            "include_access_link=False\\)",
+        ):
             import_icl([path], "chip", icl_parser_module=icl_parser_module)
