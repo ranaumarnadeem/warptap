@@ -169,6 +169,31 @@ def ijtag_access_opcode_error(opcode: object, ir_width: int = DEFAULT_IR_WIDTH) 
     return None
 
 
+def tap_core_parameters_error(ir_width: object, opcode_extest: object) -> str | None:
+    """Why an insertion function can't build its TAP with this ``ir_width`` or
+    ``opcode_extest``, or ``None`` if it can. Insertion imports ``rtl/tap_core.v`` with its own
+    :data:`DEFAULT_IR_WIDTH`-bit instruction register and EXTEST at :data:`OPCODE_EXTEST`, and
+    never changes either, so the decode it adds for any other value would not match the TAP:
+    ``tap_core``'s Update-IR turns an opcode it doesn't know into BYPASS."""
+
+    def _is(value: object, expected: int) -> bool:
+        return isinstance(value, int) and not isinstance(value, bool) and value == expected
+
+    if not _is(ir_width, DEFAULT_IR_WIDTH):
+        return (
+            f"ir_width {ir_width!r} isn't supported: insertion builds tap_core with its own "
+            f"{DEFAULT_IR_WIDTH}-bit instruction register and doesn't change it, so leave "
+            "ir_width out"
+        )
+    if not _is(opcode_extest, OPCODE_EXTEST):
+        return (
+            f"opcode_extest {opcode_extest!r} isn't supported: insertion builds tap_core with "
+            f"EXTEST at {OPCODE_EXTEST:0{DEFAULT_IR_WIDTH}b} and doesn't change it, so leave "
+            "opcode_extest out"
+        )
+    return None
+
+
 def decode_instruction(
     opcode: int,
     ir_width: int,
