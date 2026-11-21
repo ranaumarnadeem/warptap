@@ -3,8 +3,10 @@
 Pure Python, no external tool. The structural tests read the *emitted text* back through
 ``tests/bsdl_reader.py`` and compare it with ``warptap.tap_model``'s constants (written out here
 independently of ``bsdl_emit``), so a formatting slip or a wrong bit order in the emitter fails
-here. The golden file only pins the exact format; it does not by itself prove the values are
+here. The golden files only pin the exact format; they do not by themselves prove the values are
 right -- the structural tests and ``test_bsdl_emit_cross_sim.py`` (real TAP RTL under Icarus) do.
+``chip_tap_ijtag_access.bsd`` is the default output (IJTAG_ACCESS at ``1100``), ``chip_tap.bsd``
+the output for a TAP whose network EXTEST selects (``ijtag_access_opcode=None``).
 
 **Independent BSDL tools.** ebyst (MIT, Python 3.13) parses both kinds of file with a grammar
 the whole file must match, and drives a boundary-scan design's RTL from its own reading of the
@@ -77,6 +79,11 @@ def _emit_extest(**options):
 
 def _emit_ijtag_access(**options):
     return _emit(ijtag_access_opcode=OPCODE_IJTAG_ACCESS, **options)
+
+
+def test_default_output_is_the_ijtag_access_golden():
+    """By default the BSDL describes the TAP insert_sib_network inserts by default."""
+    assert _emit() == _emit_ijtag_access() == _GOLDEN_IJTAG_ACCESS.read_bytes().decode("utf-8")
 
 
 def test_extest_output_is_byte_identical_to_golden():

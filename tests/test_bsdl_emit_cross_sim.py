@@ -1,8 +1,8 @@
 """Cross-simulation: every behavioral claim ``warptap.bsdl_emit.to_bsdl`` makes, checked against
 the real TAP RTL (``rtl/tap_core.v``) under Icarus Verilog -- both as written, with the BSDL for a
 TAP whose network instruction is EXTEST (``ijtag_access_opcode=None``), and as an IJTAG_ACCESS
-insertion builds it (``insert_sib_network``'s own import, with ``ijtag_access_opcode``), with the
-BSDL written for that opcode.
+insertion builds it (``insert_sib_network``'s own import with its default ``ijtag_access_opcode``),
+with the default BSDL, written for that opcode.
 
 The claims are read back out of the *emitted BSDL text* (``tests/bsdl_reader.py``), never taken
 from ``warptap.tap_model`` -- so this fails if the BSDL and the hardware disagree, whichever of
@@ -95,22 +95,21 @@ class Result(NamedTuple):
 def variant(request, tmp_path_factory, fixtures_dir, yosys_command) -> Tuple[Bsdl, Path]:
     """The BSDL and the tap_core it describes: ``rtl/tap_core.v`` as written, whose network
     instruction is EXTEST (``ijtag_access_opcode=None``), or the tap_core an IJTAG_ACCESS
-    insertion imports (a specialized copy whose Verilog has no parameters left)."""
+    insertion imports (a specialized copy whose Verilog has no parameters left), with the BSDL
+    for it. Both of the latter are the defaults."""
     if request.param == "extest":
         bsdl = to_bsdl("chip", tck_max_freq_hz=10e6, ijtag_access_opcode=None)
         return parse_bsdl(bsdl), _RTL_PATH
     raw = ingest([fixtures_dir / "real_signal.v"], "real_signal", yosys_command=yosys_command)
     netlist = Netlist.from_json(raw)
     graph, _root = build_sib_plan([InstrumentSpec("stub", width=1, capture_value=0)])
-    insert_sib_network(
-        netlist, "real_signal", graph,
-        yosys_command=yosys_command, ijtag_access_opcode=OPCODE_IJTAG_ACCESS,
-    )
+    insert_sib_network(netlist, "real_signal", graph, yosys_command=yosys_command)
     tap_core = {"modules": {"tap_core": netlist.to_json()["modules"]["tap_core"]}}
     path = tmp_path_factory.mktemp("ijtag_access") / "tap_core.v"
     path.write_text(write_verilog_from_json(tap_core, yosys_command=yosys_command), encoding="utf-8")
-    bsdl = to_bsdl("chip", tck_max_freq_hz=10e6, ijtag_access_opcode=OPCODE_IJTAG_ACCESS)
-    return parse_bsdl(bsdl), path
+    bsdl = parse_bsdl(to_bsdl("chip", tck_max_freq_hz=10e6))
+    assert bsdl.opcodes["IJTAG_ACCESS"] == [format(OPCODE_IJTAG_ACCESS, "04b")]
+    return bsdl, path
 
 
 @pytest.fixture

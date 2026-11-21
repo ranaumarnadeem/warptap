@@ -22,20 +22,23 @@ Lauterbach's boundary-scan guide, the IEEE 1149.1 working group's published
 ``STD_1149_1_2012`` package declarations); the primary IEEE 1149.1 text is paywalled and was not
 read.
 
-**What EXTEST means here.** In real 1149.1, EXTEST drives the boundary register. In a warptap
-SIB design there is none: ``rtl/tap_core.v`` presents the SIB chain's tail (``external_dr_tdo``) at
-``tdo`` for every instruction that is neither IDCODE nor BYPASS, but :mod:`warptap.sib_insert`
-decodes EXTEST into every top-level SIB's ``select``, so only EXTEST moves the IJTAG network:
-under SAMPLE/PRELOAD its tail reaches ``tdo`` but it holds still (see
-:data:`warptap.tap_model.NETWORK_ACCESS_INSTRUCTION`). The emitted ``DESIGN_WARNING`` says so.
-The network's length depends on SIB state, so it cannot be declared as a fixed-length
-``REGISTER_ACCESS`` entry and is deliberately not.
+**IJTAG_ACCESS.** In real 1149.1, EXTEST drives the boundary register, and a warptap SIB design
+has none. The TAP :mod:`warptap.sib_insert` inserts by default selects the IJTAG network with an
+instruction of its own, IJTAG_ACCESS, at ``ijtag_access_opcode``
+(:data:`warptap.tap_model.OPCODE_IJTAG_ACCESS`, ``1100``), and ``to_bsdl`` declares it there by
+default (pass it the opcode the TAP was inserted with, if another): ``REGISTER_ACCESS`` gives
+EXTEST, SAMPLE and PRELOAD the BYPASS register, which is what they select in that TAP. A tool that
+holds those three to the boundary register will object; there is none to give them, and the
+``DESIGN_WARNING`` says so. The network's length depends on SIB state, so it cannot be declared
+as a fixed-length ``REGISTER_ACCESS`` entry and is deliberately not.
 
-**IJTAG_ACCESS.** For a TAP inserted with ``ijtag_access_opcode``, pass ``to_bsdl`` the same
-value: it declares an ``IJTAG_ACCESS`` instruction at that opcode, the one that selects the
-network, and ``REGISTER_ACCESS`` gives EXTEST, SAMPLE and PRELOAD the BYPASS register, which is
-what they select in that TAP. A tool that holds those three to the boundary register will object;
-there is none to give them, and the ``DESIGN_WARNING`` says so.
+**EXTEST.** A TAP inserted with ``ijtag_access_opcode=None`` selects the network with EXTEST
+instead; pass ``to_bsdl`` the same ``None``. ``rtl/tap_core.v`` presents the SIB chain's tail
+(``external_dr_tdo``) at ``tdo`` for every instruction that is neither IDCODE nor BYPASS, but
+there :mod:`warptap.sib_insert` decodes EXTEST into every top-level SIB's ``select``, so only
+EXTEST moves the IJTAG network: under SAMPLE/PRELOAD its tail reaches ``tdo`` but it holds still
+(see :data:`warptap.tap_model.NETWORK_ACCESS_INSTRUCTION`). The emitted ``DESIGN_WARNING`` says
+so.
 
 **The IDCODE** is whatever the design's ``tap_core`` was built with: pass ``to_bsdl`` the same
 ``idcode_value`` given to ``insert_test_access``/``insert_sib_network``. The default,
@@ -70,7 +73,7 @@ from __future__ import annotations
 
 import math
 import re
-from typing import List
+from typing import Any, List
 
 from warptap.bsr_plan import BsrCell, BsrFunction, BsrPlan, BsrPort
 from warptap.errors import WarptapError
@@ -82,6 +85,7 @@ from warptap.tap_model import (
     NETWORK_ACCESS_INSTRUCTION,
     OPCODE_EXTEST,
     OPCODE_IDCODE,
+    OPCODE_IJTAG_ACCESS,
     OPCODE_SAMPLE_PRELOAD,
     Instruction,
     bypass_opcode,
@@ -92,10 +96,17 @@ from warptap.tap_model import (
 from warptap.tap_ports import TCK, TDI, TDO, TMS, TRST_N
 
 NETWORK_ACCESS_BSDL_INSTRUCTION = NETWORK_ACCESS_INSTRUCTION.value
-"""The BSDL instruction name that selects the IJTAG network -- what an ICL ``AccessLink`` names."""
+"""The BSDL instruction name that selects the IJTAG network of a TAP inserted with
+``ijtag_access_opcode=None``, EXTEST: what the ICL ``AccessLink`` of
+``to_icl(..., ijtag_access=False)`` names."""
 
 IJTAG_ACCESS_BSDL_INSTRUCTION = Instruction.IJTAG_ACCESS.value
-"""The name the network's instruction has instead in a TAP built with ``ijtag_access_opcode``."""
+"""The name the network's instruction has in a TAP built with an ``ijtag_access_opcode``, as
+warptap inserts it by default: what the ICL ``AccessLink`` names by default."""
+
+# to_bsdl's ijtag_access_opcode default: OPCODE_IJTAG_ACCESS without a boundary register, None
+# with one. A value no caller passes, so an opcode given together with a boundary is still refused.
+_DEFAULT_OPCODE: Any = object()
 
 _PHYSICAL_PIN_MAP = "UNPACKAGED"
 _PIN_MAP_STRING_WIDTH = 68
@@ -284,7 +295,8 @@ def _check_boundary(boundary: BsrPlan, ijtag_access_opcode: int | None) -> None:
     if ijtag_access_opcode is not None:
         raise BsdlEmitError(
             "ijtag_access_opcode is for a TAP whose network is an IJTAG one; a boundary-scan "
-            "design's EXTEST and SAMPLE/PRELOAD select its boundary register"
+            "design's EXTEST and SAMPLE/PRELOAD select its boundary register, so leave it out "
+            "with boundary"
         )
     if not boundary.ports:
         raise BsdlEmitError(
@@ -315,7 +327,7 @@ def to_bsdl(
     *,
     tck_max_freq_hz: float,
     idcode_value: int = IDCODE_VALUE,
-    ijtag_access_opcode: int | None = None,
+    ijtag_access_opcode: int | None = _DEFAULT_OPCODE,
     tdo_drive: str = DEFAULT_TDO_DRIVE,
     boundary: BsrPlan | None = None,
 ) -> str:
@@ -334,10 +346,13 @@ def to_bsdl(
     bit 0 set, as IEEE 1149.1 requires, else :class:`BsdlEmitError`. Only the default,
     :data:`~warptap.tap_model.IDCODE_VALUE`, is described as a placeholder in the output.
 
-    ``ijtag_access_opcode`` must be the one the design's TAP was built with (``None``, the
-    default, for a TAP whose network instruction is EXTEST). With it, an ``IJTAG_ACCESS``
-    instruction is declared at that opcode and ``REGISTER_ACCESS`` gives EXTEST, SAMPLE and
-    PRELOAD the BYPASS register; an opcode no TAP can have raises :class:`BsdlEmitError`.
+    ``ijtag_access_opcode`` must be the one the design's TAP was built with. Left out, it is
+    :data:`~warptap.tap_model.OPCODE_IJTAG_ACCESS`, the opcode
+    :func:`~warptap.sib_insert.insert_sib_network` gives IJTAG_ACCESS by default (or ``None``
+    with ``boundary``, below). With an opcode, an ``IJTAG_ACCESS`` instruction is declared at it
+    and ``REGISTER_ACCESS`` gives EXTEST, SAMPLE and PRELOAD the BYPASS register; an opcode no
+    TAP can have raises :class:`BsdlEmitError`. ``None`` is a TAP whose network instruction is
+    EXTEST, inserted with ``ijtag_access_opcode=None``.
 
     ``tdo_drive`` must be the one the design's TAP was inserted with
     (:data:`warptap.tap_model.TDO_DRIVES`). The default, ``"tristate"``, gets no warning about
@@ -349,12 +364,15 @@ def to_bsdl(
     ``boundary`` is the :class:`~warptap.bsr_plan.BsrPlan` a boundary-scan design was inserted
     with (:func:`warptap.bsr_insert.insert_bsr`); without it the file is TAP-only. With it, the
     file declares every port of the plan and the boundary register, and ``ijtag_access_opcode``
-    must be ``None`` (such a design has no IJTAG network). Raises :class:`BsdlEmitError` for a
+    must be left out or ``None``: such a design has no IJTAG network, and its EXTEST, SAMPLE and
+    PRELOAD select the boundary register. Raises :class:`BsdlEmitError` for a
     plan without a port list (one not from :func:`~warptap.bsr_plan.build_bsr_plan`), a port
     name that isn't a valid BSDL/VHDL identifier or clashes with a TAP pin (``bus`` is a VHDL
     reserved word, for instance), or a cell naming a port the plan doesn't list.
 
     See the module docstring for the two kinds of file and what checks each."""
+    if ijtag_access_opcode is _DEFAULT_OPCODE:
+        ijtag_access_opcode = OPCODE_IJTAG_ACCESS if boundary is None else None
     check_tdo_drive(tdo_drive)
     if problem := idcode_value_error(idcode_value):
         raise BsdlEmitError(problem)

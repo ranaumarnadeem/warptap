@@ -104,7 +104,9 @@ def _drive_check(design, device, controller, bridge, values) -> list:
 
 def test_ebyst_parses_both_bsdl_files_and_rejects_a_broken_one(design):
     BSDLFile.parse(io.StringIO(design.bsdl))
+    # The TAP-only file: by default (IJTAG_ACCESS), and for a TAP whose network EXTEST selects.
     BSDLFile.parse(io.StringIO(to_bsdl("chip", tck_max_freq_hz=1e6)))
+    BSDLFile.parse(io.StringIO(to_bsdl("chip", tck_max_freq_hz=1e6, ijtag_access_opcode=None)))
     broken = design.bsdl.replace("entity is 23;", "entity is 23", 1)
     assert broken != design.bsdl
     with pytest.raises(pyparsing.ParseBaseException):
