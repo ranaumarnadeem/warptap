@@ -206,5 +206,5 @@ def test_to_icl_access_link_references_mux_when_it_drives_tdo():
     graph = PhysicalGraph(chain=(_mux(),))
     root = ModuleInstance(name="chip")
     text = to_icl(graph, root, include_access_link=True)
-    instruction_line = next(line for line in text.splitlines() if "EXTEST {" in line)
+    instruction_line = next(line for line in text.splitlines() if "IJTAG_ACCESS {" in line)
     assert "ScanInterface { warptap_scan_mux_mux_a.client; }" in instruction_line

@@ -189,7 +189,7 @@ def test_to_icl_access_link_instruction_block_has_no_activesignals():
     )
     root = ModuleInstance(name="chip", children=(ModuleInstance(name="a"),))
     text = to_icl(graph, root, include_access_link=True)
-    instruction_line = next(line for line in text.splitlines() if "EXTEST {" in line)
+    instruction_line = next(line for line in text.splitlines() if "IJTAG_ACCESS {" in line)
     assert "ActiveSignals" not in instruction_line
 
 
@@ -256,11 +256,12 @@ def _one_sib_graph():
 
 
 def test_to_icl_access_link_names_the_network_instruction_not_wdr_select():
-    from warptap.bsdl_emit import NETWORK_ACCESS_BSDL_INSTRUCTION
+    from warptap.bsdl_emit import IJTAG_ACCESS_BSDL_INSTRUCTION, NETWORK_ACCESS_BSDL_INSTRUCTION
 
     text = to_icl(_one_sib_graph(), ModuleInstance(name="chip"), include_access_link=True)
-    assert f"{NETWORK_ACCESS_BSDL_INSTRUCTION} {{ ScanInterface {{ warptap_sib_a.client; }} }}" in text
-    assert NETWORK_ACCESS_BSDL_INSTRUCTION == "EXTEST"
+    assert f"{IJTAG_ACCESS_BSDL_INSTRUCTION} {{ ScanInterface {{ warptap_sib_a.client; }} }}" in text
+    assert IJTAG_ACCESS_BSDL_INSTRUCTION == "IJTAG_ACCESS"
+    assert NETWORK_ACCESS_BSDL_INSTRUCTION == "EXTEST"  # what ijtag_access=False names
     assert "wdr_select" not in text
 
 
@@ -272,7 +273,7 @@ def test_to_icl_access_link_names_the_client_interface_of_the_slot_driving_tdo()
     ))
     text = to_icl(graph, ModuleInstance(name="chip"), include_access_link=True)
     assert "ScanOutPort tdo { Source warptap_sib_c.SO; }" in text
-    assert "EXTEST { ScanInterface { warptap_sib_c.client; } }" in text
+    assert "IJTAG_ACCESS { ScanInterface { warptap_sib_c.client; } }" in text
 
 
 def test_to_icl_access_link_names_ijtag_access_for_a_tap_with_it():
@@ -280,8 +281,9 @@ def test_to_icl_access_link_names_ijtag_access_for_a_tap_with_it():
     text = to_icl(_one_sib_graph(), root, include_access_link=True, ijtag_access=True)
     assert "IJTAG_ACCESS { ScanInterface { warptap_sib_a.client; } }" in text
     assert "EXTEST" not in text
-    default = to_icl(_one_sib_graph(), root, include_access_link=True)
-    assert text == default.replace("EXTEST {", "IJTAG_ACCESS {")  # nothing else changes
+    assert to_icl(_one_sib_graph(), root, include_access_link=True) == text  # the default
+    extest = to_icl(_one_sib_graph(), root, include_access_link=True, ijtag_access=False)
+    assert text == extest.replace("EXTEST {", "IJTAG_ACCESS {")  # nothing else changes
 
 
 def test_to_icl_bsdl_entity_defaults_to_the_top_module_name():
