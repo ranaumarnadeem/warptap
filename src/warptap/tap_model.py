@@ -11,7 +11,11 @@ TapModelError loudly rather than silently validating nothing against a fake stan
 
 A TAP built with a dedicated IJTAG_ACCESS opcode (``ijtag_access_opcode``) decodes that opcode
 to IJTAG_ACCESS, the instruction that selects the IJTAG network, and EXTEST's and
-SAMPLE/PRELOAD's to BYPASS.
+SAMPLE/PRELOAD's to BYPASS. That is the TAP :func:`~warptap.sib_insert.insert_sib_network` inserts
+by default, at :data:`OPCODE_IJTAG_ACCESS`. TapModel's own default, no ``ijtag_access_opcode``,
+models ``rtl/tap_core.v`` at its own parameters, with EXTEST and SAMPLE/PRELOAD at their opcodes:
+the TAP :func:`~warptap.bsr_insert.insert_bsr` inserts, and the one
+``insert_sib_network(..., ijtag_access_opcode=None)`` inserts, whose network EXTEST selects.
 """
 
 from __future__ import annotations
@@ -31,9 +35,12 @@ OPCODE_EXTEST = 0b0000
 OPCODE_SAMPLE_PRELOAD = 0b0010
 OPCODE_IDCODE = 0b0001
 
-# The suggested opcode for a dedicated IJTAG_ACCESS instruction (``ijtag_access_opcode``,
-# off by default). The only 4-bit value at least two bits from each of EXTEST, SAMPLE/PRELOAD,
-# IDCODE and BYPASS, so one corrupted IR bit can't turn a board instruction into it.
+# The opcode of IJTAG_ACCESS, the instruction that selects the IJTAG network: the default
+# ``ijtag_access_opcode`` of insert_sib_network, insert_test_access, to_bsdl (without a boundary
+# register) and TapConfig, so the TAP warptap inserts has it unless asked for EXTEST instead
+# (``ijtag_access_opcode=None``). TapModel's default is None. The only 4-bit value at least two
+# bits from each of EXTEST, SAMPLE/PRELOAD, IDCODE and BYPASS, so one corrupted IR bit can't turn
+# a board instruction into it.
 OPCODE_IJTAG_ACCESS = 0b1100
 
 # The pattern Capture-IR loads is deliberately equal to OPCODE_IDCODE: if a shift sequence
@@ -112,23 +119,25 @@ class Instruction(enum.Enum):
     IJTAG_ACCESS = "IJTAG_ACCESS"
 
 
-# The instruction an external tester loads to reach the IJTAG (SIB/TDR) network. rtl/tap_core.v's
-# TDO mux presents ``external_dr_tdo`` -- where the network's tail plugs in -- for any latched
-# instruction that is neither IDCODE nor BYPASS, and Update-IR normalizes every reserved opcode
-# to BYPASS, so both EXTEST and SAMPLE_PRELOAD put the network's tail on TDO; but sib_insert
-# decodes EXTEST into every top-level SIB's select, so the network captures, shifts and updates
-# only under EXTEST (under SAMPLE_PRELOAD it holds still). EXTEST is the one named to consumers
-# (the ICL AccessLink, the BSDL); in real 1149.1 EXTEST means "drive the boundary register",
-# which is only true of a design with a boundary-scan register and no SIB network (the two never
-# coexist, see sib_insert.insert_sib_network). That is the default; a TAP inserted with
-# ``ijtag_access_opcode`` selects the network under IJTAG_ACCESS instead
-# (:func:`network_access_instruction`), and a board-level EXTEST then can't reach it.
+# The instruction an external tester loads to reach the IJTAG (SIB/TDR) network of a TAP inserted
+# with ``ijtag_access_opcode=None`` (the EXTEST mode, warptap's default up to 0.0.6). The TAP
+# warptap inserts by default selects its network with IJTAG_ACCESS instead, and a board-level
+# EXTEST can't reach it; network_access_instruction gives the instruction for either TAP.
+# rtl/tap_core.v's TDO mux presents ``external_dr_tdo`` (where the network's tail plugs in) for
+# any latched instruction that is neither IDCODE nor BYPASS, and Update-IR normalizes every
+# reserved opcode to BYPASS, so in the EXTEST mode both EXTEST and SAMPLE_PRELOAD put the
+# network's tail on TDO; but sib_insert decodes EXTEST into every top-level SIB's select, so the
+# network captures, shifts and updates only under EXTEST (under SAMPLE_PRELOAD it holds still).
+# EXTEST is then the one named to consumers (the ICL AccessLink, the BSDL); in real 1149.1 EXTEST
+# means "drive the boundary register", which is only true of a design with a boundary-scan
+# register and no SIB network (the two never coexist, see sib_insert.insert_sib_network).
 NETWORK_ACCESS_INSTRUCTION = Instruction.EXTEST
 
 
 def network_access_instruction(ijtag_access_opcode: int | None) -> Instruction:
-    """The instruction that selects the IJTAG network: EXTEST, or IJTAG_ACCESS for a TAP built
-    with an ``ijtag_access_opcode``."""
+    """The instruction that selects the IJTAG network: IJTAG_ACCESS for a TAP built with an
+    ``ijtag_access_opcode`` (as :func:`~warptap.sib_insert.insert_sib_network` builds one by
+    default), or EXTEST (:data:`NETWORK_ACCESS_INSTRUCTION`) for one built with ``None``."""
     if ijtag_access_opcode is None:
         return NETWORK_ACCESS_INSTRUCTION
     return Instruction.IJTAG_ACCESS
@@ -137,11 +146,17 @@ def network_access_instruction(ijtag_access_opcode: int | None) -> Instruction:
 def ijtag_access_opcode_error(opcode: object, ir_width: int = DEFAULT_IR_WIDTH) -> str | None:
     """Why ``opcode`` can't be a TAP's IJTAG_ACCESS opcode, or ``None`` if it can: it must fit
     the instruction register and be none of EXTEST, SAMPLE/PRELOAD, IDCODE or BYPASS. IDCODE's
-    is also the Capture-IR pattern, which an Update-IR straight after Capture-IR loads."""
+    is also the Capture-IR pattern, which an Update-IR straight after Capture-IR loads. The
+    default opcode, :data:`OPCODE_IJTAG_ACCESS`, needs an instruction register of at least 4
+    bits."""
     if isinstance(opcode, bool) or not isinstance(opcode, int):
         return f"IJTAG_ACCESS opcode must be an int, got {opcode!r}"
     if not 0 <= opcode < 1 << ir_width:
-        return f"IJTAG_ACCESS opcode {opcode:#x} does not fit a {ir_width}-bit instruction register"
+        return (
+            f"IJTAG_ACCESS opcode {opcode:#x} does not fit a {ir_width}-bit instruction "
+            "register: pass an ijtag_access_opcode that does, or ijtag_access_opcode=None to "
+            "select the network with EXTEST"
+        )
     taken = {
         OPCODE_EXTEST: "EXTEST's",
         OPCODE_SAMPLE_PRELOAD: "SAMPLE/PRELOAD's",
@@ -249,7 +264,12 @@ class IdcodeRegister:
 
 class TapModel:
     """Cycle-stepped behavioral model: call `tick(tms, tdi)` once per TCK rising edge,
-    exactly as a real TAP would be clocked, and get back the TDO value for that cycle."""
+    exactly as a real TAP would be clocked, and get back the TDO value for that cycle.
+
+    ``ijtag_access_opcode`` defaults to ``None``: ``rtl/tap_core.v`` at its own parameters (see
+    the module docstring). Model the TAP :func:`~warptap.sib_insert.insert_sib_network` inserts
+    by default with ``ijtag_access_opcode=OPCODE_IJTAG_ACCESS``, and register the network's data
+    register under :attr:`network_instruction`."""
 
     def __init__(
         self,
