@@ -14,10 +14,12 @@ too. A random walk then compares every TCK cycle.
 from __future__ import annotations
 
 import random
+import re
 import tempfile
 from pathlib import Path
 
 import pytest
+from bsdl_reader import parse_bsdl
 from tdo_trace import model_tdo, tdo_bit
 from test_sib_insert_extest_select_cross_sim import (
     _ALL_ONES,
@@ -27,7 +29,10 @@ from test_sib_insert_extest_select_cross_sim import (
     _run_on_rtl,
     _select,
 )
+from test_tap_integrity_cross_sim import _observed_tdo
 
+from warptap.bsdl_emit import to_bsdl
+from warptap.icl_emit import to_icl
 from warptap.netlist import Netlist
 from warptap.pipeline import insert_test_access
 from warptap.sib_insert import SibInsertError, insert_sib_network
@@ -35,7 +40,9 @@ from warptap.sib_model import SibNetworkRegister
 from warptap.sib_plan import build_sib_plan
 from warptap.sim_io import run_verilog_testbench
 from warptap.tap_fsm import TapState, next_state
+from warptap.tap_integrity import build_integrity_program, check_integrity, select_instruction
 from warptap.tap_ir_play import play, to_cycles
+from warptap.tap_ir_svf import to_svf
 from warptap.tap_model import (
     OPCODE_EXTEST,
     OPCODE_IDCODE,
@@ -296,3 +303,30 @@ def test_insert_test_access_passes_the_opcode_through(options, decode, fixtures_
         yosys_command=yosys_command, **options,
     )
     assert f"assign warptap_ijtag_select = warptap_current_instruction == {decode};" in verilog
+
+
+def test_with_every_default_the_tap_bsdl_icl_and_patterns_agree(
+    fixtures_dir, yosys_command, iverilog_command, vvp_command
+):
+    """insert_test_access, to_icl, to_bsdl and build_integrity_program, each with its defaults:
+    the AccessLink names IJTAG_ACCESS, the BSDL declares it at 1100, the RTL decodes that opcode
+    into the network's select, an SVF load of it is SIR 1100, and the default integrity
+    program, which selects the network with it, passes on the RTL."""
+    verilog, graph, root = insert_test_access(
+        [fixtures_dir / "real_signal.v"], "real_signal", _SPECS, yosys_command=yosys_command
+    )
+    (instruction,) = re.findall(r"^\s+(\w+) \{ ScanInterface \{", to_icl(graph, root), re.MULTILINE)
+    bsdl = parse_bsdl(to_bsdl(root.name, tck_max_freq_hz=10e6))
+    opcode = int(bsdl.opcodes[instruction][0], 2)
+    assert (instruction, opcode) == ("IJTAG_ACCESS", OPCODE_IJTAG_ACCESS)
+    assert f"warptap_current_instruction == 4'h{opcode:x};" in verilog
+    assert "SIR 4 TDI (C);" in to_svf(select_instruction(opcode))
+
+    program = build_integrity_program(graph, root)
+    assert program.tap.network_opcode() == opcode
+    observed = _observed_tdo(
+        fixtures_dir, iverilog_command, vvp_command, "real_signal", verilog, program
+    )
+    result = check_integrity(program, observed)
+    assert result.passed, result.failures
+    assert result.compared > 200
