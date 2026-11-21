@@ -33,6 +33,15 @@ implementation stage.
   unresolved name, for one) is now an `IclImportError` too.
 - **`import_pdl`'s messages changed**: an unsupported statement is reported as "<keyword> isn't
   supported", and a syntax error against the whole text rather than one line.
+- **`to_icl`'s `AccessLink` lists every top-level slot, and the top module around it has no TAP
+  ports.** Each top-level SIB or ScanMux is listed by its `client` interface, TDI side first,
+  with its `SI` unbound, as in the standard's Annex E.30 example (as transcribed in the IJTAG
+  benchmark set) and the P1687-era examples in Zadegan et al. 0.0.6 listed only the slot
+  driving `tdo`, next to an explicit `tdi`-to-`tdo` chain: no published example has that shape.
+  Instance paths, and so PDL, don't change, and `include_access_link=False` output is the same
+  as before. No tool available elaborates an AccessLink, so the new shape is checked against
+  the ICL grammar and the published examples only. faultflow's tests that match the old
+  AccessLink text need updating when it moves to this version.
 
 ### Added
 
