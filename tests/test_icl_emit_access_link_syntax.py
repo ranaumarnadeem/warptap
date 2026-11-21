@@ -29,11 +29,13 @@ from test_icl_emit_golden import CASES
 
 from warptap.icl_emit import to_icl
 
-# case name -> the client interface of the slot driving tdo, which the ScanInterface list names
-_TDO_SLOT_INTERFACE = {
-    "flat_read_write": "warptap_sib_status.client",
-    "nested_sib": "warptap_sib_leaf.client",
-    "scan_mux": "warptap_scan_mux_mux_outer.client",
+# case name -> the ScanInterface list: every top-level slot's client interface, TDI side first
+_TOP_LEVEL_INTERFACES = {
+    "flat_read_write": [
+        "warptap_sib_sensor.client", "warptap_sib_ctrl.client", "warptap_sib_status.client",
+    ],
+    "nested_sib": ["warptap_sib_outer.client", "warptap_sib_leaf.client"],
+    "scan_mux": ["warptap_scan_mux_mux_outer.client"],
 }
 
 
@@ -103,7 +105,7 @@ def test_emitted_access_link_parses_and_names_the_expected_things(
     assert consumed
     instruction = "IJTAG_ACCESS" if ijtag_access else "EXTEST"
     assert links == [
-        ("warptap_tap", entity or root.name, [(instruction, [_TDO_SLOT_INTERFACE[case]])]),
+        ("warptap_tap", entity or root.name, [(instruction, _TOP_LEVEL_INTERFACES[case])]),
     ]
 
 

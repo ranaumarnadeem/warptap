@@ -259,26 +259,52 @@ def test_to_icl_access_link_names_the_network_instruction_not_wdr_select():
     from warptap.bsdl_emit import NETWORK_ACCESS_BSDL_INSTRUCTION
 
     text = to_icl(_one_sib_graph(), ModuleInstance(name="chip"), include_access_link=True)
-    assert f"{NETWORK_ACCESS_BSDL_INSTRUCTION} {{ ScanInterface {{ warptap_sib_a.client; }} }}" in text
+    assert (
+        f"{NETWORK_ACCESS_BSDL_INSTRUCTION} {{ ScanInterface {{\n"
+        "            warptap_sib_a.client;\n"
+        "        } }"
+    ) in text
     assert NETWORK_ACCESS_BSDL_INSTRUCTION == "EXTEST"
     assert "wdr_select" not in text
 
 
-def test_to_icl_access_link_names_the_client_interface_of_the_slot_driving_tdo():
-    """A SIB has two scan interfaces, so a bare instance name doesn't say which (MAST rejects
-    it); the slot whose SO drives tdo is the end MAST walks back from to cover the chain."""
-    graph = PhysicalGraph(chain=tuple(
+def _abc_graph():
+    return PhysicalGraph(chain=tuple(
         SibNode(sib_name=f"sib_{n}", instrument=_read_instrument(name=n, width=1)) for n in "abc"
     ))
-    text = to_icl(graph, ModuleInstance(name="chip"), include_access_link=True)
-    assert "ScanOutPort tdo { Source warptap_sib_c.SO; }" in text
-    assert "EXTEST { ScanInterface { warptap_sib_c.client; } }" in text
+
+
+def test_to_icl_access_link_lists_every_top_level_slot_from_tdi_to_tdo():
+    """The published multi-element examples list every element, first-listed nearest TDI. A SIB
+    has two scan interfaces, so each name says which one (``client``)."""
+    text = to_icl(_abc_graph(), ModuleInstance(name="chip"), include_access_link=True)
+    assert (
+        "EXTEST { ScanInterface {\n"
+        "            warptap_sib_a.client;\n"
+        "            warptap_sib_b.client;\n"
+        "            warptap_sib_c.client;\n"
+        "        } }"
+    ) in text
+
+
+def test_to_icl_with_an_access_link_the_top_module_has_no_tap_ports_or_top_level_scan_ins():
+    """The AccessLink stands for the TAP and connects the listed slots itself, as in the
+    standard's E.30 example; the top-level SIBs' SI bindings and tdo's Source are left out."""
+    text = to_icl(_abc_graph(), ModuleInstance(name="chip"), include_access_link=True)
+    top = text[text.index("Module chip {"):]
+    for declaration in ("ScanInPort", "ScanOutPort", "TCKPort", "TMSPort", "TRSTPort"):
+        assert declaration not in top
+    assert "ScanInterface tap" not in top
+    for n in "abc":
+        assert f"Instance warptap_sib_{n} Of warptap_sib {{ InputPort fromSO = " in top
+    assert "InputPort SI = tdi;" not in top
+    assert ".SO; InputPort fromSO" not in top
 
 
 def test_to_icl_access_link_names_ijtag_access_for_a_tap_with_it():
     root = ModuleInstance(name="chip")
     text = to_icl(_one_sib_graph(), root, include_access_link=True, ijtag_access=True)
-    assert "IJTAG_ACCESS { ScanInterface { warptap_sib_a.client; } }" in text
+    assert "IJTAG_ACCESS { ScanInterface {\n            warptap_sib_a.client;\n        } }" in text
     assert "EXTEST" not in text
     default = to_icl(_one_sib_graph(), root, include_access_link=True)
     assert text == default.replace("EXTEST {", "IJTAG_ACCESS {")  # nothing else changes
