@@ -27,6 +27,7 @@ from warptap.tap_model import (
     OPCODE_SAMPLE_PRELOAD,
     check_tdo_drive,
     idcode_value_error,
+    tap_core_parameters_error,
 )
 from warptap.tap_ports import TCK, TDI, TMS, TRST_N, add_tdo_pin
 from warptap.yosys_io import ingest
@@ -145,9 +146,10 @@ def insert_bsr(
     BYPASS leaves the values a PRELOAD set, as IEEE 1149.1 requires of a register the
     instruction doesn't select.
 
-    ``ir_width``/``opcode_extest`` must match ``rtl/tap_core.v``'s actual compiled
-    parameters (its own defaults, currently; see the module-level constants above)
-    since this function never overrides them on the instance.
+    ``ir_width`` and ``opcode_extest`` must be ``rtl/tap_core.v``'s own, 4 and ``0b0000``
+    (the module-level constants above): this function never changes them on the imported
+    TAP, so any other value raises :class:`BsrInsertError` before the netlist is touched (the
+    boundary register's decode would compare with a width or opcode the TAP never loads).
 
     ``tdo_drive`` says how the ``tdo`` pin is driven, exactly as for
     :func:`warptap.sib_insert.insert_sib_network`: ``"tristate"`` (the default, high
@@ -160,6 +162,8 @@ def insert_bsr(
     :class:`BsrInsertError`. Give :func:`warptap.bsdl_emit.to_bsdl` the same value.
     """
     check_tdo_drive(tdo_drive)
+    if problem := tap_core_parameters_error(ir_width, opcode_extest):
+        raise BsrInsertError(problem)
     if problem := idcode_value_error(idcode_value):
         raise BsrInsertError(problem)
     top_mod = netlist.module(top)

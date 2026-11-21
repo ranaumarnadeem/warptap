@@ -80,6 +80,7 @@ from warptap.tap_model import (
     check_tdo_drive,
     idcode_value_error,
     ijtag_access_opcode_error,
+    tap_core_parameters_error,
 )
 from warptap.tap_ports import TCK, TDI, TMS, TRST_N, add_tdo_pin
 from warptap.yosys_io import ingest, ingest_with_params
@@ -674,9 +675,11 @@ def insert_sib_network(
     ``build_sib_plan`` for dotted-address resolution, since instrument naming (unlike Yosys
     cell instance naming) is decided entirely at planning time, not here.
 
-    ``ir_width``/``opcode_extest`` must match ``rtl/tap_core.v``'s actual compiled
-    parameters (its own defaults, currently) since this function never overrides them on
-    the instance. ``opcode_extest`` is used only with ``ijtag_access_opcode=None``.
+    ``ir_width`` and ``opcode_extest`` must be ``rtl/tap_core.v``'s own, 4 and ``0b0000``:
+    this function never changes them on the imported TAP, so any other value raises
+    :class:`SibInsertError` before the netlist is touched (the network's decode would compare
+    with a width or opcode the TAP never loads). ``opcode_extest`` is used only with
+    ``ijtag_access_opcode=None``.
 
     ``idcode_value`` is baked into the inserted ``tap_core``'s ``IDCODE_VALUE`` (default:
     :data:`warptap.tap_model.IDCODE_VALUE`, a placeholder). It must be a 32-bit value with bit 0
@@ -711,6 +714,8 @@ def insert_sib_network(
     :func:`warptap.bsdl_emit.to_bsdl` the same value. Anything else raises ValueError.
     """
     check_tdo_drive(tdo_drive)
+    if problem := tap_core_parameters_error(ir_width, opcode_extest):
+        raise SibInsertError(problem)
     if problem := idcode_value_error(idcode_value):
         raise SibInsertError(problem)
     if ijtag_access_opcode is not None and (
