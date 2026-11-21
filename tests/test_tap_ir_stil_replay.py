@@ -7,7 +7,7 @@ Icarus:
 - every TDO compare is checked at its strobe.
 
 Positive: an IDCODE read-back, the Capture-IR pattern and a BYPASS scan on ``tap_core``, and an
-EXTEST write, a ``PulsePin`` and a read-back through an inserted network all compare clean.
+IJTAG_ACCESS write, a ``PulsePin`` and a read-back through an inserted network all compare clean.
 
 Controls, each on the same pattern:
 
@@ -41,7 +41,7 @@ from warptap.tap_integrity import select_instruction
 from warptap.tap_ir import GotoState, PulsePin, Runtest, SetPins, ShiftDR, ShiftIR, bits_from_int
 from warptap.tap_ir_play import to_cycles
 from warptap.tap_ir_stil import to_stil
-from warptap.tap_model import CAPTURE_IR_PATTERN, IDCODE_VALUE, OPCODE_EXTEST
+from warptap.tap_model import CAPTURE_IR_PATTERN, IDCODE_VALUE, OPCODE_IJTAG_ACCESS
 from warptap.yosys_io import ingest, write_verilog_from_json
 
 _TAP_CORE = Path(warptap.__file__).parent / "rtl" / "tap_core.v"
@@ -167,7 +167,7 @@ def _write_pulse_read(
     pdl.iTarget("status_read")
     pdl.iRead(expected)
     pdl.iApply()
-    return lead_in + select_instruction(OPCODE_EXTEST) + pdl.program
+    return lead_in + select_instruction(OPCODE_IJTAG_ACCESS) + pdl.program
 
 
 def _replay_real_signal(stil_replay, path, text, **pins):
@@ -316,7 +316,7 @@ def _count_ops(graph, root, *, pulses: int, expected: int, run_test: int = 0) ->
     pdl.iTarget("count_read")
     pdl.iRead(expected)
     pdl.iApply()
-    return _TRST_LEAD_IN + select_instruction(OPCODE_EXTEST) + pdl.program
+    return _TRST_LEAD_IN + select_instruction(OPCODE_IJTAG_ACCESS) + pdl.program
 
 
 def _count_text(graph, root, *, step: int, **count) -> str:

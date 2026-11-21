@@ -12,7 +12,7 @@ bus. Start the pattern with a reset lead-in that clocks TCK while TRST is low:
 ```python
 from warptap import GotoState, SetPins, select_instruction, to_stil
 from warptap.tap_fsm import TapState
-from warptap.tap_model import OPCODE_EXTEST
+from warptap.tap_model import OPCODE_IJTAG_ACCESS
 
 lead_in = [
     SetPins((("trst_n", 0), ("rst_n", 0))),  # assert TRST and the chip reset
@@ -21,7 +21,7 @@ lead_in = [
     GotoState(TapState.RUN_TEST_IDLE),       # one TMS=0 cycle
 ]
 stil = to_stil(
-    lead_in + select_instruction(OPCODE_EXTEST) + pdl.program,
+    lead_in + select_instruction(OPCODE_IJTAG_ACCESS) + pdl.program,
     jtag_period="50ns",
     pulse_periods={"clk": "10ns"},
     inputs={"trst_n": 1, "rst_n": 1, "clk": 0, "func_addr[0]": 0, "func_addr[1]": 1},

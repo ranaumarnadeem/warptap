@@ -18,12 +18,11 @@ from warptap.sib_overshift import (
 )
 from warptap.sib_retarget import stage_open_sequence
 from warptap.tap_fsm import TapState
-from warptap.tap_ir import GotoState, ShiftDR, ShiftIR, bits_to_int
+from warptap.tap_ir import GotoState, ShiftDR, ShiftIR
 from warptap.tap_ir_play import play
-from warptap.tap_model import Instruction, TapModel
+from warptap.tap_model import OPCODE_IJTAG_ACCESS, Instruction, TapModel
 
 IR_WIDTH = 4
-OPCODE_EXTEST = 0
 
 
 def _instrument(name: str, width: int, capture_value: int = 0) -> InstrumentNode:
@@ -41,27 +40,28 @@ def _shift_ops(ops):
     return [op for op in ops if isinstance(op, ShiftDR)]
 
 
-def _select_extest_ops():
-    """SibNetworkRegister is only the active data register once EXTEST is selected --
+def _select_ijtag_access_ops():
+    """SibNetworkRegister is only the active data register once IJTAG_ACCESS (the network's
+    instruction in a TAP inserted with the defaults, and expected_probe_tdo's) is selected --
     TapModel defaults to IDCODE on reset. build_overshift_ops (like PDLInterpreter.iApply)
     deliberately never selects an instruction itself; every test that actually EXECUTES
     probe ops must prepend this, mirroring test_pdl_interpreter_cross_sim.py's own
     convention."""
     return [
         GotoState(TapState.SHIFT_IR),
-        ShiftIR(IR_WIDTH, tdi=bits_to_int([0] * IR_WIDTH)),  # OPCODE_EXTEST = 0
+        ShiftIR(IR_WIDTH, tdi=OPCODE_IJTAG_ACCESS),
         GotoState(TapState.RUN_TEST_IDLE),
     ]
 
 
 def _probe_ops(graph, target_open, **kwargs):
-    return _select_extest_ops() + build_overshift_ops(graph, target_open, **kwargs)
+    return _select_ijtag_access_ops() + build_overshift_ops(graph, target_open, **kwargs)
 
 
 def _fresh_model_and_register(graph):
-    model = TapModel(has_idcode=True)
+    model = TapModel(has_idcode=True, ijtag_access_opcode=OPCODE_IJTAG_ACCESS)
     reg = SibNetworkRegister(graph)
-    model.register_data_register(Instruction.EXTEST, reg)
+    model.register_data_register(Instruction.IJTAG_ACCESS, reg)
     model.reset()
     reg.reset()
     model.tick(0, 0)  # TEST_LOGIC_RESET -> RUN_TEST_IDLE settle
@@ -215,7 +215,7 @@ def test_stuck_open_sib_detected():
     graph = _simple_graph()
     target_open = frozenset({"sib_a"})
     ops = _probe_ops(graph, target_open, margin=4)
-    # ops = [select-EXTEST preamble (3 ops), phase 1 (3 ops), phase 2/probe (3 ops)].
+    # ops = [select-IJTAG_ACCESS preamble (3 ops), phase 1 (3 ops), phase 2/probe (3 ops)].
     preamble_and_phase1, phase2_ops = ops[:6], ops[6:]
     expected = expected_probe_tdo(graph, ops)
 

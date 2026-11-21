@@ -1,7 +1,8 @@
 """RTL/Python cross-simulation for the full SIB network (implementation_plan.md §7 Stage 4,
 testing layer 5): drives identical stimulus through the real inserted RTL (via Icarus) and
-through TapModel + SibNetworkRegister (registered as EXTEST's data register, the same
-extension point bsr_model.BoundaryScanRegister uses), asserting identical per-cycle traces.
+through TapModel + SibNetworkRegister (registered as IJTAG_ACCESS's data register, the
+instruction that selects the network of a TAP inserted with the defaults; the same extension
+point bsr_model.BoundaryScanRegister uses under EXTEST), asserting identical per-cycle traces.
 Mirrors tests/test_bsr_insert_cross_sim.py's shape.
 
 Directed scenario: open exactly one SIB (via a closed-network shift while every SIB is still
@@ -23,10 +24,9 @@ from warptap.sib_model import SibNetworkRegister
 from warptap.sib_plan import InstrumentSpec, build_sib_plan
 from warptap.sim_io import run_verilog_testbench
 from warptap.tap_fsm import TapState
-from warptap.tap_model import Instruction, TapModel
+from warptap.tap_model import OPCODE_IJTAG_ACCESS, Instruction, TapModel
 from warptap.yosys_io import ingest, write_verilog_from_json
 
-OPCODE_EXTEST = 0
 IR_WIDTH = 4
 
 _SPECS = [
@@ -72,11 +72,11 @@ def _build_and_insert(fixtures_dir, yosys_command):
     return netlist, graph
 
 
-def _navigate_and_select_extest() -> list[tuple[int, int]]:
+def _navigate_and_select_ijtag_access() -> list[tuple[int, int]]:
     seq = [(1, 0), (1, 0), (0, 0), (0, 0)]
-    for _ in range(IR_WIDTH - 1):
-        seq.append((0, 0))  # OPCODE_EXTEST is all zero bits
-    seq.append((1, 0))
+    for i in range(IR_WIDTH - 1):
+        seq.append((0, (OPCODE_IJTAG_ACCESS >> i) & 1))  # LSB first
+    seq.append((1, (OPCODE_IJTAG_ACCESS >> (IR_WIDTH - 1)) & 1))  # last bit + exit
     seq.append((1, 0))
     seq.append((0, 0))
     return seq
@@ -94,7 +94,7 @@ def _shift_dr(tdi_bits: list[int]) -> list[tuple[int, int]]:
 
 
 def _directed_stimulus() -> list[tuple[int, int, int, int, int, int]]:
-    """(tms, tdi, trst_n, rst_n, a, b) per cycle. Reset, select EXTEST, then a
+    """(tms, tdi, trst_n, rst_n, a, b) per cycle. Reset, select IJTAG_ACCESS, then a
     closed-network shift (chain length = 2: sib_sensor_a nearest TDI, sib_sensor_b
     next) that lands a 1 at sib_sensor_a's position -- feed [0, 1] so the LAST fed
     bit (1) lands at position 0 (same "last fed bit lands at cell0" convention every
@@ -108,7 +108,7 @@ def _directed_stimulus() -> list[tuple[int, int, int, int, int, int]]:
     scenario is testing), which would silently close sib_sensor_a again since this
     stimulus feeds an all-zero tdi that doesn't happen to land back on 1."""
     tms_tdi: list[tuple[int, int]] = [(0, 0), (0, 0), (0, 0)]
-    tms_tdi += _navigate_and_select_extest()
+    tms_tdi += _navigate_and_select_ijtag_access()
     tms_tdi += _shift_dr([0, 1])  # opens sib_sensor_a only
     tms_tdi += [(0, 0)] * 2
     tms_tdi += [(1, 0), (0, 0), (0, 0)]  # -> SELECT_DR_SCAN -> CAPTURE_DR -> SHIFT_DR
@@ -121,9 +121,9 @@ def _directed_stimulus() -> list[tuple[int, int, int, int, int, int]]:
 
 
 def run_on_python(graph, stimulus) -> tuple[list[tuple], SibNetworkRegister]:
-    model = TapModel(has_idcode=True)
+    model = TapModel(has_idcode=True, ijtag_access_opcode=OPCODE_IJTAG_ACCESS)
     reg = SibNetworkRegister(graph)
-    model.register_data_register(Instruction.EXTEST, reg)
+    model.register_data_register(Instruction.IJTAG_ACCESS, reg)
 
     trace = []
     for tms, tdi, trst_n, _rst_n, _a, _b in stimulus:
@@ -169,7 +169,7 @@ def run_on_rtl(netlist, yosys_command, iverilog_command, vvp_command, fixtures_d
     return trace
 
 
-def test_extest_shift_through_real_network_matches_python_model(
+def test_ijtag_access_shift_through_real_network_matches_python_model(
     fixtures_dir, yosys_command, iverilog_command, vvp_command
 ):
     stimulus = _directed_stimulus()
@@ -203,7 +203,7 @@ def test_all_closed_network_behaves_as_pure_bypass_of_chain_length(
     still agree (a simpler, fully-closed cross-check complementing the directed
     open-one-SIB scenario above)."""
     tms_tdi: list[tuple[int, int]] = [(0, 0), (0, 0), (0, 0)]
-    tms_tdi += _navigate_and_select_extest()
+    tms_tdi += _navigate_and_select_ijtag_access()
     tms_tdi += _shift_dr([1, 0])
     tms_tdi += [(0, 0)] * 2
     stimulus = [(0, 0, 0, 0, 0, 0)] + [(tms, tdi, 1, 1, 0, 0) for tms, tdi in tms_tdi]

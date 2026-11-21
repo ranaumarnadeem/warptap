@@ -1,8 +1,9 @@
-"""The inserted SIB network moves only under EXTEST (sib_insert.py's
-``warptap_ijtag_extest_decode``). tap_core's capture/shift/update strobes fire on every
-instruction's DR scan; before the network was gated on EXTEST, two all-ones DR scans under
-IDCODE (loaded by every reset) or BYPASS (a board chain passing through) opened every SIB and
-committed 1 into every WRITE instrument.
+"""The EXTEST mode: a SIB network inserted with ``ijtag_access_opcode=None`` moves only under
+EXTEST (sib_insert.py's ``warptap_ijtag_extest_decode``). tap_core's capture/shift/update strobes
+fire on every instruction's DR scan; before the network was gated on EXTEST, two all-ones DR
+scans under IDCODE (loaded by every reset) or BYPASS (a board chain passing through) opened every
+SIB and committed 1 into every WRITE instrument. ``test_ijtag_access_cross_sim.py`` checks the
+same of the default, IJTAG_ACCESS.
 
 Real RTL (real_signal.v, a WRITE instrument driving ``ctrl_in``, so ``status_out`` shows any
 commit one clock later) against TapModel + SibNetworkRegister, which TapModel drives only
@@ -77,7 +78,9 @@ def inserted(fixtures_dir, yosys_command):
     raw = ingest([fixtures_dir / "real_signal.v"], "real_signal", yosys_command=yosys_command)
     netlist = Netlist.from_json(raw)
     graph, _root = build_sib_plan(_SPECS)
-    insert_sib_network(netlist, "real_signal", graph, yosys_command=yosys_command)
+    insert_sib_network(
+        netlist, "real_signal", graph, yosys_command=yosys_command, ijtag_access_opcode=None
+    )
     verilog = write_verilog_from_json(netlist.to_json(), yosys_command=yosys_command)
     return graph, verilog
 

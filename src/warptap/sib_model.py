@@ -1,8 +1,10 @@
 """Python behavioral model of an inserted SIB network (implementation_plan.md §7 Stage 4),
 implementing ``warptap.tap_model``'s ``DataRegister`` protocol so it can be plugged into
-``TapModel.register_data_register(Instruction.EXTEST, ...)`` -- the same extension point
-``bsr_model.BoundaryScanRegister`` uses. Used by ``tests/test_sib_insert_cross_sim.py`` to
-cross-simulate against the real inserted RTL; not used by ``sib_insert.py`` itself.
+``TapModel.register_data_register(model.network_instruction, ...)`` (IJTAG_ACCESS, or EXTEST
+for a TAP inserted with ``ijtag_access_opcode=None``) -- the same extension point
+``bsr_model.BoundaryScanRegister`` uses under EXTEST. Used by
+``tests/test_sib_insert_cross_sim.py`` to cross-simulate against the real inserted RTL; not used
+by ``sib_insert.py`` itself.
 
 Unlike ``BoundaryScanRegister`` (a fixed-length chain), the live bit sequence here has a
 *dynamic* length: a closed SIB contributes 1 bit, an open SIB contributes its instrument's
@@ -20,9 +22,9 @@ always-block (capture and shift too), so it must stay asserted for a parent's en
 window, not flicker with the parent's own ``shift_ff`` while it mirrors varying content
 mid-shift. Every recursive method below threads a ``parent_open`` flag downward for exactly
 this reason -- ``True`` at the top level (every top-level slot's own ``select`` is the TAP's
-EXTEST decode, and ``TapModel`` drives this register only under EXTEST), a parent's own
-``sib_po`` (or, for a mux parent, whether its own currently-matched arm is the one being
-walked) one level down.
+decode of the network's instruction, and ``TapModel`` drives this register only under it), a
+parent's own ``sib_po`` (or, for a mux parent, whether its own currently-matched arm is the one
+being walked) one level down.
 
 **A mux arm generalizes this the same way ``rtl/scan_mux_cell.v`` does** (multi-arm ScanMux
 plan Phase 0/3): ``sib_shift_ff``/``sib_po`` become ``shift_ff``/``po`` lists of
@@ -212,11 +214,11 @@ class SibNetworkRegister:
                             slot.inst_shift_ff[k] = (slot.capture_value >> k) & 1
 
     def capture_unselected(self) -> None:
-        """Capture-DR under an instruction that doesn't select the network (SAMPLE/PRELOAD,
-        IDCODE, BYPASS): ``tap_core`` raises ``capture_dr`` for every instruction's DR scan
-        and neither ``instrument_write.v`` nor ``bc1_shift_only.v`` gates it on ``select``,
-        so every instrument leaf still captures, as in :meth:`capture`; every SIB and mux,
-        unselected, keeps its state."""
+        """Capture-DR under an instruction that doesn't select the network (IDCODE, BYPASS, or
+        SAMPLE/PRELOAD with ``ijtag_access_opcode=None``): ``tap_core`` raises ``capture_dr``
+        for every instruction's DR scan and neither ``instrument_write.v`` nor
+        ``bc1_shift_only.v`` gates it on ``select``, so every instrument leaf still captures,
+        as in :meth:`capture`; every SIB and mux, unselected, keeps its state."""
         self._capture_leaves(self._slots)
 
     def _capture_leaves(self, slots: List) -> None:
@@ -397,8 +399,8 @@ class SibNetworkRegister:
 
     def tail(self) -> int:
         """The bit at the network's TDO end -- what the next ``shift`` presents at TDO --
-        without shifting. ``tap_core`` puts it on TDO under SAMPLE/PRELOAD too, which doesn't
-        select the network."""
+        without shifting. In a TAP inserted with ``ijtag_access_opcode=None``, ``tap_core``
+        puts it on TDO under SAMPLE/PRELOAD too, which doesn't select the network."""
         layout = self._live_layout()
         if not layout:
             raise ValueError("an empty network has no tail")

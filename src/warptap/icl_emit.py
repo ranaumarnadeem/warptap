@@ -75,19 +75,21 @@ E.30) and ``MultiCoreAccessLink.icl``; the MAST project's ICL grammar (its rules
 names the FPGA BSDL's own ``USER1`` instruction. **Not confirmed:** the normative IEEE 1687-2014
 clause text, which is paywalled and was not read.
 
-This emitter names ``EXTEST`` -- :data:`warptap.bsdl_emit.NETWORK_ACCESS_BSDL_INSTRUCTION`, the
-instruction :mod:`warptap.bsdl_emit` declares in the BSDL it writes. ``rtl/tap_core.v`` presents
+With ``ijtag_access=False`` this emitter names ``EXTEST`` --
+:data:`warptap.bsdl_emit.NETWORK_ACCESS_BSDL_INSTRUCTION`, the instruction :mod:`warptap.bsdl_emit`
+declares in the BSDL it writes for a TAP inserted with ``ijtag_access_opcode=None``.
+``rtl/tap_core.v`` presents
 ``external_dr_tdo`` (where the SIB chain plugs in) at ``tdo`` for any instruction that decodes to
-neither ``IDCODE`` nor ``BYPASS``, but :mod:`warptap.sib_insert` decodes ``EXTEST`` from the
+neither ``IDCODE`` nor ``BYPASS``, but there :mod:`warptap.sib_insert` decodes ``EXTEST`` from the
 current instruction into every top-level SIB's ``select``, so the chain captures, shifts and
 updates only under ``EXTEST``; under ``SAMPLE``/``PRELOAD`` it reaches ``tdo`` but holds
 still. (An earlier version emitted the instruction name ``wdr_select`` and its
 docstrings claimed it named ``EXTEST``: ``wdr_select`` is the instruction name in the benchmark
 file whose shape this emitter copied, not part of ICL's syntax, and no TAP warptap inserts has
-an instruction of that name.) For a TAP inserted with ``ijtag_access_opcode``, ``to_icl(...,
-ijtag_access=True)`` names ``IJTAG_ACCESS`` instead
-(:data:`warptap.bsdl_emit.IJTAG_ACCESS_BSDL_INSTRUCTION`), the instruction the BSDL written
-with the same opcode declares; there, EXTEST and SAMPLE/PRELOAD select BYPASS.
+an instruction of that name.) By default (``ijtag_access=True``), for a TAP inserted with an
+``ijtag_access_opcode`` as warptap inserts it by default, ``to_icl`` names ``IJTAG_ACCESS``
+instead (:data:`warptap.bsdl_emit.IJTAG_ACCESS_BSDL_INSTRUCTION`), the instruction the BSDL
+written with the same opcode declares; there, EXTEST and SAMPLE/PRELOAD select BYPASS.
 
 **The ``ScanInterface`` list names every top-level slot's ``client`` interface, TDI side first,
 and the top module then has no TAP ports and no top-level ``SI`` bindings: the AccessLink stands
@@ -743,7 +745,7 @@ def to_icl(
     *,
     include_access_link: bool = True,
     bsdl_entity_name: str | None = None,
-    ijtag_access: bool = False,
+    ijtag_access: bool = True,
 ) -> str:
     """Render the complete ICL description of ``graph`` (from ``sib_plan.build_sib_plan``,
     ideally called with ``top_name`` set to the real target module's own name -- ``root.name``
@@ -761,12 +763,12 @@ def to_icl(
     then ``<instruction> { ScanInterface { <slot>.client; ... } }``, which lists the ``client``
     interface of every top-level slot from TDI to TDO (a SIB and a mux both declare the same
     ``ScanInterface client { Port SI; Port SEL; Port SO; }``). The instruction is the one that
-    selects the network (:data:`warptap.bsdl_emit.NETWORK_ACCESS_BSDL_INSTRUCTION`, or see
-    ``ijtag_access``), named exactly as :func:`warptap.bsdl_emit.to_bsdl` declares it, so the
-    ICL and the BSDL agree. The top module declares no TAP ports: the AccessLink stands for the
-    TAP. No ``ActiveSignals`` clause: it names signals the AccessLink itself provides, and
-    warptap's network needs none. The module docstring lists the sources for this shape and
-    what is still unconfirmed.
+    selects the network, ``IJTAG_ACCESS`` by default
+    (:data:`warptap.bsdl_emit.IJTAG_ACCESS_BSDL_INSTRUCTION`, see ``ijtag_access``), named
+    exactly as :func:`warptap.bsdl_emit.to_bsdl` declares it, so the ICL and the BSDL agree. The
+    top module declares no TAP ports: the AccessLink stands for the TAP. No ``ActiveSignals``
+    clause: it names signals the AccessLink itself provides, and warptap's network needs none.
+    The module docstring lists the sources for this shape and what is still unconfirmed.
 
     With ``include_access_link=False``, the top module declares the five JTAG pins and a
     ``ScanInterface tap`` naming them (:mod:`warptap.tap_ports`), and chains the slots itself:
@@ -779,9 +781,10 @@ def to_icl(
     a scan interface to name, so ``include_access_link=True`` with an empty chain raises
     :class:`IclEmitError` rather than emitting a block ICL's grammar rejects.
 
-    ``ijtag_access=True`` names ``IJTAG_ACCESS`` in the AccessLink instead of ``EXTEST``: pass
-    it for a TAP inserted with an ``ijtag_access_opcode``, whose BSDL (``to_bsdl`` given the same
-    opcode) declares that instruction.
+    ``ijtag_access`` (default ``True``) names ``IJTAG_ACCESS`` in the AccessLink: the instruction
+    of a TAP inserted with an ``ijtag_access_opcode``, as it is by default, whose BSDL
+    (``to_bsdl`` given the same opcode, as it is by default) declares it. ``ijtag_access=False``
+    names ``EXTEST`` instead, for a TAP inserted with ``ijtag_access_opcode=None``.
 
     ``include_access_link=False`` output is pinned byte-for-byte by
     ``tests/test_icl_emit_golden.py``. The vendored ``Honza255/icl_parser`` -- Stage 10's own

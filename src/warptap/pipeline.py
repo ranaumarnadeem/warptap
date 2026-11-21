@@ -23,6 +23,7 @@ from warptap.sib_plan import HierarchySpec, InstrumentSpec, build_sib_plan
 from warptap.tap_model import (
     DEFAULT_TDO_DRIVE,
     IDCODE_VALUE,
+    OPCODE_IJTAG_ACCESS,
     check_tdo_drive,
     idcode_value_error,
     ijtag_access_opcode_error,
@@ -49,7 +50,7 @@ def insert_test_access(
     idcode_value: int = IDCODE_VALUE,
     chip_reset: str | None = None,
     chip_reset_active_low: bool = True,
-    ijtag_access_opcode: int | None = None,
+    ijtag_access_opcode: int | None = OPCODE_IJTAG_ACCESS,
     tdo_drive: str = DEFAULT_TDO_DRIVE,
 ) -> Tuple[str, PhysicalGraph, ModuleInstance]:
     """Ingest ``sources``, build the SIB/instrument network ``specs`` describes, insert it into
@@ -90,10 +91,11 @@ def insert_test_access(
     ``chip_reset``/``chip_reset_active_low`` make every WRITE instrument also clear on the
     chip reset input (see :func:`~warptap.sib_insert.insert_sib_network`); off by default.
 
-    ``ijtag_access_opcode`` gives the network its own instruction, IJTAG_ACCESS, at that opcode,
-    and EXTEST/SAMPLE/PRELOAD then select BYPASS (see
-    :func:`~warptap.sib_insert.insert_sib_network`); off by default. An opcode it can't take
-    raises :class:`~warptap.sib_insert.SibInsertError` before anything is ingested.
+    ``ijtag_access_opcode`` is the opcode of the network's own instruction, IJTAG_ACCESS
+    (default :data:`~warptap.tap_model.OPCODE_IJTAG_ACCESS`), and EXTEST/SAMPLE/PRELOAD select
+    BYPASS; ``None`` selects the network with EXTEST instead, the default up to warptap 0.0.6
+    (see :func:`~warptap.sib_insert.insert_sib_network`). An opcode it can't take raises
+    :class:`~warptap.sib_insert.SibInsertError` before anything is ingested.
 
     ``tdo_drive`` says how the ``tdo`` pin is driven (see
     :func:`~warptap.sib_insert.insert_sib_network`): ``"tristate"`` by default, high impedance

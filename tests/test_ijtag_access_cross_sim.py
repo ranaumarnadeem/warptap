@@ -1,21 +1,25 @@
-"""IJTAG_ACCESS (``insert_sib_network``'s ``ijtag_access_opcode``) on real inserted RTL.
+"""IJTAG_ACCESS (``insert_sib_network``'s ``ijtag_access_opcode``) on real inserted RTL, as
+``insert_sib_network`` inserts it by default.
 
 The network moves only under IJTAG_ACCESS. EXTEST, SAMPLE and PRELOAD select the 1-bit BYPASS
 register (there is no boundary register), so a board-level EXTEST and its DR scans leave the
 network, and the signal a WRITE instrument drives, untouched. Same design and checks as
-``test_sib_insert_extest_select_cross_sim.py``: real_signal.v with a WRITE instrument driving
-``ctrl_in`` (``status_out`` shows any commit one clock later), against TapModel(ijtag_access_opcode)
-with the network registered under IJTAG_ACCESS; each run ends with an IJTAG_ACCESS readout scan,
-so the network's state is compared too. A random walk then compares every TCK cycle.
+``test_sib_insert_extest_select_cross_sim.py`` (the EXTEST mode, ``ijtag_access_opcode=None``):
+real_signal.v with a WRITE instrument driving ``ctrl_in`` (``status_out`` shows any commit one
+clock later), against TapModel(ijtag_access_opcode) with the network registered under
+IJTAG_ACCESS; each run ends with an IJTAG_ACCESS readout scan, so the network's state is compared
+too. A random walk then compares every TCK cycle.
 """
 
 from __future__ import annotations
 
 import random
+import re
 import tempfile
 from pathlib import Path
 
 import pytest
+from bsdl_reader import parse_bsdl
 from tdo_trace import model_tdo, tdo_bit
 from test_sib_insert_extest_select_cross_sim import (
     _ALL_ONES,
@@ -25,7 +29,10 @@ from test_sib_insert_extest_select_cross_sim import (
     _run_on_rtl,
     _select,
 )
+from test_tap_integrity_cross_sim import _observed_tdo
 
+from warptap.bsdl_emit import to_bsdl
+from warptap.icl_emit import to_icl
 from warptap.netlist import Netlist
 from warptap.pipeline import insert_test_access
 from warptap.sib_insert import SibInsertError, insert_sib_network
@@ -33,7 +40,9 @@ from warptap.sib_model import SibNetworkRegister
 from warptap.sib_plan import build_sib_plan
 from warptap.sim_io import run_verilog_testbench
 from warptap.tap_fsm import TapState, next_state
+from warptap.tap_integrity import build_integrity_program, check_integrity, select_instruction
 from warptap.tap_ir_play import play, to_cycles
+from warptap.tap_ir_svf import to_svf
 from warptap.tap_model import (
     OPCODE_EXTEST,
     OPCODE_IDCODE,
@@ -60,7 +69,8 @@ def _netlist(fixtures_dir, yosys_command, **options) -> tuple[Netlist, object]:
 
 @pytest.fixture(scope="module")
 def inserted(fixtures_dir, yosys_command):
-    netlist, graph = _netlist(fixtures_dir, yosys_command, ijtag_access_opcode=OPCODE_IJTAG_ACCESS)
+    """Inserted with the defaults: IJTAG_ACCESS at OPCODE_IJTAG_ACCESS."""
+    netlist, graph = _netlist(fixtures_dir, yosys_command)
     return graph, write_verilog_from_json(netlist.to_json(), yosys_command=yosys_command)
 
 
@@ -247,14 +257,16 @@ def test_a_random_walk_matches_the_model_every_cycle(
 
 
 def test_only_the_decode_and_tap_core_change(fixtures_dir, yosys_command):
-    """The decode compares with IJTAG_ACCESS's opcode, under its own name; without the option
-    it is the EXTEST decode it always was."""
-    netlist, _ = _netlist(fixtures_dir, yosys_command, ijtag_access_opcode=OPCODE_IJTAG_ACCESS)
-    cells = netlist.to_json()["modules"]["real_signal"]["cells"]
+    """The decode compares with IJTAG_ACCESS's opcode, under its own name, by default; with
+    ijtag_access_opcode=None it is the EXTEST decode it always was."""
+    explicit, _ = _netlist(fixtures_dir, yosys_command, ijtag_access_opcode=OPCODE_IJTAG_ACCESS)
+    default, _ = _netlist(fixtures_dir, yosys_command)
+    assert default.to_json() == explicit.to_json()
+    cells = explicit.to_json()["modules"]["real_signal"]["cells"]
     assert "warptap_ijtag_extest_decode" not in cells
     assert cells["warptap_ijtag_access_decode"]["connections"]["B"] == ["0", "0", "1", "1"]
 
-    netlist, _ = _netlist(fixtures_dir, yosys_command)
+    netlist, _ = _netlist(fixtures_dir, yosys_command, ijtag_access_opcode=None)
     cells = netlist.to_json()["modules"]["real_signal"]["cells"]
     assert "warptap_ijtag_access_decode" not in cells
     assert cells["warptap_ijtag_extest_decode"]["connections"]["B"] == ["0", "0", "0", "0"]
@@ -275,9 +287,46 @@ def test_insert_test_access_refuses_it_before_ingesting(fixtures_dir):
         )
 
 
-def test_insert_test_access_passes_the_opcode_through(fixtures_dir, yosys_command):
+@pytest.mark.parametrize(
+    ("options", "decode"),
+    [
+        ({}, "4'hc"),  # the default
+        ({"ijtag_access_opcode": OPCODE_IJTAG_ACCESS}, "4'hc"),
+        ({"ijtag_access_opcode": 0b0110}, "4'h6"),
+        ({"ijtag_access_opcode": None}, "4'h0"),  # EXTEST
+    ],
+    ids=["default", "explicit", "other_opcode", "extest"],
+)
+def test_insert_test_access_passes_the_opcode_through(options, decode, fixtures_dir, yosys_command):
     verilog, _graph, _root = insert_test_access(
         [fixtures_dir / "real_signal.v"], "real_signal", _SPECS,
-        ijtag_access_opcode=OPCODE_IJTAG_ACCESS, yosys_command=yosys_command,
+        yosys_command=yosys_command, **options,
     )
-    assert "warptap_current_instruction == 4'hc" in verilog
+    assert f"assign warptap_ijtag_select = warptap_current_instruction == {decode};" in verilog
+
+
+def test_with_every_default_the_tap_bsdl_icl_and_patterns_agree(
+    fixtures_dir, yosys_command, iverilog_command, vvp_command
+):
+    """insert_test_access, to_icl, to_bsdl and build_integrity_program, each with its defaults:
+    the AccessLink names IJTAG_ACCESS, the BSDL declares it at 1100, the RTL decodes that opcode
+    into the network's select, an SVF load of it is SIR 1100, and the default integrity
+    program, which selects the network with it, passes on the RTL."""
+    verilog, graph, root = insert_test_access(
+        [fixtures_dir / "real_signal.v"], "real_signal", _SPECS, yosys_command=yosys_command
+    )
+    (instruction,) = re.findall(r"^\s+(\w+) \{ ScanInterface \{", to_icl(graph, root), re.MULTILINE)
+    bsdl = parse_bsdl(to_bsdl(root.name, tck_max_freq_hz=10e6))
+    opcode = int(bsdl.opcodes[instruction][0], 2)
+    assert (instruction, opcode) == ("IJTAG_ACCESS", OPCODE_IJTAG_ACCESS)
+    assert f"warptap_current_instruction == 4'h{opcode:x};" in verilog
+    assert "SIR 4 TDI (C);" in to_svf(select_instruction(opcode))
+
+    program = build_integrity_program(graph, root)
+    assert program.tap.network_opcode() == opcode
+    observed = _observed_tdo(
+        fixtures_dir, iverilog_command, vvp_command, "real_signal", verilog, program
+    )
+    result = check_integrity(program, observed)
+    assert result.passed, result.failures
+    assert result.compared > 200

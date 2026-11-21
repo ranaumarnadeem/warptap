@@ -23,7 +23,7 @@ from compressed_netlist_helpers import (
     _blackbox_stub_verilog,
     _correlate_skipping_pulses,
     _render_stimulus,
-    _select_extest_ops,
+    _select_ijtag_access_ops,
     _stimulus_rows,
     _two_chain_core_json,
 )
@@ -192,7 +192,7 @@ def test_continuous_retargeting_loads_the_solved_words_on_real_rtl(
             "capture_pi_values": {},
         }
     ]
-    ir_ops = _select_extest_ops() + retarget_continuous_faultflow_patterns(
+    ir_ops = _select_ijtag_access_ops() + retarget_continuous_faultflow_patterns(
         patterns,
         _CHAIN_INSTRUMENTS,
         "tdi_channel",

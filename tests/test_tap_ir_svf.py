@@ -10,6 +10,7 @@ import pytest
 from warptap.tap_fsm import TapState
 from warptap.tap_ir import GotoState, Runtest, ShiftDR, ShiftIR
 from warptap.tap_ir_svf import TapIrSvfError, to_svf
+from warptap.tap_model import OPCODE_IJTAG_ACCESS
 
 
 def test_header_is_always_emitted():
@@ -70,11 +71,12 @@ def test_runtest_renders_state_names_and_count():
 
 def test_full_directed_scenario_matches_realistic_shape():
     """Mirrors the shape of a real PDLInterpreter.iApply()-style op sequence: select
-    EXTEST via ShiftIR, then a GotoState/ShiftDR/GotoState phase -- confirms the whole
-    pipeline (drop GotoState, keep scans, keep header) composes correctly end to end."""
+    IJTAG_ACCESS (the network's instruction by default, 1100) via ShiftIR, then a
+    GotoState/ShiftDR/GotoState phase -- confirms the whole pipeline (drop GotoState, keep
+    scans, keep header) composes correctly end to end."""
     ops = [
         GotoState(TapState.SHIFT_IR),
-        ShiftIR(bits=4, tdi=0),
+        ShiftIR(bits=4, tdi=OPCODE_IJTAG_ACCESS),
         GotoState(TapState.RUN_TEST_IDLE),
         GotoState(TapState.SHIFT_DR),
         ShiftDR(bits=5, tdi=0b10101, tdo=0b10101, mask=0b11111),
@@ -85,7 +87,7 @@ def test_full_directed_scenario_matches_realistic_shape():
     assert lines == [
         "ENDIR IDLE;",
         "ENDDR IDLE;",
-        "SIR 4 TDI (0);",
+        "SIR 4 TDI (C);",
         "SDR 5 TDI (15) TDO (15) MASK (1F);",
     ]
 

@@ -32,7 +32,7 @@ from warptap.sim_io import run_verilog_testbench
 from warptap.tap_fsm import TapState, next_state
 from warptap.tap_ir import GotoState, PulsePin, Runtest, ShiftDR, ShiftIR, bits_from_int, bits_to_int
 from warptap.tap_ir_play import navigation_tms, shift_tms
-from warptap.tap_model import Instruction
+from warptap.tap_model import OPCODE_IJTAG_ACCESS
 from warptap.yosys_io import ingest, write_verilog_from_json
 
 IR_WIDTH = 4
@@ -53,10 +53,12 @@ _SPECS = [
 _RESET_LEAD_IN = [(0, 0, 0, 0, 0), (0, 0, 0, 0, 0), (0, 0, 1, 1, 0)]
 
 
-def _select_extest_ops() -> list:
+def _select_ijtag_access_ops() -> list:
+    """Load IJTAG_ACCESS, the instruction that selects the network of a TAP inserted with the
+    defaults."""
     return [
         GotoState(TapState.SHIFT_IR),
-        ShiftIR(IR_WIDTH, tdi=bits_to_int([0] * IR_WIDTH)),  # Instruction.EXTEST == 0
+        ShiftIR(IR_WIDTH, tdi=OPCODE_IJTAG_ACCESS),
         GotoState(TapState.RUN_TEST_IDLE),
     ]
 
@@ -149,7 +151,7 @@ def test_pulsepin_drives_a_real_independent_functional_clock_edge(
         clock_port="sysclk",
         clock_pulse_count=1,
     )
-    ir_ops = _select_extest_ops() + retargeted
+    ir_ops = _select_ijtag_access_ops() + retargeted
 
     rows = _RESET_LEAD_IN + _stimulus_rows(ir_ops)
     inserted_verilog = write_verilog_from_json(netlist.to_json(), yosys_command=yosys_command)

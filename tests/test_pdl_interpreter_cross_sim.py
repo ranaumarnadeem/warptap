@@ -23,11 +23,10 @@ from warptap.sim_io import run_verilog_testbench
 from warptap.tap_fsm import TapState
 from warptap.tap_ir import GotoState, ShiftIR, bits_from_int, bits_to_int
 from warptap.tap_ir_play import play, shift_op_ranges, to_cycles
-from warptap.tap_model import Instruction, TapModel
+from warptap.tap_model import OPCODE_IJTAG_ACCESS, Instruction, TapModel
 from warptap.yosys_io import ingest, write_verilog_from_json
 
 IR_WIDTH = 4
-OPCODE_EXTEST = 0
 
 _SPECS = [
     InstrumentSpec("sensor_a", width=3, capture_value=0b101),
@@ -39,10 +38,12 @@ _SPECS = [
 _RESET_LEAD_IN = [(0, 0, 0, 0, 0, 0), (0, 0, 0, 0, 0, 0), (0, 0, 1, 1, 0, 0)]
 
 
-def _select_extest_ops() -> list:
+def _select_ijtag_access_ops() -> list:
+    """Load IJTAG_ACCESS, the instruction that selects the network of a TAP inserted with the
+    defaults."""
     return [
         GotoState(TapState.SHIFT_IR),
-        ShiftIR(IR_WIDTH, tdi=bits_to_int([0] * IR_WIDTH)),  # OPCODE_EXTEST = 0
+        ShiftIR(IR_WIDTH, tdi=OPCODE_IJTAG_ACCESS),
         GotoState(TapState.RUN_TEST_IDLE),
     ]
 
@@ -60,9 +61,9 @@ def _render_stimulus(rows) -> str:
 
 
 def run_on_python(graph, ir_ops) -> tuple[list[int], SibNetworkRegister]:
-    model = TapModel(has_idcode=True)
+    model = TapModel(has_idcode=True, ijtag_access_opcode=OPCODE_IJTAG_ACCESS)
     reg = SibNetworkRegister(graph)
-    model.register_data_register(Instruction.EXTEST, reg)
+    model.register_data_register(Instruction.IJTAG_ACCESS, reg)
     model.reset()
     reg.reset()
     model.tick(0, 0)  # TEST_LOGIC_RESET -> RUN_TEST_IDLE settle
@@ -107,7 +108,7 @@ def test_iapply_shift_through_real_network_matches_python_model(
     pdl = PDLInterpreter(graph, root)
     pdl.iTarget("sensor_a")
     pdl.iWrite(0b101)
-    ir_ops = _select_extest_ops() + pdl.iApply()
+    ir_ops = _select_ijtag_access_ops() + pdl.iApply()
 
     python_observed, _reg = run_on_python(graph, ir_ops)
     rtl_observed = run_on_rtl(
@@ -132,7 +133,7 @@ def test_sequential_iapply_to_different_targets_matches_on_real_rtl(
     pdl.iTarget("sensor_b")
     pdl.iWrite(0b11)
     second_ops = pdl.iApply()
-    ir_ops = _select_extest_ops() + first_ops + second_ops
+    ir_ops = _select_ijtag_access_ops() + first_ops + second_ops
 
     python_observed, reg = run_on_python(graph, ir_ops)
     rtl_observed = run_on_rtl(
@@ -167,7 +168,7 @@ def test_write_then_reapply_never_persists_on_real_rtl(
     pdl.iRead(0b010)  # asserts (wrongly) that the write should still be there
     second_ops = pdl.iApply()
 
-    ir_ops = _select_extest_ops() + first_ops + second_ops
+    ir_ops = _select_ijtag_access_ops() + first_ops + second_ops
     python_observed, _reg = run_on_python(graph, ir_ops)
     rtl_observed = run_on_rtl(
         fixtures_dir, yosys_command, iverilog_command, vvp_command, netlist, ir_ops

@@ -29,7 +29,7 @@ from typing import Dict, List, Optional, Tuple
 
 import pytest
 from bsdl_reader import BoundaryCell, Bsdl, parse_bsdl, strict_problems
-from bsr_buses_design import IDCODE, BsrDesign, build
+from bsr_buses_design import IDCODE, TCK_HZ, TOP, BsrDesign, build
 from jtag_bridge import Jtag
 
 from warptap.bsdl_emit import BsdlEmitError, to_bsdl
@@ -229,6 +229,20 @@ def test_a_bsdl_with_two_cells_swapped_fails_the_extest_check(design, parsed, iv
     assert _drive_mismatches(design, parsed, 0b0100110, iverilog_command, vvp_command) == []
     mismatches = _drive_mismatches(design, parse_bsdl(swapped), 0b0100110, iverilog_command, vvp_command)
     assert sorted(m.split()[0] for m in mismatches) == ["dout(0)", "dout(1)"]
+
+
+def test_with_a_boundary_the_default_is_extest_selecting_the_boundary_register(design, parsed):
+    """A TAP-only file declares IJTAG_ACCESS by default; with a boundary register the default is
+    ijtag_access_opcode=None, and EXTEST, SAMPLE and PRELOAD select that register."""
+    explicit = to_bsdl(
+        TOP, tck_max_freq_hz=TCK_HZ, idcode_value=IDCODE, boundary=design.plan,
+        ijtag_access_opcode=None,
+    )
+    assert design.bsdl == explicit
+    assert "IJTAG_ACCESS" not in design.bsdl
+    assert parsed.register_access == {
+        "BOUNDARY": ["EXTEST", "SAMPLE", "PRELOAD"], "DEVICE_ID": ["IDCODE"],
+    }
 
 
 def test_the_boundary_bsdl_refuses_what_it_cannot_describe(design):

@@ -22,8 +22,9 @@ from warptap.pdl_interpreter import PDLInterpreter
 from warptap.sib_plan import InstrumentSpec, build_sib_plan
 from warptap.svf_openocd_check import run_svf_via_openocd
 from warptap.tap_fsm import TapState
-from warptap.tap_ir import GotoState, ShiftIR, bits_to_int
+from warptap.tap_ir import GotoState, ShiftIR
 from warptap.tap_ir_svf import to_svf
+from warptap.tap_model import OPCODE_IJTAG_ACCESS
 
 IR_WIDTH = 4
 
@@ -33,10 +34,12 @@ _SPECS = [
 ]
 
 
-def _select_extest_ops() -> list:
+def _select_ijtag_access_ops() -> list:
+    """Load IJTAG_ACCESS, the instruction that selects the network of a TAP inserted with the
+    defaults."""
     return [
         GotoState(TapState.SHIFT_IR),
-        ShiftIR(IR_WIDTH, tdi=bits_to_int([0] * IR_WIDTH)),  # OPCODE_EXTEST = 0
+        ShiftIR(IR_WIDTH, tdi=OPCODE_IJTAG_ACCESS),
         GotoState(TapState.RUN_TEST_IDLE),
     ]
 
@@ -54,7 +57,7 @@ def _realistic_write_ops() -> list:
     pdl.iTarget("sensor_b")
     pdl.iWrite(0b01)
     pdl.iApply()
-    return _select_extest_ops() + pdl.program
+    return _select_ijtag_access_ops() + pdl.program
 
 
 def _realistic_read_ops() -> list:

@@ -238,11 +238,12 @@ class PDLInterpreter:
     network (implementation_plan.md §7 Stage 4), flat or nested.
 
     ``program`` holds DR scans only; it never loads an instruction. Before playing it, the TAP
-    must hold EXTEST, the only instruction that selects the network
-    (:data:`warptap.tap_model.NETWORK_ACCESS_INSTRUCTION`): prepend
-    ``select_instruction(OPCODE_EXTEST)`` (:func:`warptap.tap_integrity.select_instruction`),
-    or ``select_instruction(<its ijtag_access_opcode>)`` for a TAP inserted with one, where
-    IJTAG_ACCESS selects the network instead. Every reset loads IDCODE, under which the network
+    must hold the one instruction that selects the network. For a TAP inserted with the
+    defaults that is IJTAG_ACCESS: prepend ``select_instruction(OPCODE_IJTAG_ACCESS)``
+    (:func:`warptap.tap_integrity.select_instruction`,
+    :data:`warptap.tap_model.OPCODE_IJTAG_ACCESS`), or of the ``ijtag_access_opcode`` the TAP
+    was inserted with. For one inserted with ``ijtag_access_opcode=None`` it is EXTEST:
+    ``select_instruction(OPCODE_EXTEST)``. Every reset loads IDCODE, under which the network
     holds still, so a program played without that step reads nothing back and commits
     nothing."""
 

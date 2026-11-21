@@ -7,6 +7,32 @@ implementation stage.
 
 ### Behavior changes
 
+- **The inserted TAP selects the IJTAG network with IJTAG_ACCESS by default, not EXTEST.** IEEE
+  1149.1 reserves EXTEST for the boundary-scan register, and the published IEEE 1687 examples
+  reach their networks through an instruction of their own. `insert_sib_network` and
+  `insert_test_access` now default to `ijtag_access_opcode=OPCODE_IJTAG_ACCESS` (`1100`), the
+  option 0.0.4 added: that opcode alone selects the network, and EXTEST, SAMPLE and PRELOAD
+  select the 1-bit BYPASS register, so a board-level EXTEST leaves the network and every signal
+  a WRITE instrument drives untouched. Everything that describes the TAP follows: `to_bsdl`
+  declares IJTAG_ACCESS (with `boundary=` the default is still EXTEST selecting the boundary
+  register, and an opcode passed with it still raises), `to_icl` names IJTAG_ACCESS in the
+  AccessLink (`ijtag_access=True`), `TapConfig`, and so `build_integrity_program`, targets that
+  TAP (the network under IJTAG_ACCESS, EXTEST and SAMPLE/PRELOAD tested as BYPASS), and
+  `sib_overshift.expected_probe_tdo` takes an `ijtag_access_opcode` of its own, defaulting to
+  the same. `TapModel`'s default is unchanged: it models `rtl/tap_core.v` at its own parameters.
+  A pattern for the default TAP loads `select_instruction(OPCODE_IJTAG_ACCESS)` before its PDL
+  program; under EXTEST the network now holds still. For the old behavior, pass
+  `ijtag_access_opcode=None` to `insert_sib_network`/`insert_test_access`, `to_bsdl`, `TapConfig`
+  and `expected_probe_tdo`, and `ijtag_access=False` to `to_icl`: each then gives what its
+  default gave before. A program file without an `ijtag_access_opcode` still reads back as an
+  EXTEST one. A `TapConfig` with an `ir_width` below 4 needs an `ijtag_access_opcode` that fits,
+  or `None`: the default doesn't fit, and the error says so. faultflow and autoMBIST need
+  updating when they move to this version. faultflow's tests that expect EXTEST from warptap's
+  defaults (`test_jtag_access.py` builds its EXTEST program that way) will fail, and its
+  `program_from_warptap` leaves `TapConfig`'s default in place for a network behind EXTEST
+  instead of passing `ijtag_access_opcode=None`. autoMBIST's `extest` access choice leaves out
+  `ijtag_access_opcode` and `ijtag_access`, so it would get IJTAG_ACCESS while its manifest says
+  EXTEST.
 - **The inserted TAP tri-states TDO outside Shift-IR and Shift-DR, as IEEE 1149.1 requires.**
   `insert_sib_network`, `insert_bsr` and `insert_test_access` put a `$tribuf` on the `tdo` pin,
   enabled by `rtl/tap_core.v`'s new `tdo_oe`. A testbench that samples `tdo` outside the shift

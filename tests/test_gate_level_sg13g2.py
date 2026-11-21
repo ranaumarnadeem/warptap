@@ -159,7 +159,8 @@ def _tdo_samples(insertion, lib, fixtures_dir, yosys_command, iverilog_command, 
     level, from one inserted netlist."""
     netlist, top = tdo._INSERTIONS[insertion](fixtures_dir, yosys_command, "tristate")
     netlist_json = netlist.to_json()
-    stimulus = {"stimulus.txt": "\n".join(" ".join(map(str, r)) for r in tdo._stimulus()) + "\n"}
+    rows = tdo._stimulus(insertion)
+    stimulus = {"stimulus.txt": "\n".join(" ".join(map(str, r)) for r in rows) + "\n"}
     bench_text = tdo._testbench(top, netlist_json["modules"][top]["ports"], tdo._ENABLE["tristate"])
     mapped = gl.map_to_sg13g2(netlist_json, top, lib, tbuf_techmap=tbuf_techmap, yosys_command=yosys_command)
     gl.check_mapped(mapped, lib=lib)
@@ -177,7 +178,7 @@ def _tdo_samples(insertion, lib, fixtures_dir, yosys_command, iverilog_command, 
         for line in _rows(stdout):
             _, state, *values = line.split(",")
             out.append(tdo.Sample(TapState(int(state)), tuple(values[:3]), tuple(values[3:])))
-        assert len(out) == len(tdo._stimulus())
+        assert len(out) == len(rows)
         return out
 
     return samples(rtl), samples(gate), mapped

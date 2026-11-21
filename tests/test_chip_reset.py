@@ -12,7 +12,7 @@ import pytest
 from test_sib_insert_write_instrument_cross_sim import (
     _RESET_LEAD_IN,
     _pdl_program,
-    _select_extest_ops,
+    _select_ijtag_access_ops,
     run_on_python,
     run_on_rtl,
 )
@@ -173,7 +173,7 @@ def _write_one_then_pulse_the_chip_reset(graph, root) -> list[tuple[int, ...]]:
     pdl.iWrite(1)
     pdl.iApply()
     rows = list(_RESET_LEAD_IN)
-    rows += [(tms, tdi, 1, 1) for tms, tdi in to_cycles(_select_extest_ops() + pdl.program)]
+    rows += [(tms, tdi, 1, 1) for tms, tdi in to_cycles(_select_ijtag_access_ops() + pdl.program)]
     rows += [(0, 0, 1, 1)] * 4  # status_out follows ctrl_in = 1
     rows += [(0, 0, 1, 0)] * 2  # the chip reset, TAP idle in Run-Test/Idle
     rows += [(0, 0, 1, 1)] * 6
@@ -209,7 +209,7 @@ def test_jtag_access_matches_the_model_with_the_clear(
     fixtures_dir, yosys_command, iverilog_command, vvp_command
 ):
     netlist, graph, root = _inserted(fixtures_dir, yosys_command, chip_reset="rst_n")
-    ir_ops = _select_extest_ops() + _pdl_program(graph, root)
+    ir_ops = _select_ijtag_access_ops() + _pdl_program(graph, root)
     python_observed, _ = run_on_python(graph, ir_ops)
     assert (
         run_on_rtl(fixtures_dir, yosys_command, iverilog_command, vvp_command, netlist, ir_ops)

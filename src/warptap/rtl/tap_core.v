@@ -10,7 +10,7 @@
 // boundary-scan register plugs into. This module's FSM/IR/mux logic never needs to change
 // when that happens. Because the strobes fire for every instruction's DR scan, a register
 // plugged into external_dr_tdo must gate itself on `current_instruction` (sib_insert.py
-// decodes EXTEST for the SIB network).
+// decodes the network's own instruction, IJTAG_ACCESS by default, or EXTEST).
 //
 // The instruction resets to IDCODE (BYPASS without HAS_IDCODE) both on trst_n and in
 // Test-Logic-Reset, as IEEE 1149.1 requires, so five TMS=1 cycles deselect any test-mode

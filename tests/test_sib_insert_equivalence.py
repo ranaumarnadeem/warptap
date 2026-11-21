@@ -8,12 +8,13 @@ testing layer 4). Two claims:
    never do).
 2. Under BYPASS or IDCODE -- the only instructions whose data register is tap_core's own
    built-in one -- the inserted RTL's full tap_state/current_instruction/capture_dr/shift_dr/
-   update_dr/tdo trace matches a `TapModel(has_idcode=True)` whose SIB register is
-   registered under EXTEST only. This proves the SIB network wired onto
+   update_dr/tdo trace matches a `TapModel(has_idcode=True, ijtag_access_opcode=...)` whose
+   SIB register is registered under IJTAG_ACCESS (the network's instruction with the
+   defaults) only. This proves the SIB network wired onto
    external_dr_tdo/tck/trst_n doesn't perturb tap_core's own internal registers, using the
    same technique test_tap_fsm_cross_sim.py established in Stage 2 -- and, via a final
-   EXTEST readout, that those scans don't move the network either (it's gated on EXTEST;
-   before that, all-ones IDCODE/BYPASS scans opened every SIB).
+   IJTAG_ACCESS readout, that those scans don't move the network either (it's gated on its
+   instruction; before that, all-ones IDCODE/BYPASS scans opened every SIB).
 """
 
 from __future__ import annotations
@@ -30,7 +31,7 @@ from warptap.sib_model import SibNetworkRegister
 from warptap.sib_plan import InstrumentSpec, build_sib_plan
 from warptap.sim_io import run_verilog_testbench
 from warptap.tap_fsm import TapState
-from warptap.tap_model import Instruction, TapModel
+from warptap.tap_model import OPCODE_IJTAG_ACCESS, Instruction, TapModel
 from warptap.yosys_io import ingest, write_verilog_from_json
 
 _SPECS = [
@@ -38,7 +39,6 @@ _SPECS = [
     InstrumentSpec("sensor_b", width=2, capture_value=0b11),
 ]
 IR_WIDTH = 4
-OPCODE_EXTEST = 0b0000
 OPCODE_IDCODE = 0b0001
 BYPASS_OPCODE = 0b1111
 NETWORK_BITS = 8  # longer than the fully open network: 2 SIBs + 3 + 2 instrument bits
@@ -89,7 +89,7 @@ def test_functional_output_unaffected_by_arbitrary_tap_activity(
     fixtures_dir, yosys_command, iverilog_command, vvp_command
 ):
     """Claim 1: fully random tms/tdi/trst_n (deliberately unconstrained -- may select
-    EXTEST, may shift garbage through the SIB network, doesn't matter) must never move
+    IJTAG_ACCESS, may shift garbage through the SIB network, doesn't matter) must never move
     `y` away from what the unmodified design alone would produce."""
     rng = random.Random(7)
     stim = [(0, 0, 0)]
@@ -151,8 +151,8 @@ def _idcode_bypass_only_stimulus() -> list[tuple[int, int, int, int, int, int]]:
     tms_tdi += [(0, 0)] * 3
     tms_tdi += _shift_dr(NETWORK_BITS, [1] * NETWORK_BITS) * 2
 
-    # Read the network back under EXTEST: every SIB must still be closed.
-    tms_tdi += _navigate_and_select(OPCODE_EXTEST)
+    # Read the network back under IJTAG_ACCESS: every SIB must still be closed.
+    tms_tdi += _navigate_and_select(OPCODE_IJTAG_ACCESS)
     tms_tdi += _shift_dr(NETWORK_BITS, [0] * NETWORK_BITS)
 
     stim = [(0, 0, 0, 0, 0, 0)]  # trst_n=0 pulse
@@ -162,9 +162,9 @@ def _idcode_bypass_only_stimulus() -> list[tuple[int, int, int, int, int, int]]:
 
 
 def _run_on_tap_model(stim, graph) -> list[tuple[int, int, int, int, int, int]]:
-    model = TapModel(has_idcode=True)
+    model = TapModel(has_idcode=True, ijtag_access_opcode=OPCODE_IJTAG_ACCESS)
     network = SibNetworkRegister(graph)
-    model.register_data_register(Instruction.EXTEST, network)
+    model.register_data_register(Instruction.IJTAG_ACCESS, network)
     trace = []
     for tms, tdi, trst_n, _rst_n, _a, _b in stim:
         if not trst_n:
@@ -191,7 +191,7 @@ def test_idcode_and_bypass_traces_match_tap_model_unaffected_by_sib_network(
 ):
     """Claim 2: with the SIB network wired onto external_dr_tdo, IDCODE/BYPASS -- the two
     instructions that never select it -- must behave identically to a TapModel that drives
-    the network only under EXTEST, proving tap_core's own FSM/IR/data-register logic is
+    the network only under IJTAG_ACCESS, proving tap_core's own FSM/IR/data-register logic is
     untouched by this insertion and the network doesn't move under them."""
     stim = _idcode_bypass_only_stimulus()
     graph, _root = build_sib_plan(_SPECS)
@@ -215,6 +215,6 @@ def test_idcode_and_bypass_traces_match_tap_model_unaffected_by_sib_network(
     idcode_bits = [t[5] for t in idcode_shift_rows[:32]]
     shifted_out = sum(bit << i for i, bit in enumerate(idcode_bits))
     assert shifted_out == IDCODE_VALUE
-    # The EXTEST readout: two closed SIBs capture their po (0), then the fed 0s follow.
-    extest_rows = [t for t in inserted_trace if t[3] == 1 and t[1] == OPCODE_EXTEST]
-    assert [t[5] for t in extest_rows] == [0] * NETWORK_BITS
+    # The IJTAG_ACCESS readout: two closed SIBs capture their po (0), then the fed 0s follow.
+    network_rows = [t for t in inserted_trace if t[3] == 1 and t[1] == OPCODE_IJTAG_ACCESS]
+    assert [t[5] for t in network_rows] == [0] * NETWORK_BITS

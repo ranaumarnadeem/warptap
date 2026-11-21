@@ -3,8 +3,10 @@
 Pure Python, no external tool. The structural tests read the *emitted text* back through
 ``tests/bsdl_reader.py`` and compare it with ``warptap.tap_model``'s constants (written out here
 independently of ``bsdl_emit``), so a formatting slip or a wrong bit order in the emitter fails
-here. The golden file only pins the exact format; it does not by itself prove the values are
+here. The golden files only pin the exact format; they do not by themselves prove the values are
 right -- the structural tests and ``test_bsdl_emit_cross_sim.py`` (real TAP RTL under Icarus) do.
+``chip_tap_ijtag_access.bsd`` is the default output (IJTAG_ACCESS at ``1100``), ``chip_tap.bsd``
+the output for a TAP whose network EXTEST selects (``ijtag_access_opcode=None``).
 
 **Independent BSDL tools.** ebyst (MIT, Python 3.13) parses both kinds of file with a grammar
 the whole file must match, and drives a boundary-scan design's RTL from its own reading of the
@@ -70,12 +72,22 @@ def _emit(name: str = "chip", freq: float = 10e6, **options):
     return to_bsdl(name, tck_max_freq_hz=freq, **options)
 
 
+def _emit_extest(**options):
+    """The BSDL of a TAP whose network instruction is EXTEST (``ijtag_access_opcode=None``)."""
+    return _emit(ijtag_access_opcode=None, **options)
+
+
 def _emit_ijtag_access(**options):
     return _emit(ijtag_access_opcode=OPCODE_IJTAG_ACCESS, **options)
 
 
-def test_output_is_byte_identical_to_golden():
-    assert _emit() == _GOLDEN.read_bytes().decode("utf-8")
+def test_default_output_is_the_ijtag_access_golden():
+    """By default the BSDL describes the TAP insert_sib_network inserts by default."""
+    assert _emit() == _emit_ijtag_access() == _GOLDEN_IJTAG_ACCESS.read_bytes().decode("utf-8")
+
+
+def test_extest_output_is_byte_identical_to_golden():
+    assert _emit_extest() == _GOLDEN.read_bytes().decode("utf-8")
 
 
 def test_ijtag_access_output_is_byte_identical_to_its_golden():
@@ -118,7 +130,7 @@ def test_instruction_length_matches_the_tap():
 
 
 def test_instruction_opcodes_match_the_tap_msb_left():
-    opcodes = parse_bsdl(_emit()).opcodes
+    opcodes = parse_bsdl(_emit_extest()).opcodes
     assert opcodes == {
         "EXTEST": [_bits(OPCODE_EXTEST, 4)],
         "SAMPLE": [_bits(OPCODE_SAMPLE_PRELOAD, 4)],
@@ -130,10 +142,11 @@ def test_instruction_opcodes_match_the_tap_msb_left():
     assert opcodes["BYPASS"] == ["1111"]  # IEEE 1149.1 mandates all ones
 
 
-def test_no_two_distinct_instructions_share_an_opcode_except_sample_preload():
+@pytest.mark.parametrize("emit", [_emit_extest, _emit_ijtag_access], ids=["extest", "ijtag_access"])
+def test_no_two_distinct_instructions_share_an_opcode_except_sample_preload(emit):
     """BSDL 2001 lets SAMPLE and PRELOAD share one opcode (they are one physical instruction);
     nothing else may collide."""
-    opcodes = parse_bsdl(_emit()).opcodes
+    opcodes = parse_bsdl(emit()).opcodes
     by_code: dict[str, list[str]] = {}
     for name, codes in opcodes.items():
         by_code.setdefault(codes[0], []).append(name)
@@ -155,7 +168,7 @@ def test_idcode_register_is_32_bits_with_lsb_one_and_equals_the_tap_value():
 
 
 def test_register_access_declares_idcode_but_not_a_network_or_boundary_register():
-    access = parse_bsdl(_emit()).register_access
+    access = parse_bsdl(_emit_extest()).register_access
     assert access == {"DEVICE_ID": ["IDCODE"]}
 
 
@@ -164,14 +177,14 @@ def test_no_boundary_register_attributes_are_declared():
     assert not [n for n in names if n.startswith("BOUNDARY")]
 
 
-def test_network_access_instruction_is_declared_and_is_opcode_0000():
-    bsdl = parse_bsdl(_emit())
+def test_extest_network_access_instruction_is_declared_and_is_opcode_0000():
+    bsdl = parse_bsdl(_emit_extest())
     assert NETWORK_ACCESS_BSDL_INSTRUCTION == "EXTEST"
     assert bsdl.opcodes[NETWORK_ACCESS_BSDL_INSTRUCTION] == [_bits(OPCODE_EXTEST, 4)]
 
 
-def test_design_warning_states_the_scope_and_the_network_routing():
-    warning = parse_bsdl(_emit()).design_warning
+def test_extest_design_warning_states_the_scope_and_the_network_routing():
+    warning = parse_bsdl(_emit_extest()).design_warning
     assert "NOT a chip-level BSDL" in warning
     assert "BOUNDARY_REGISTER" in warning
     assert f"{NETWORK_ACCESS_BSDL_INSTRUCTION} ({_bits(OPCODE_EXTEST, 4)})" in warning
@@ -215,7 +228,7 @@ def test_invalid_tck_frequency_raises_a_named_error(freq):
 _BOUNDARY = ("BOUNDARY_LENGTH", "BOUNDARY_REGISTER")
 
 
-@pytest.mark.parametrize("emit", [_emit, _emit_ijtag_access], ids=["extest", "ijtag_access"])
+@pytest.mark.parametrize("emit", [_emit_extest, _emit_ijtag_access], ids=["extest", "ijtag_access"])
 def test_held_to_the_standard_only_the_boundary_register_is_missing(emit):
     """Every mandatory attribute and instruction is there; what a strict reader refuses is the
     boundary register this TAP-only file leaves out on purpose, and nothing else."""
@@ -242,7 +255,7 @@ def test_held_to_the_standard_only_the_boundary_register_is_missing(emit):
 )
 def test_the_strict_reader_catches_each_omission(old, new, problem):
     """Not vacuous: each edit of the emitted text is reported."""
-    text = _emit()
+    text = _emit_extest()
     assert old in text
     problems = strict_problems(text.replace(old, new), waive=_BOUNDARY)
     assert any(p.startswith(problem) for p in problems), problems
@@ -254,7 +267,7 @@ def test_the_strict_reader_catches_each_omission(old, new, problem):
 def test_ijtag_access_is_declared_at_its_opcode_beside_the_standard_instructions():
     opcodes = parse_bsdl(_emit_ijtag_access()).opcodes
     assert IJTAG_ACCESS_BSDL_INSTRUCTION == "IJTAG_ACCESS"
-    assert opcodes == {**parse_bsdl(_emit()).opcodes, "IJTAG_ACCESS": ["1100"]}
+    assert opcodes == {**parse_bsdl(_emit_extest()).opcodes, "IJTAG_ACCESS": ["1100"]}
 
 
 def test_ijtag_access_gives_extest_sample_and_preload_the_bypass_register():
@@ -305,7 +318,7 @@ def test_enable_port_says_the_pad_does_the_tri_state_from_tdo_oe():
 
 
 @pytest.mark.parametrize("tdo_drive", ["low", "enable_port"])
-@pytest.mark.parametrize("emit", [_emit, _emit_ijtag_access], ids=["extest", "ijtag_access"])
+@pytest.mark.parametrize("emit", [_emit_extest, _emit_ijtag_access], ids=["extest", "ijtag_access"])
 def test_tdo_drive_changes_nothing_but_the_design_warning(emit, tdo_drive):
     default, other = emit().splitlines(), emit(tdo_drive=tdo_drive).splitlines()
     header = next(i for i, line in enumerate(default) if "attribute DESIGN_WARNING" in line) + 1

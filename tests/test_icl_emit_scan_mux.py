@@ -207,7 +207,7 @@ def test_to_icl_access_link_lists_a_top_level_mux_by_its_client_interface():
     root = ModuleInstance(name="chip")
     text = to_icl(graph, root, include_access_link=True)
     lines = text.splitlines()
-    header = next(i for i, line in enumerate(lines) if "EXTEST {" in line)
-    assert lines[header].strip() == "EXTEST { ScanInterface {"
+    header = next(i for i, line in enumerate(lines) if "IJTAG_ACCESS {" in line)
+    assert lines[header].strip() == "IJTAG_ACCESS { ScanInterface {"
     assert lines[header + 1].strip() == "warptap_scan_mux_mux_a.client;"
     assert lines[header + 2].strip() == "} }"

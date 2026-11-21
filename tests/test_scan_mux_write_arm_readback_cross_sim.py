@@ -35,18 +35,21 @@ from warptap.pdl_interpreter import PDLInterpreter
 from warptap.sib_insert import insert_sib_network
 from warptap.sim_io import run_verilog_testbench
 from warptap.tap_fsm import TapState
-from warptap.tap_ir import GotoState, ShiftDR, ShiftIR, bits_to_int
+from warptap.tap_ir import GotoState, ShiftDR, ShiftIR
 from warptap.tap_ir_play import shift_op_ranges, to_cycles
+from warptap.tap_model import OPCODE_IJTAG_ACCESS
 from warptap.yosys_io import ingest, write_verilog_from_json
 
 IR_WIDTH = 4
 _RESET_LEAD_IN = [(0, 0, 0, 0), (0, 0, 0, 0), (0, 0, 1, 1)]
 
 
-def _select_extest_ops() -> list:
+def _select_ijtag_access_ops() -> list:
+    """Load IJTAG_ACCESS, the instruction that selects the network of a TAP inserted with the
+    defaults."""
     return [
         GotoState(TapState.SHIFT_IR),
-        ShiftIR(IR_WIDTH, tdi=bits_to_int([0] * IR_WIDTH)),
+        ShiftIR(IR_WIDTH, tdi=OPCODE_IJTAG_ACCESS),
         GotoState(TapState.RUN_TEST_IDLE),
     ]
 
@@ -147,13 +150,13 @@ def test_write_then_reread_same_arm_content_lands_in_the_first_width_cycles_msb_
     pdl.iRead(0b101)
     second_ops = pdl.iApply()
 
-    ir_ops = _select_extest_ops() + first_ops + second_ops
+    ir_ops = _select_ijtag_access_ops() + first_ops + second_ops
     tdo_by_cycle = _run_rtl_raw(
         fixtures_dir, yosys_command, iverilog_command, vvp_command, netlist, ir_ops
     )
 
     ranges = shift_op_ranges(ir_ops)
-    # ir_ops = [select_extest (1 shift), first_ops (phase1 1 round + phase2 1 round = 2
+    # ir_ops = [select_ijtag_access (1 shift), first_ops (phase1 1 round + phase2 1 round = 2
     # shifts), second_ops (phase1 0 rounds + phase2 1 round = 1 shift)] -- 4 shift ops total.
     assert len(ranges) == 4
     second_apply_start, second_apply_bits = ranges[-1]
@@ -194,13 +197,13 @@ def test_write_then_switch_arms_then_switch_back_content_lands_in_first_width_cy
     pdl.iRead(0b101)
     third_ops = pdl.iApply()  # arm1 -> arm0 directly, read back arm0's still-committed value
 
-    ir_ops = _select_extest_ops() + first_ops + second_ops + third_ops
+    ir_ops = _select_ijtag_access_ops() + first_ops + second_ops + third_ops
     tdo_by_cycle = _run_rtl_raw(
         fixtures_dir, yosys_command, iverilog_command, vvp_command, netlist, ir_ops
     )
 
     ranges = shift_op_ranges(ir_ops)
-    # select_extest(1) + first_ops(phase1=1,phase2=1) + second_ops(phase1=1,phase2=1) +
+    # select_ijtag_access(1) + first_ops(phase1=1,phase2=1) + second_ops(phase1=1,phase2=1) +
     # third_ops(phase1=1,phase2=1) = 7 shift ops total (every apply here is a top-level mux
     # switch/re-target, so phase1 is always exactly 1 round -- confirmed by this count itself).
     assert len(ranges) == 7

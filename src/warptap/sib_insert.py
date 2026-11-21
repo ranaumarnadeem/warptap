@@ -11,29 +11,32 @@ a fixed-value stub or fanned out from a real host port) or WRITE (an ``instrumen
 implementation_plan.md §7 Stage 9's real (non-stub) functional-instrument extension.
 
 Deliberately fully independent of ``bsr_insert.py``/``tap_core.v`` (implementation_plan.md
-§7 Stage 4's own scoping decision): reuses ``external_dr_tdo`` directly, no new TAP
-instruction, zero edits to any Stage 1-3 file. ``_import_template`` is duplicated rather than
-shared (exactly two occurrences -- the textbook "rule of three" case for not extracting yet).
+§7 Stage 4's own scoping decision): reuses ``external_dr_tdo`` directly, and edits no Stage 1-3
+file: the network's own instruction is ``tap_core``'s EXTEST and SAMPLE/PRELOAD decode, given
+another opcode (see below). ``_import_template`` is duplicated rather than shared (exactly two
+occurrences -- the textbook "rule of three" case for not extracting yet).
 
-The network is selected by ``EXTEST`` only. ``tap_core``'s ``capture_dr``/``shift_dr``/
-``update_dr`` are per-state strobes that fire on every instruction's DR scan, so, like
-``bsr_insert.py``'s ``extest_mode``, one ``$eq`` decode cell (``warptap_ijtag_extest_decode``)
-compares the TAP's current instruction with ``EXTEST`` and drives ``warptap_ijtag_select``,
+The network is selected by one instruction only. By default that is IJTAG_ACCESS, a dedicated
+instruction at :func:`insert_sib_network`'s ``ijtag_access_opcode``
+(:data:`warptap.tap_model.OPCODE_IJTAG_ACCESS`, ``1100``), so a board-level EXTEST can't reach
+the network. ``tap_core`` is imported with that opcode in both ``OPCODE_EXTEST`` and
+``OPCODE_SAMPLE_PRELOAD`` (:func:`_import_tap_core`): it is then the only opcode routed to
+``external_dr_tdo``, and EXTEST's and SAMPLE/PRELOAD's own opcodes match nothing at Update-IR
+and load BYPASS. With ``ijtag_access_opcode=None`` (the EXTEST mode, the default up to warptap
+0.0.6), ``tap_core`` keeps its own opcodes and EXTEST selects the network; SAMPLE_PRELOAD, which
+``tap_core`` also routes to ``external_dr_tdo``, then has no working data register (its model
+has none either).
+
+``tap_core``'s ``capture_dr``/``shift_dr``/``update_dr`` are per-state strobes that fire on
+every instruction's DR scan, so, like ``bsr_insert.py``'s ``extest_mode``, one ``$eq`` decode
+cell (``warptap_ijtag_access_decode``, or ``warptap_ijtag_extest_decode`` in the EXTEST mode)
+compares the TAP's current instruction with the network's and drives ``warptap_ijtag_select``,
 every top-level slot's ``select``. Nested slots and WRITE commits are gated through it (a
 SIB's ``nested_active``/``nested_select`` both AND in its own ``select``). Without it, a DR
 scan under ``IDCODE`` (loaded by every reset) or ``BYPASS`` (a board chain passing through)
 shifted, opened and committed the network: two all-ones scans raised every WRITE
 instrument. ``bc1_shift_only``/``instrument_write`` shift registers still move on any DR
 scan, which is harmless: they reach ``tdo`` only through an open SIB, and a commit needs one.
-``SAMPLE_PRELOAD``, which ``tap_core`` also routes to ``external_dr_tdo``, therefore has no
-working data register in a SIB-only design (its model has none either).
-
-With :func:`insert_sib_network`'s ``ijtag_access_opcode``, a dedicated IJTAG_ACCESS instruction
-selects the network instead, so a board-level EXTEST can't reach it. ``tap_core`` is imported
-with that opcode in both ``OPCODE_EXTEST`` and ``OPCODE_SAMPLE_PRELOAD``
-(:func:`_import_tap_core`): it is then the only opcode routed to ``external_dr_tdo``, EXTEST's
-and SAMPLE/PRELOAD's own opcodes match nothing at Update-IR and load BYPASS, and the decode
-cell (``warptap_ijtag_access_decode``) compares with it.
 
 A :class:`~warptap.icl_model.ScanMuxNode` slot instantiates ``rtl/scan_mux_cell.v`` instead,
 one FRESHLY-IMPORTED, uniquely-named module PER mux instance -- NOT the shared-import-once
@@ -73,6 +76,7 @@ from warptap.netlist import Bit, Module, Netlist
 from warptap.tap_model import (
     DEFAULT_TDO_DRIVE,
     IDCODE_VALUE,
+    OPCODE_IJTAG_ACCESS,
     check_tdo_drive,
     idcode_value_error,
     ijtag_access_opcode_error,
@@ -161,10 +165,11 @@ def _import_tap_core(
     given, ``ijtag_access_opcode`` into both ``OPCODE_EXTEST`` and ``OPCODE_SAMPLE_PRELOAD``,
     the two instructions whose data register is ``external_dr_tdo``: that one opcode then
     reaches the network, and EXTEST's and SAMPLE/PRELOAD's own opcodes fall through Update-IR's
-    decode to BYPASS. The defaults keep the plain :func:`_import_template` path: re-importing
+    decode to BYPASS. With the default IDCODE and no ``ijtag_access_opcode`` (a boundary-scan
+    design, or the EXTEST mode) it keeps the plain :func:`_import_template` path: re-importing
     through ``chparam`` changes Yosys's output (an added ``hdlname`` attribute, renumbered
-    internal cells) even when the value is unchanged, and default output must stay
-    byte-identical. The module keeps the name ``tap_core``; a design has exactly one."""
+    internal cells) even when the value is unchanged, and those designs come out byte for byte
+    as before. The module keeps the name ``tap_core``; a design has exactly one."""
     chparams: dict[str, int] = {}
     if idcode_value != IDCODE_VALUE:
         chparams["IDCODE_VALUE"] = idcode_value
@@ -341,10 +346,11 @@ def _insert_chain(
     clr_n_bits: list[Bit] | None = None,
 ) -> list[Bit]:
     """One level of a chain: each slot becomes one ``sib_cell`` instance, its ``select``
-    wired to ``select_bits`` (the TAP's EXTEST decode for a top-level chain; a parent SIB's
-    own ``nested_active`` output for a nested one -- see the hierarchy case below for why not
-    ``nested_select``, the signal ``instrument_write.v``'s WRITE instruments consume;
-    confirmed sound against real RTL, ``tests/test_sib_cell_nested_cross_sim.py``). A leaf
+    wired to ``select_bits`` (the TAP's decode of the network's instruction for a top-level
+    chain; a parent SIB's own ``nested_active`` output for a nested one -- see the hierarchy
+    case below for why not ``nested_select``, the signal ``instrument_write.v``'s WRITE
+    instruments consume; confirmed sound against real RTL,
+    ``tests/test_sib_cell_nested_cross_sim.py``). A leaf
     slot gets its instrument's own chained bit cells wired between the SIB's
     ``nested_si``/``nested_so``, exactly as before; a hierarchy slot (``slot.nested``
     populated) recurses instead, with its own ``nested_si``/``nested_active`` becoming the
@@ -628,7 +634,7 @@ def insert_sib_network(
     yosys_command: str | None = None,
     chip_reset: str | None = None,
     chip_reset_active_low: bool = True,
-    ijtag_access_opcode: int | None = None,
+    ijtag_access_opcode: int | None = OPCODE_IJTAG_ACCESS,
     tdo_drive: str = DEFAULT_TDO_DRIVE,
 ) -> None:
     """Insert a TAP + SIB network into ``netlist``'s ``top`` module, matching ``graph``
@@ -660,9 +666,9 @@ def insert_sib_network(
     ``iApply``'s phase-1 retargeting shift (which walks every instrument cell's
     ``capture_dr``/``shift_dr``/``update_dr`` unconditionally, matching every other cell)
     would commit garbage into this instrument's real host signal, including while
-    retargeting *away* from it. Every top-level slot's ``select`` is the TAP's EXTEST
-    decode (IJTAG_ACCESS's, see below), so none of this moves under any other instruction
-    (see this module's docstring). Mutates
+    retargeting *away* from it. Every top-level slot's ``select`` is the TAP's decode of the
+    network's instruction (IJTAG_ACCESS, or EXTEST, see below), so none of this moves under any
+    other instruction (see this module's docstring). Mutates
     ``netlist`` in place and returns ``None`` -- matching ``insert_bsr()``'s convention; the
     caller already has the :class:`~warptap.icl_model.ModuleInstance` tree from
     ``build_sib_plan`` for dotted-address resolution, since instrument naming (unlike Yosys
@@ -670,7 +676,7 @@ def insert_sib_network(
 
     ``ir_width``/``opcode_extest`` must match ``rtl/tap_core.v``'s actual compiled
     parameters (its own defaults, currently) since this function never overrides them on
-    the instance. ``opcode_extest`` is unused with ``ijtag_access_opcode``.
+    the instance. ``opcode_extest`` is used only with ``ijtag_access_opcode=None``.
 
     ``idcode_value`` is baked into the inserted ``tap_core``'s ``IDCODE_VALUE`` (default:
     :data:`warptap.tap_model.IDCODE_VALUE`, a placeholder). It must be a 32-bit value with bit 0
@@ -684,14 +690,18 @@ def insert_sib_network(
     which asserts with the chip reset and releases two TCK edges after it -- an Update-DR in
     those two edges is lost. Off by default, and then nothing changes.
 
-    ``ijtag_access_opcode`` gives the network an instruction of its own, IJTAG_ACCESS, at that
-    opcode (:data:`warptap.tap_model.OPCODE_IJTAG_ACCESS` is the suggested one): it alone
-    selects the network, and EXTEST, SAMPLE and PRELOAD select BYPASS -- there is no boundary
-    register -- so a board-level EXTEST leaves the network, and every signal a WRITE instrument
-    drives, untouched. It must fit ``ir_width`` and not be EXTEST's, SAMPLE/PRELOAD's, IDCODE's
-    or BYPASS's opcode, else :class:`SibInsertError`. Give :func:`warptap.bsdl_emit.to_bsdl`,
-    ``TapModel`` and ``TapConfig`` the same value, and :func:`warptap.icl_emit.to_icl`
-    ``ijtag_access=True``. Off by default, and then nothing changes.
+    ``ijtag_access_opcode`` is the opcode of the network's own instruction, IJTAG_ACCESS
+    (default :data:`warptap.tap_model.OPCODE_IJTAG_ACCESS`, ``1100``): it alone selects the
+    network, and EXTEST, SAMPLE and PRELOAD select BYPASS (there is no boundary register), so a
+    board-level EXTEST leaves the network, and every signal a WRITE instrument drives,
+    untouched. It must fit ``ir_width`` and not be EXTEST's, SAMPLE/PRELOAD's, IDCODE's or
+    BYPASS's opcode, else :class:`SibInsertError`. :func:`warptap.bsdl_emit.to_bsdl`,
+    :func:`warptap.icl_emit.to_icl` and ``TapConfig`` describe this TAP by default (give
+    ``to_bsdl`` and ``TapConfig`` any other opcode used here); ``TapModel``, whose default is
+    ``None``, models it given the same opcode. ``ijtag_access_opcode=None`` selects the network
+    with EXTEST instead, the default up to warptap 0.0.6: ``tap_core`` keeps its own opcodes and
+    the decode compares with ``opcode_extest``. Give ``to_bsdl`` and ``TapConfig`` ``None`` too,
+    and ``to_icl`` ``ijtag_access=False``.
 
     ``tdo_drive`` says how the ``tdo`` pin is driven (:data:`warptap.tap_model.TDO_DRIVES`):
     ``"tristate"``, the default, puts a ``$tribuf`` on it, enabled by ``tap_core``'s ``tdo_oe``,
@@ -757,8 +767,8 @@ def insert_sib_network(
     # call created, corrupting it.
     detached_bits_by_port: dict[str, list[Bit]] = {}
 
-    # The network's DR is EXTEST's (IJTAG_ACCESS's with ijtag_access_opcode): select it only
-    # while that is the current instruction (bsr_insert.py's extest_mode decode, same cell
+    # The network's DR is IJTAG_ACCESS's (EXTEST's with ijtag_access_opcode=None): select it
+    # only while that is the current instruction (bsr_insert.py's extest_mode decode, same cell
     # shape).
     ijtag_select_bits = top_mod.new_wire(1, name="warptap_ijtag_select")
     if ijtag_access_opcode is None:

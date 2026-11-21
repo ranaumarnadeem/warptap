@@ -44,6 +44,7 @@ from warptap.tap_ir import (
     bits_to_int,
 )
 from warptap.tap_ir_play import navigation_tms, shift_tms
+from warptap.tap_model import OPCODE_IJTAG_ACCESS
 from warptap.yosys_io import ingest, write_verilog_from_json
 
 IR_WIDTH = 4
@@ -233,10 +234,12 @@ _RESET_LEAD_IN: List[Tuple[int, int, int, int, int]] = [
 ]
 
 
-def _select_extest_ops() -> list:
+def _select_ijtag_access_ops() -> list:
+    """Load IJTAG_ACCESS, the instruction that selects the network of a TAP inserted with the
+    defaults."""
     return [
         GotoState(TapState.SHIFT_IR),
-        ShiftIR(IR_WIDTH, tdi=bits_to_int([0] * IR_WIDTH)),  # Instruction.EXTEST == 0
+        ShiftIR(IR_WIDTH, tdi=OPCODE_IJTAG_ACCESS),
         GotoState(TapState.RUN_TEST_IDLE),
     ]
 
@@ -352,7 +355,7 @@ def test_compaction_retargeting_reads_the_real_xor_folded_value_on_real_rtl(
         clock_port="clk",
         scan_enable_port="scan_en",
     )
-    ir_ops = _select_extest_ops() + retargeted
+    ir_ops = _select_ijtag_access_ops() + retargeted
 
     rows_stim = _RESET_LEAD_IN + _stimulus_rows(ir_ops)
     inserted_verilog = write_verilog_from_json(
