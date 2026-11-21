@@ -7,7 +7,7 @@ from __future__ import annotations
 import pytest
 from test_sib_insert_write_instrument_cross_sim import (
     _pdl_program,
-    _select_extest_ops,
+    _select_ijtag_access_ops,
     run_on_python,
     run_on_rtl,
 )
@@ -79,7 +79,7 @@ def test_a_read_through_the_synchronizer_matches_the_model(
     """Write ctrl_write=1, wait, read status_read: the synchronizer has had more than two
     TCK edges by the capture, so real RTL reads exactly what the model expects."""
     netlist, graph, root = _inserted(fixtures_dir, yosys_command, _specs(sync=True))
-    ir_ops = _select_extest_ops() + _pdl_program(graph, root)
+    ir_ops = _select_ijtag_access_ops() + _pdl_program(graph, root)
     python_observed, _ = run_on_python(graph, ir_ops)
     rtl_observed = run_on_rtl(
         fixtures_dir, yosys_command, iverilog_command, vvp_command, netlist, ir_ops

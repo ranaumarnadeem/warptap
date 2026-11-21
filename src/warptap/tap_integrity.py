@@ -22,16 +22,16 @@ here runs, in order:
    0 and at 1 in every bit); ``idcode_capture``/``bypass_capture`` (each register captured
    while it holds the complement of its capture value). With the rest of the program, every
    one of the 32 TAP state transitions is taken;
-7. ``network_closed``: the network's instruction (EXTEST, or IJTAG_ACCESS for a TAP with an
+7. ``network_closed``: the network's instruction (IJTAG_ACCESS, or EXTEST for a TAP without an
    ``ijtag_access_opcode``) with every SIB closed -- the network's length and continuity, by
    an over-shift probe (:mod:`warptap.sib_overshift`);
 8. ``open_<slot>``: each SIB, and each ScanMux arm, opened alone from an all-closed network
    and probed the same way; then ``open_all``, every SIB outside a mux at once;
-9. the network holding still (``network_hold``): ``sample_preload`` (SAMPLE/PRELOAD puts the
-   network's tail on TDO for the whole scan without selecting the network; with
-   IJTAG_ACCESS, ``extest`` and then ``sample_preload``, each a scan through BYPASS), then
-   ``network_hold`` (one scan through the network as the probes left it, paused holding an
-   alternating pattern and then its complement, which ends by closing every SIB);
+9. the network holding still (``network_hold``): ``extest`` and then ``sample_preload``, each a
+   scan through BYPASS (without an ``ijtag_access_opcode``, only ``sample_preload``, where
+   SAMPLE/PRELOAD puts the network's tail on TDO for the whole scan without selecting the
+   network), then ``network_hold`` (one scan through the network as the probes left it, paused
+   holding an alternating pattern and then its complement, which ends by closing every SIB);
 10. ``write_readback_<instrument>``: each WRITE instrument written with an alternating
     pattern P and read back (Capture-DR captures what it last committed), then ~P, then 0
     (``write_readback``);
@@ -95,6 +95,7 @@ from warptap.tap_model import (
     IDCODE_VALUE,
     OPCODE_EXTEST,
     OPCODE_IDCODE,
+    OPCODE_IJTAG_ACCESS,
     OPCODE_SAMPLE_PRELOAD,
     Instruction,
     TapModel,
@@ -164,13 +165,17 @@ class TapIntegrityError(WarptapError):
 class TapConfig:
     """The TAP the program targets -- ``rtl/tap_core.v``'s parameters. Its opcodes are
     :mod:`warptap.tap_model`'s (EXTEST 0, IDCODE 1, SAMPLE_PRELOAD 2, BYPASS all 1s), plus
-    IJTAG_ACCESS at ``ijtag_access_opcode`` for a TAP built with one: the network's instruction
-    then, and EXTEST and SAMPLE/PRELOAD decode to BYPASS."""
+    IJTAG_ACCESS at ``ijtag_access_opcode``: the network's instruction, with EXTEST and
+    SAMPLE/PRELOAD decoding to BYPASS. The default,
+    :data:`~warptap.tap_model.OPCODE_IJTAG_ACCESS`, is what
+    :func:`~warptap.sib_insert.insert_sib_network` inserts by default;
+    ``ijtag_access_opcode=None`` is a TAP whose network EXTEST selects, inserted with the same
+    ``None``."""
 
     ir_width: int = DEFAULT_IR_WIDTH
     has_idcode: bool = True
     idcode_value: int = IDCODE_VALUE
-    ijtag_access_opcode: Optional[int] = None
+    ijtag_access_opcode: Optional[int] = OPCODE_IJTAG_ACCESS
 
     def __post_init__(self) -> None:
         if self.has_idcode and (problem := idcode_value_error(self.idcode_value)):
@@ -190,7 +195,7 @@ class TapConfig:
         return frozenset(opcodes)
 
     def network_opcode(self) -> int:
-        """The opcode that selects the network: EXTEST's, or IJTAG_ACCESS's."""
+        """The opcode that selects the network: IJTAG_ACCESS's, or EXTEST's without one."""
         return OPCODE_EXTEST if self.ijtag_access_opcode is None else self.ijtag_access_opcode
 
     def model(self) -> TapModel:
@@ -251,7 +256,8 @@ class IntegrityProgram:
         """The program as JSON data: ``tap``, ``tests`` (name and cycle range), and one
         string of ``0``/``1`` per cycle field -- ``tms``, ``tdi``, ``trst_n``, ``shift``,
         ``tdo``, ``care`` -- each character one TCK cycle. ``tap`` has an
-        ``ijtag_access_opcode`` only for a TAP with one."""
+        ``ijtag_access_opcode`` only for a TAP with one; a ``tap`` without it, as every program
+        for a TAP whose network EXTEST selects has, reads back as that TAP."""
 
         def column(field: str) -> str:
             return "".join(str(int(getattr(cycle, field))) for cycle in self.cycles)

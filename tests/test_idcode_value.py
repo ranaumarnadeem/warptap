@@ -1,7 +1,7 @@
 """A design's own IDCODE: ``idcode_value`` on ``insert_test_access``/``insert_sib_network``,
 ``to_bsdl``, ``TapModel`` and ``TapConfig`` -- validation at every entry point, the value reaching
-each consumer, and the default path left exactly as it was. The real-RTL side is
-``test_idcode_value_cross_sim.py``.
+each consumer, and the default value adding nothing to how tap_core is imported. The real-RTL
+side is ``test_idcode_value_cross_sim.py``.
 """
 
 from __future__ import annotations
@@ -19,7 +19,13 @@ from warptap.tap_fsm import TapState
 from warptap.tap_integrity import TapConfig, TapIntegrityError
 from warptap.tap_ir import GotoState, ShiftDR
 from warptap.tap_ir_play import play
-from warptap.tap_model import IDCODE_VALUE, TapModel, TapModelError, idcode_value_error
+from warptap.tap_model import (
+    IDCODE_VALUE,
+    OPCODE_IJTAG_ACCESS,
+    TapModel,
+    TapModelError,
+    idcode_value_error,
+)
 from warptap.yosys_io import ingest
 
 _CUSTOM = 0x5CA1AB1F
@@ -148,3 +154,37 @@ def test_a_custom_value_is_baked_into_tap_core_via_chparam(fixtures_dir, yosys_c
     )
     assert calls == [("tap_core", {"IDCODE_VALUE": _CUSTOM})]
     assert "tap_core" in netlist.to_json()["modules"]
+
+
+@pytest.mark.parametrize(
+    ("idcode_value", "idcode_chparams"),
+    [(IDCODE_VALUE, {}), (_CUSTOM, {"IDCODE_VALUE": _CUSTOM})],
+    ids=["default_idcode", "custom_idcode"],
+)
+def test_by_default_the_ijtag_access_opcode_is_baked_in_beside_the_idcode(
+    idcode_value, idcode_chparams, fixtures_dir, yosys_command, monkeypatch
+):
+    """The default TAP has IJTAG_ACCESS in tap_core's EXTEST and SAMPLE/PRELOAD opcodes, so
+    tap_core always goes through chparam; the IDCODE is added only when it isn't the default."""
+    calls = []
+    real = sib_insert.ingest_with_params
+
+    def spy(files, top, chparams, **kwargs):
+        calls.append((top, dict(chparams)))
+        return real(files, top, chparams, **kwargs)
+
+    monkeypatch.setattr(sib_insert, "ingest_with_params", spy)
+    netlist, graph = _trivial_netlist(fixtures_dir, yosys_command)
+    insert_sib_network(
+        netlist, "trivial", graph, idcode_value=idcode_value, yosys_command=yosys_command
+    )
+    assert calls == [
+        (
+            "tap_core",
+            {
+                **idcode_chparams,
+                "OPCODE_EXTEST": OPCODE_IJTAG_ACCESS,
+                "OPCODE_SAMPLE_PRELOAD": OPCODE_IJTAG_ACCESS,
+            },
+        )
+    ]

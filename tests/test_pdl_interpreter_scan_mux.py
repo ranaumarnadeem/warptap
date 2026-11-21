@@ -1,6 +1,6 @@
 """PDLInterpreter.iApply() driving a real ScanMuxNode graph (multi-arm ScanMux plan Phase 4).
 Python-model-only (via tap_ir_play.play() + SibNetworkRegister, matching
-test_pdl_interpreter_cross_sim.py's own ``run_on_python`` half and its own EXTEST-select-
+test_pdl_interpreter_cross_sim.py's own ``run_on_python`` half and its own IJTAG_ACCESS-select-
 preamble/one-combined-ops-list conventions exactly) -- no real RTL cross-sim yet, since
 RTL-inserting a ScanMuxNode is sib_insert.py's own Phase 5 job, not done at this point in the
 plan. This file instead confirms iApply's OWN ops-emission/orchestration is correct for a mux
@@ -24,18 +24,19 @@ from warptap.pdl_interpreter import PDLInterpreter
 from warptap.pdl_verify import check_reads
 from warptap.sib_model import SibNetworkRegister
 from warptap.tap_fsm import TapState
-from warptap.tap_ir import GotoState, ShiftIR, bits_to_int
+from warptap.tap_ir import GotoState, ShiftIR
 from warptap.tap_ir_play import play
-from warptap.tap_model import Instruction, TapModel
+from warptap.tap_model import OPCODE_IJTAG_ACCESS, Instruction, TapModel
 
 IR_WIDTH = 4
-OPCODE_EXTEST = 0
 
 
-def _select_extest_ops() -> list:
+def _select_ijtag_access_ops() -> list:
+    """Load IJTAG_ACCESS, the instruction that selects the network of a TAP inserted with the
+    defaults."""
     return [
         GotoState(TapState.SHIFT_IR),
-        ShiftIR(IR_WIDTH, tdi=bits_to_int([0] * IR_WIDTH)),  # OPCODE_EXTEST = 0
+        ShiftIR(IR_WIDTH, tdi=OPCODE_IJTAG_ACCESS),
         GotoState(TapState.RUN_TEST_IDLE),
     ]
 
@@ -84,9 +85,9 @@ def _mux_graph_with_aliased_arm_and_root() -> tuple[PhysicalGraph, ModuleInstanc
 
 
 def run_on_python(graph, ir_ops) -> tuple[list[int], SibNetworkRegister]:
-    model = TapModel(has_idcode=True)
+    model = TapModel(has_idcode=True, ijtag_access_opcode=OPCODE_IJTAG_ACCESS)
     reg = SibNetworkRegister(graph)
-    model.register_data_register(Instruction.EXTEST, reg)
+    model.register_data_register(Instruction.IJTAG_ACCESS, reg)
     model.reset()
     reg.reset()
     model.tick(0, 0)  # TEST_LOGIC_RESET -> RUN_TEST_IDLE settle
@@ -105,7 +106,7 @@ def test_iapply_writes_and_reads_back_through_a_mux_arm():
     pdl.iRead(0b101)
     read_ops = pdl.iApply()
 
-    ir_ops = _select_extest_ops() + write_ops + read_ops
+    ir_ops = _select_ijtag_access_ops() + write_ops + read_ops
     observed, _reg = run_on_python(graph, ir_ops)
     # Retargeting shift-length optimization plan: the second iApply re-targets the exact same
     # already-open arm1 -- stage_open_sequence's own currently_open reuse now emits ZERO phase-1
@@ -155,7 +156,7 @@ def test_iapply_switches_arms_directly_across_separate_calls():
     third_ops = pdl.iApply()  # arm2 -> arm1 (its own round) then read back (a 2nd round)
     assert pdl._currently_open == {"mux_a": 1}
 
-    ir_ops = _select_extest_ops() + first_ops + second_ops + third_ops
+    ir_ops = _select_ijtag_access_ops() + first_ops + second_ops + third_ops
     observed, _reg = run_on_python(graph, ir_ops)
     # Each iApply is phase1 (1 round -- a top-level mux target, switch or not, has no
     # ancestors) + phase2 = 2 ShiftDRs; +1 IR-select; 3 iApply calls total.

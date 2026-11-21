@@ -36,6 +36,7 @@ from warptap.tap_fsm import TapState, next_state
 from warptap.tap_ir import GotoState, PulsePin, Runtest, ShiftDR, ShiftIR, bits_from_int, bits_to_int
 from warptap.tap_ir_play import navigation_tms, shift_tms
 from warptap.tap_ir_stil import to_stil
+from warptap.tap_model import OPCODE_IJTAG_ACCESS
 from warptap.yosys_io import ingest, write_verilog_from_json
 
 IR_WIDTH = 4
@@ -112,10 +113,12 @@ def _source_list(openmbist_dir: Path, wrapper_paths: dict[str, Path]) -> list[Pa
     ]
 
 
-def _select_extest_ops() -> list:
+def _select_ijtag_access_ops() -> list:
+    """Load IJTAG_ACCESS, the instruction that selects the network of a TAP inserted with the
+    defaults."""
     return [
         GotoState(TapState.SHIFT_IR),
-        ShiftIR(IR_WIDTH, tdi=bits_to_int([0] * IR_WIDTH)),  # OPCODE_EXTEST = 0
+        ShiftIR(IR_WIDTH, tdi=OPCODE_IJTAG_ACCESS),
         GotoState(TapState.RUN_TEST_IDLE),
     ]
 
@@ -213,7 +216,7 @@ def test_faultflow_pattern_drives_real_self_repair_start_and_reads_busy(
         clock_port="clk",
         clock_pulse_count=10,  # matches Stage 9's own >=1-cycle margin exactly
     )
-    ir_ops = _select_extest_ops() + retargeted
+    ir_ops = _select_ijtag_access_ops() + retargeted
 
     # Secondary: the same realistic, PulsePin-bearing sequence must also be real, valid STIL.
     to_stil(ir_ops, pulse_periods={"clk": "20ns"})

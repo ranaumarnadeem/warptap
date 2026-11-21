@@ -91,12 +91,16 @@ def test_tests_run_in_order_with_extest():
 
 
 def test_tap_paths_and_network_hold_can_be_left_out():
-    names = [t.name for t in _program(tap=_EXTEST, tap_paths=False, network_hold=False).tests]
-    assert names[15:] == [
+    expected = [
         "idcode", "network_closed",
         "open_sib_ctrl", "open_sib_status", "open_sib_stub", "open_all",
         "write_readback_ctrl", "tms_reset",
     ]
+    names = [t.name for t in _program(tap=_EXTEST, tap_paths=False, network_hold=False).tests]
+    assert names[15:] == expected
+    # By default (IJTAG_ACCESS) one more opcode is unimplemented, and "extest" goes too.
+    names = [t.name for t in _program(tap_paths=False, network_hold=False).tests]
+    assert names[16:] == expected
 
 
 def test_every_tap_state_transition_is_taken():
@@ -163,6 +167,18 @@ def test_opcodes_follow_the_ir_width():
     assert "opcode_00011" in names
     assert not any(n.startswith("opcode_") for n in [t.name for t in _program(
         exhaustive_opcodes=False).tests])
+    # The default IJTAG_ACCESS opcode fits a 5-bit IR as 01100; EXTEST's is unimplemented.
+    names = [t.name for t in _program(tap=TapConfig(ir_width=5)).tests]
+    assert sum(n.startswith("opcode_") for n in names) == 32 - 3
+    assert "opcode_00000" in names and "opcode_01100" not in names
+
+
+def test_the_default_ijtag_access_opcode_needs_a_4_bit_ir():
+    with pytest.raises(TapIntegrityError, match="does not fit a 3-bit instruction register"):
+        TapConfig(ir_width=3)
+    with pytest.raises(TapIntegrityError, match="ijtag_access_opcode=None"):
+        TapConfig(ir_width=3)
+    assert TapConfig(ir_width=3, ijtag_access_opcode=None).network_opcode() == OPCODE_EXTEST
 
 
 def test_a_live_instrument_is_masked_where_it_reaches_tdo():
@@ -194,17 +210,25 @@ def test_live_values_and_live_override_the_mask():
     assert diff and all(pair == (1, 0) for pair in diff)
 
 
-def test_network_probe_matches_the_overshift_oracle():
+@pytest.mark.parametrize(
+    ("program_options", "opcode", "oracle_options"),
+    [
+        ({}, OPCODE_IJTAG_ACCESS, {}),
+        ({"tap": _EXTEST}, OPCODE_EXTEST, {"ijtag_access_opcode": None}),
+    ],
+    ids=["default", "extest"],
+)
+def test_network_probe_matches_the_overshift_oracle(program_options, opcode, oracle_options):
     """The closed-network test is sib_overshift's probe: its last scan's TDO is what
-    expected_probe_tdo predicts for EXTEST plus that probe."""
+    expected_probe_tdo predicts for the network's instruction plus that probe, by default
+    (IJTAG_ACCESS on both sides) and with EXTEST."""
     graph, root = build_sib_plan(_FLAT)
-    program = build_integrity_program(graph, root, margin=MARGIN, live=[])
-    ops = select_instruction(OPCODE_EXTEST) + build_overshift_ops(
-        graph, frozenset(), margin=MARGIN
-    )
+    program = build_integrity_program(graph, root, margin=MARGIN, live=[], **program_options)
+    ops = select_instruction(opcode) + build_overshift_ops(graph, frozenset(), margin=MARGIN)
     probe_bits = MARGIN + len(graph.chain)
     bits = _shifted(program, "network_closed")[-probe_bits:]
-    assert sum(b << k for k, b in enumerate(bits)) == expected_probe_tdo(graph, ops)
+    expected = expected_probe_tdo(graph, ops, **oracle_options)
+    assert sum(b << k for k, b in enumerate(bits)) == expected
 
 
 def test_write_readback_reads_each_value_back():
@@ -359,6 +383,15 @@ def test_select_instruction_checks_the_opcode_width():
 
 
 # --- a TAP with IJTAG_ACCESS ----------------------------------------------------------------------
+
+
+def test_the_default_tap_selects_the_network_with_ijtag_access():
+    """TapConfig() is the TAP insert_sib_network inserts by default."""
+    assert TapConfig() == _IJTAG_ACCESS
+    assert TapConfig().network_opcode() == OPCODE_IJTAG_ACCESS == 0b1100
+    default = _program()
+    assert default.cycles == _program(tap=_IJTAG_ACCESS).cycles
+    assert default.to_json()["tap"]["ijtag_access_opcode"] == OPCODE_IJTAG_ACCESS
 
 
 def test_with_ijtag_access_extest_and_sample_preload_are_tested_as_bypass():

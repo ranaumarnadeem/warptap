@@ -5,10 +5,11 @@
 resident in Shift-IR or Shift-DR, be high impedance in every other state, and change only on the
 falling edge of TCK.
 
-Every run gets one stimulus: a TRST reset, EXTEST selected (the network or the boundary register
-on TDO), then a seeded random TMS/TDI walk that visits all 16 states. The testbench samples the
-pin, and the enable that goes with it, three times per TCK cycle: before the rising edge, after
-it, and after the falling edge.
+Every run gets one stimulus: a TRST reset, the instruction that puts the network or the boundary
+register on TDO selected (IJTAG_ACCESS for the network, as inserted by default, EXTEST for the
+boundary register), then a seeded random TMS/TDI walk that visits all 16 states. The testbench
+samples the pin, and the enable that goes with it, three times per TCK cycle: before the rising
+edge, after it, and after the falling edge.
 
 - ``"tristate"`` (the default): the pin reads ``z`` in every state but Shift-IR/Shift-DR and a bit
   in those, ``tdo_oe`` (the ``$tribuf``'s enable) is high exactly there, and neither moves at a
@@ -43,7 +44,7 @@ from warptap.sim_io import run_verilog_testbench
 from warptap.tap_fsm import TapState
 from warptap.tap_ir import GotoState, ShiftIR
 from warptap.tap_ir_play import to_cycles
-from warptap.tap_model import OPCODE_EXTEST, TDO_DRIVES, drives_tdo
+from warptap.tap_model import OPCODE_EXTEST, OPCODE_IJTAG_ACCESS, TDO_DRIVES, drives_tdo
 from warptap.tap_ports import TCK, TDI, TDO_OE, TMS, TRST_N
 from warptap.yosys_io import ingest, write_verilog_from_json
 
@@ -57,15 +58,20 @@ class Sample(NamedTuple):
     oe: Tuple[str, str, str]  # the same for the enable ("x" where there is none)
 
 
-def _stimulus() -> List[Tuple[int, int, int]]:
-    """``(tms, tdi, trst_n)`` rows: TRST, Run-Test/Idle, EXTEST, then the random walk."""
+# The instruction that puts each insertion's data register on TDO.
+_REGISTER_OPCODE = {"sib": OPCODE_IJTAG_ACCESS, "bsr": OPCODE_EXTEST}
+
+
+def _stimulus(insertion: str) -> List[Tuple[int, int, int]]:
+    """``(tms, tdi, trst_n)`` rows: TRST, Run-Test/Idle, the instruction that selects
+    ``insertion``'s data register, then the random walk."""
     rows = [(0, 0, 0), (0, 0, 1)]
-    select_extest = [
+    select = [
         GotoState(TapState.SHIFT_IR),
-        ShiftIR(_IR_WIDTH, OPCODE_EXTEST),
+        ShiftIR(_IR_WIDTH, _REGISTER_OPCODE[insertion]),
         GotoState(TapState.RUN_TEST_IDLE),
     ]
-    rows += [(tms, tdi, 1) for tms, tdi in to_cycles(select_extest)]
+    rows += [(tms, tdi, 1) for tms, tdi in to_cycles(select)]
     rng = random.Random(1149)
     rows += [(rng.randint(0, 1), rng.randint(0, 1), 1) for _ in range(_WALK_TICKS)]
     return rows
@@ -176,13 +182,14 @@ def run(
     fixtures_dir, yosys_command, iverilog_command, vvp_command
 ) -> Callable[..., List[Sample]]:
     cache: Dict[tuple, List[Sample]] = {}
-    stimulus = "\n".join(" ".join(map(str, row)) for row in _stimulus()) + "\n"
 
     def simulate(
         insertion: str, tdo_drive: str, mutate: Optional[Callable[[Module], None]] = None
     ) -> List[Sample]:
         key = (insertion, tdo_drive, mutate)
         if key not in cache:
+            rows = _stimulus(insertion)
+            stimulus = "\n".join(" ".join(map(str, row)) for row in rows) + "\n"
             netlist, top = _INSERTIONS[insertion](fixtures_dir, yosys_command, tdo_drive)
             if mutate is not None:
                 mutate(netlist.module(top))
@@ -205,7 +212,7 @@ def run(
                     _, state, *values = line.split(",")
                     state = TapState(int(state))
                     samples.append(Sample(state, tuple(values[:3]), tuple(values[3:])))
-            assert len(samples) == len(_stimulus())
+            assert len(samples) == len(rows)
             assert {s.state for s in samples} == set(TapState), "the walk must visit every TAP state"
             cache[key] = samples
         return cache[key]

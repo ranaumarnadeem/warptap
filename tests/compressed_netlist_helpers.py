@@ -20,6 +20,7 @@ from warptap.tap_ir import (
     bits_to_int,
 )
 from warptap.tap_ir_play import navigation_tms, shift_tms
+from warptap.tap_model import OPCODE_IJTAG_ACCESS
 
 IR_WIDTH = 4
 
@@ -132,10 +133,12 @@ _RESET_LEAD_IN: List[Tuple[int, int, int, int, int]] = [
 ]
 
 
-def _select_extest_ops() -> list:
+def _select_ijtag_access_ops() -> list:
+    """Load IJTAG_ACCESS, the instruction that selects the network of a TAP inserted with the
+    defaults."""
     return [
         GotoState(TapState.SHIFT_IR),
-        ShiftIR(IR_WIDTH, tdi=bits_to_int([0] * IR_WIDTH)),  # Instruction.EXTEST == 0
+        ShiftIR(IR_WIDTH, tdi=OPCODE_IJTAG_ACCESS),
         GotoState(TapState.RUN_TEST_IDLE),
     ]
 

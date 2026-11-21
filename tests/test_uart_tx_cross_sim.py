@@ -49,6 +49,7 @@ from warptap.sim_io import run_verilog_testbench
 from warptap.tap_fsm import TapState, next_state
 from warptap.tap_ir import GotoState, PulsePin, Runtest, ShiftDR, ShiftIR, bits_from_int, bits_to_int
 from warptap.tap_ir_play import navigation_tms, shift_tms
+from warptap.tap_model import OPCODE_IJTAG_ACCESS
 from warptap.yosys_io import ingest, write_verilog_from_json
 
 IR_WIDTH = 4
@@ -82,10 +83,12 @@ _RESET_LEAD_IN = [
 ]
 
 
-def _select_extest_ops() -> list:
+def _select_ijtag_access_ops() -> list:
+    """Load IJTAG_ACCESS, the instruction that selects the network of a TAP inserted with the
+    defaults."""
     return [
         GotoState(TapState.SHIFT_IR),
-        ShiftIR(IR_WIDTH, tdi=bits_to_int([0] * IR_WIDTH)),  # OPCODE_EXTEST = 0
+        ShiftIR(IR_WIDTH, tdi=OPCODE_IJTAG_ACCESS),
         GotoState(TapState.RUN_TEST_IDLE),
     ]
 
@@ -232,7 +235,7 @@ def test_uart_tx_transmits_the_written_byte_on_real_rtl(
     graph, root = build_sib_plan(_SPECS, top_name="uart_tx")
     insert_sib_network(netlist, "uart_tx", graph, yosys_command=yosys_command)
 
-    ir_ops = _select_extest_ops() + _pdl_program(graph, root)
+    ir_ops = _select_ijtag_access_ops() + _pdl_program(graph, root)
     rows = _RESET_LEAD_IN + _stimulus_rows(ir_ops)
 
     inserted_verilog = write_verilog_from_json(netlist.to_json(), yosys_command=yosys_command)

@@ -1,12 +1,14 @@
-"""IJTAG_ACCESS (``insert_sib_network``'s ``ijtag_access_opcode``) on real inserted RTL.
+"""IJTAG_ACCESS (``insert_sib_network``'s ``ijtag_access_opcode``) on real inserted RTL, as
+``insert_sib_network`` inserts it by default.
 
 The network moves only under IJTAG_ACCESS. EXTEST, SAMPLE and PRELOAD select the 1-bit BYPASS
 register (there is no boundary register), so a board-level EXTEST and its DR scans leave the
 network, and the signal a WRITE instrument drives, untouched. Same design and checks as
-``test_sib_insert_extest_select_cross_sim.py``: real_signal.v with a WRITE instrument driving
-``ctrl_in`` (``status_out`` shows any commit one clock later), against TapModel(ijtag_access_opcode)
-with the network registered under IJTAG_ACCESS; each run ends with an IJTAG_ACCESS readout scan,
-so the network's state is compared too. A random walk then compares every TCK cycle.
+``test_sib_insert_extest_select_cross_sim.py`` (the EXTEST mode, ``ijtag_access_opcode=None``):
+real_signal.v with a WRITE instrument driving ``ctrl_in`` (``status_out`` shows any commit one
+clock later), against TapModel(ijtag_access_opcode) with the network registered under
+IJTAG_ACCESS; each run ends with an IJTAG_ACCESS readout scan, so the network's state is compared
+too. A random walk then compares every TCK cycle.
 """
 
 from __future__ import annotations
@@ -60,7 +62,8 @@ def _netlist(fixtures_dir, yosys_command, **options) -> tuple[Netlist, object]:
 
 @pytest.fixture(scope="module")
 def inserted(fixtures_dir, yosys_command):
-    netlist, graph = _netlist(fixtures_dir, yosys_command, ijtag_access_opcode=OPCODE_IJTAG_ACCESS)
+    """Inserted with the defaults: IJTAG_ACCESS at OPCODE_IJTAG_ACCESS."""
+    netlist, graph = _netlist(fixtures_dir, yosys_command)
     return graph, write_verilog_from_json(netlist.to_json(), yosys_command=yosys_command)
 
 
@@ -247,10 +250,12 @@ def test_a_random_walk_matches_the_model_every_cycle(
 
 
 def test_only_the_decode_and_tap_core_change(fixtures_dir, yosys_command):
-    """The decode compares with IJTAG_ACCESS's opcode, under its own name; with
+    """The decode compares with IJTAG_ACCESS's opcode, under its own name, by default; with
     ijtag_access_opcode=None it is the EXTEST decode it always was."""
-    netlist, _ = _netlist(fixtures_dir, yosys_command, ijtag_access_opcode=OPCODE_IJTAG_ACCESS)
-    cells = netlist.to_json()["modules"]["real_signal"]["cells"]
+    explicit, _ = _netlist(fixtures_dir, yosys_command, ijtag_access_opcode=OPCODE_IJTAG_ACCESS)
+    default, _ = _netlist(fixtures_dir, yosys_command)
+    assert default.to_json() == explicit.to_json()
+    cells = explicit.to_json()["modules"]["real_signal"]["cells"]
     assert "warptap_ijtag_extest_decode" not in cells
     assert cells["warptap_ijtag_access_decode"]["connections"]["B"] == ["0", "0", "1", "1"]
 
@@ -275,9 +280,19 @@ def test_insert_test_access_refuses_it_before_ingesting(fixtures_dir):
         )
 
 
-def test_insert_test_access_passes_the_opcode_through(fixtures_dir, yosys_command):
+@pytest.mark.parametrize(
+    ("options", "decode"),
+    [
+        ({}, "4'hc"),  # the default
+        ({"ijtag_access_opcode": OPCODE_IJTAG_ACCESS}, "4'hc"),
+        ({"ijtag_access_opcode": 0b0110}, "4'h6"),
+        ({"ijtag_access_opcode": None}, "4'h0"),  # EXTEST
+    ],
+    ids=["default", "explicit", "other_opcode", "extest"],
+)
+def test_insert_test_access_passes_the_opcode_through(options, decode, fixtures_dir, yosys_command):
     verilog, _graph, _root = insert_test_access(
         [fixtures_dir / "real_signal.v"], "real_signal", _SPECS,
-        ijtag_access_opcode=OPCODE_IJTAG_ACCESS, yosys_command=yosys_command,
+        yosys_command=yosys_command, **options,
     )
-    assert "warptap_current_instruction == 4'hc" in verilog
+    assert f"assign warptap_ijtag_select = warptap_current_instruction == {decode};" in verilog

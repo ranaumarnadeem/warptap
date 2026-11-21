@@ -23,6 +23,7 @@ from warptap.sim_io import run_verilog_testbench
 from warptap.tap_fsm import TapState
 from warptap.tap_ir import GotoState, ShiftIR, bits_to_int
 from warptap.tap_ir_play import shift_op_ranges, to_cycles
+from warptap.tap_model import OPCODE_IJTAG_ACCESS
 from warptap.yosys_io import ingest, write_verilog_from_json
 
 IR_WIDTH = 4
@@ -119,10 +120,12 @@ def _source_list(openmbist_dir: Path, wrapper_paths: dict[str, Path]) -> list[Pa
     ]
 
 
-def _select_extest_ops() -> list:
+def _select_ijtag_access_ops() -> list:
+    """Load IJTAG_ACCESS, the instruction that selects the network of a TAP inserted with the
+    defaults."""
     return [
         GotoState(TapState.SHIFT_IR),
-        ShiftIR(IR_WIDTH, tdi=bits_to_int([0] * IR_WIDTH)),  # OPCODE_EXTEST = 0
+        ShiftIR(IR_WIDTH, tdi=OPCODE_IJTAG_ACCESS),
         GotoState(TapState.RUN_TEST_IDLE),
     ]
 
@@ -192,7 +195,7 @@ def test_real_mem_subsystem_mbist_network_passes_overshift_check(
 ):
     netlist, graph = _build_and_insert(openmbist_dir, autombist_generator, yosys_command, tmp_path)
     target_open = frozenset({"sib_self_repair_start"})
-    ops = _select_extest_ops() + build_overshift_ops(graph, target_open, margin=8)
+    ops = _select_ijtag_access_ops() + build_overshift_ops(graph, target_open, margin=8)
 
     expected = expected_probe_tdo(graph, ops)
     observed = _run_on_rtl(fixtures_dir, yosys_command, iverilog_command, vvp_command, netlist, ops)
@@ -225,7 +228,7 @@ def test_real_mem_subsystem_mbist_network_detects_a_drifted_width_declaration(
     graph_declared = _declared_graph_with_width_override("self_repair_start", 2)
     target_open = frozenset({"sib_self_repair_start"})
 
-    ops = _select_extest_ops() + build_overshift_ops(graph_declared, target_open, margin=4)
+    ops = _select_ijtag_access_ops() + build_overshift_ops(graph_declared, target_open, margin=4)
     expected = expected_probe_tdo(graph_declared, ops)
     observed = _run_on_rtl(fixtures_dir, yosys_command, iverilog_command, vvp_command, netlist, ops)
     probe = ops[-2]
@@ -257,7 +260,7 @@ def test_real_mem_subsystem_mbist_network_low_margin_can_miss_the_same_defect(
     target_open = frozenset({"sib_self_repair_start"})
 
     def run(margin):
-        ops = _select_extest_ops() + build_overshift_ops(graph_declared, target_open, margin=margin)
+        ops = _select_ijtag_access_ops() + build_overshift_ops(graph_declared, target_open, margin=margin)
         expected = expected_probe_tdo(graph_declared, ops)
         observed = _run_on_rtl(
             fixtures_dir, yosys_command, iverilog_command, vvp_command, netlist, ops

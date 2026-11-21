@@ -23,6 +23,7 @@ from warptap.sim_io import run_verilog_testbench
 from warptap.tap_fsm import TapState
 from warptap.tap_ir import GotoState, ShiftIR, bits_to_int
 from warptap.tap_ir_play import shift_op_ranges, to_cycles
+from warptap.tap_model import OPCODE_IJTAG_ACCESS
 from warptap.yosys_io import ingest, write_verilog_from_json
 
 IR_WIDTH = 4
@@ -33,10 +34,12 @@ _SPECS = [
 ]
 
 
-def _select_extest_ops():
+def _select_ijtag_access_ops():
+    """Load IJTAG_ACCESS, the instruction that selects the network of a TAP inserted with the
+    defaults."""
     return [
         GotoState(TapState.SHIFT_IR),
-        ShiftIR(IR_WIDTH, tdi=bits_to_int([0] * IR_WIDTH)),  # OPCODE_EXTEST = 0
+        ShiftIR(IR_WIDTH, tdi=OPCODE_IJTAG_ACCESS),
         GotoState(TapState.RUN_TEST_IDLE),
     ]
 
@@ -96,7 +99,7 @@ def run_on_rtl(fixtures_dir, yosys_command, iverilog_command, vvp_command, netli
 def test_happy_path_matches_on_real_rtl(fixtures_dir, yosys_command, iverilog_command, vvp_command):
     netlist, graph_real = _build_and_insert(fixtures_dir, yosys_command)
     target_open = frozenset({"sib_sensor_a"})
-    ops = _select_extest_ops() + build_overshift_ops(graph_real, target_open, margin=4)
+    ops = _select_ijtag_access_ops() + build_overshift_ops(graph_real, target_open, margin=4)
 
     expected = expected_probe_tdo(graph_real, ops)
     observed = run_on_rtl(fixtures_dir, yosys_command, iverilog_command, vvp_command, netlist, ops)
@@ -124,7 +127,7 @@ def test_declared_width_wider_than_real_rtl_is_detected(
     target_open = frozenset({"sib_sensor_a"})
 
     for margin in (0, 3):
-        ops = _select_extest_ops() + build_overshift_ops(graph_declared, target_open, margin=margin)
+        ops = _select_ijtag_access_ops() + build_overshift_ops(graph_declared, target_open, margin=margin)
         expected = expected_probe_tdo(graph_declared, ops)
         observed = run_on_rtl(
             fixtures_dir, yosys_command, iverilog_command, vvp_command, netlist, ops
@@ -152,7 +155,7 @@ def test_inadequate_margin_can_miss_a_real_rtl_mismatch(
     target_open = frozenset({"sib_sensor_a"})
 
     def run(margin):
-        ops = _select_extest_ops() + build_overshift_ops(graph_declared, target_open, margin=margin)
+        ops = _select_ijtag_access_ops() + build_overshift_ops(graph_declared, target_open, margin=margin)
         expected = expected_probe_tdo(graph_declared, ops)
         observed = run_on_rtl(
             fixtures_dir, yosys_command, iverilog_command, vvp_command, netlist, ops

@@ -55,7 +55,7 @@ from warptap.sib_retarget import stage_open_sequence
 from warptap.tap_fsm import TapState
 from warptap.tap_ir import GotoState, ShiftDR, bits_from_int, bits_to_int
 from warptap.tap_ir_play import play
-from warptap.tap_model import Instruction, TapModel
+from warptap.tap_model import OPCODE_IJTAG_ACCESS, TapModel
 
 
 def default_sentinel_pattern(bits: int) -> int:
@@ -101,10 +101,11 @@ def build_overshift_ops(
     the network in the exact ``target_open`` state it found it in.
 
     Like ``PDLInterpreter.iApply``, this never selects a TAP instruction -- the caller is
-    responsible for having already selected an instruction whose data register is the SIB
-    network (EXTEST, matching every other stage's convention) before driving these ops,
-    exactly as ``tests/test_pdl_interpreter_cross_sim.py``'s own ``_select_extest_ops()``
-    preamble already does.
+    responsible for having already selected the instruction whose data register is the SIB
+    network before driving these ops: IJTAG_ACCESS for a TAP inserted with an
+    ``ijtag_access_opcode`` (the default), EXTEST for one inserted with ``None``, exactly as
+    ``tests/test_pdl_interpreter_cross_sim.py``'s own ``_select_ijtag_access_ops()`` preamble
+    does.
 
     ``margin=0`` is accepted (it's mechanically just a probe with no sentinel bits at all,
     i.e. the self-restoring tail alone) but provides no *reliable* detection guarantee (see
@@ -154,17 +155,24 @@ def build_overshift_ops(
     return ops
 
 
-def expected_probe_tdo(graph: PhysicalGraph, ops: list) -> int:
+def expected_probe_tdo(
+    graph: PhysicalGraph, ops: list, *, ijtag_access_opcode: Optional[int] = OPCODE_IJTAG_ACCESS
+) -> int:
     """Reference oracle: drive ``ops`` (which must already include any TAP-instruction-
     selection preamble the caller needs, and must end with the over-shift probe as its own
     last shift op -- exactly what ``build_overshift_ops`` alone, or a preamble followed by
     it, produces) against a FRESH ``TapModel`` + ``SibNetworkRegister(graph)`` pair -- fresh
     every call, never the subject's own register, so a corrupted live subject can't
     accidentally "predict" its own corruption. Returns the last entry of ``play()``'s
-    returned list -- the probe's own observed value, regardless of what preceded it."""
-    model = TapModel(has_idcode=True)
+    returned list -- the probe's own observed value, regardless of what preceded it.
+
+    The model's TAP is the one :func:`~warptap.sib_insert.insert_sib_network` inserts with the
+    same ``ijtag_access_opcode``: by default the network is IJTAG_ACCESS's data register, at
+    :data:`~warptap.tap_model.OPCODE_IJTAG_ACCESS`, so the preamble selects that opcode; with
+    ``ijtag_access_opcode=None`` it is EXTEST's."""
+    model = TapModel(has_idcode=True, ijtag_access_opcode=ijtag_access_opcode)
     reg = SibNetworkRegister(graph)
-    model.register_data_register(Instruction.EXTEST, reg)
+    model.register_data_register(model.network_instruction, reg)
     model.reset()
     reg.reset()
     model.tick(0, 0)  # TEST_LOGIC_RESET -> RUN_TEST_IDLE settle
