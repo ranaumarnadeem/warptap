@@ -60,10 +60,12 @@ separate, lower-level concern than what a network-topology description language 
 ``Instance <name> Of <ModuleType> { InputPort SI = <prevInstance>.SO; ... }`` statements, each
 SIB's ``SI`` explicitly bound to the previous slot's ``SO`` (or the top module's own ``TDI``
 for the first slot) -- mirrors :mod:`warptap.sib_insert`'s own ``prev_so`` threading exactly.
+Inside a SIB's or a ScanMux's segment that always holds. At the top level it holds only without
+an AccessLink; with one, the AccessLink's list connects the top-level slots instead (below).
 
 **``AccessLink ... Of STD_1149_1_2001`` binds the SIB chain to the real TAP.** Its shape is
 ``AccessLink <name> Of STD_1149_1_2001 { BSDLEntity <entity>; <INSTRUCTION> { ScanInterface {
-<instance>[.<scanIf>]; } } }``, where ``<INSTRUCTION>`` is a bare identifier naming an
+<instance>[.<scanIf>]; ... } } }``, where ``<INSTRUCTION>`` is a bare identifier naming an
 instruction in the BSDL file for ``<entity>``. Sources that confirmed it (read directly, not
 recalled): the vendored grammar (``third_party/icl_parser/src/icl_parser/icl.g4``, rules
 ``accessLink1149_def``/``bsdl_instr_ref``/``bsdl_instr_name``); the IJTAG benchmark set's
@@ -87,22 +89,28 @@ ijtag_access=True)`` names ``IJTAG_ACCESS`` instead
 (:data:`warptap.bsdl_emit.IJTAG_ACCESS_BSDL_INSTRUCTION`), the instruction the BSDL written
 with the same opcode declares; there, EXTEST and SAMPLE/PRELOAD select BYPASS.
 
-**The ``ScanInterface`` list names one interface: ``<slot>.client`` of the top-level slot whose
-``SO`` drives ``tdo``.** A SIB or ScanMux module declares two scan interfaces (``client`` and
-``host``), so the interface must be named: up to 0.0.5 the list held the bare instance name, and
-MAST (``kouamojulesquentin/MAST-AnalogTest``, built and run on warptap's ICL in November 2026)
-rejects it with ``Cannot find ScanInterface "" in instance``. MAST takes exactly one interface per
-instruction and walks back from that interface's scan-out port through every instance that
-feeds it, so the interface whose ``SO`` is the chain's end covers the whole chain; up to 0.0.5
-the list named the first slot instead, which covers only that slot. **Not confirmed by any
-tool**, and MAST cannot confirm it: it models no SIB below an AccessLink at all. Naming a
-top-level slot crashes it as it walks out of that instance into the rest of the top module.
-Its own AccessLink examples, like the standard's published ones, name a single instance that
-holds the whole network, and MAST does model a daisy chain of plain registers in that shape;
-but with a SIB in it, MAST's own ``SIB_mux_pre`` module as much as warptap's, it stops with an
-unresolved path-selector error. Moving warptap's network into such a wrapper module would
-change every instance path in the ICL and PDL and still not be checkable, so it is not done.
-The top-level slots' ``SEL`` ports stay unbound in the ``Instance`` statements.
+**The ``ScanInterface`` list names every top-level slot's ``client`` interface, TDI side first,
+and the top module then has no TAP ports and no top-level ``SI`` bindings: the AccessLink stands
+for the TAP and makes those connections.** Every published example that lists more than one
+element has this shape: the standard's Annex E.30 as transcribed in the IJTAG benchmark set
+(``ICL/Standard/E30.icl``: two core instances in one instruction's list, their scan inputs
+unconnected, in a top module with no scan ports), and the P1687-era listings in Zadegan et al.,
+"Reusing and Retargeting On-Chip Instrument Access Procedures in IEEE P1687" (2012), which list
+two top-level SIBs with the first one's ``si`` unbound and whose SVF values put the first-listed
+element nearest TDI. A second-hand summary of the standard, the notes in
+``0BananaBig0/icl_toolsets`` (a repository that describes itself as AI-created, not checked
+against the text), gives the same order for clause 6.4.17, and reports that Tessent 2026.2
+rejects an explicit binding of a listed interface's scan input, and a TAP scan-out port with a
+``Source``. Each entry names its interface because a SIB or ScanMux module declares two
+(``client`` and ``host``). Up to 0.0.6 the list held only the slot whose ``SO`` drives ``tdo``
+(up to 0.0.5, the first slot's bare instance name), next to an explicit ``tdi``-to-``tdo``
+chain in the top module; no published example has that shape. The other published shape, one
+wrapper instance holding the whole chain (a Tessent 2014.4 run used it), would add a level to
+every instance path in the ICL and PDL. **Not confirmed by any tool**: the vendored parser
+doesn't elaborate an AccessLink, Origen's o2 parses one and drops it, and MAST
+(``kouamojulesquentin/MAST-AnalogTest``) takes one interface per instruction and models no SIB
+below an AccessLink. The top-level slots' ``SEL`` ports stay unbound in the ``Instance``
+statements.
 
 **The vendored raw ICL parser checks the AccessLink's grammar only**: up to 0.0.6 it could not
 parse any ordinarily formatted AccessLink, because a *lexer* rule, ``AccessLinkGeneric_def``,
@@ -556,9 +564,16 @@ def render_instrument_module(instrument: InstrumentNode) -> str:
     return "\n".join(lines)
 
 
-def _render_scan_mux_instance(node: ScanMuxNode, prev_so: str) -> tuple:
+def _scan_in_binding(prev_so: str | None) -> str:
+    """A slot's ``InputPort SI = <prev_so>; `` binding, or nothing when ``prev_so`` is ``None``
+    (a top-level slot under an AccessLink, which makes that connection itself)."""
+    return "" if prev_so is None else f"InputPort SI = {prev_so}; "
+
+
+def _render_scan_mux_instance(node: ScanMuxNode, prev_so: str | None) -> tuple:
     """One :class:`~warptap.icl_model.ScanMuxNode`'s own ``Instance ... Of
-    warptap_scan_mux_<name>`` binds ``SI`` to ``prev_so`` and each ``fromArmK`` to that arm's
+    warptap_scan_mux_<name>`` binds ``SI`` to ``prev_so`` (unless it's ``None``, see
+    :func:`_scan_in_binding`) and each ``fromArmK`` to that arm's
     own gated content -- a leaf instrument's own ``SO``, or (recursively) a nested sub-chain's
     own final ``SO`` -- directly generalizing :func:`_render_chain_instances`'s own SibNode
     ``fromSO`` binding to N arms instead of one. Like :func:`render_instrument_module`'s own
@@ -602,7 +617,7 @@ def _render_scan_mux_instance(node: ScanMuxNode, prev_so: str) -> tuple:
                 f"{{ InputPort SI = {mux_instance}.toSI; }}"
             )
     lines = [
-        f"Instance {mux_instance} Of {mux_instance} {{ InputPort SI = {prev_so}; "
+        f"Instance {mux_instance} Of {mux_instance} {{ {_scan_in_binding(prev_so)}"
         + " ".join(arm_bindings)
         + " }"
     ]
@@ -610,9 +625,10 @@ def _render_scan_mux_instance(node: ScanMuxNode, prev_so: str) -> tuple:
     return lines, f"{mux_instance}.SO"
 
 
-def _render_chain_instances(chain, prev_so: str) -> tuple:
+def _render_chain_instances(chain, prev_so: str | None) -> tuple:
     """One level of a chain: each slot's own ``Instance <sib> Of warptap_sib`` binds ``SI``
-    to ``prev_so`` (the previous slot's ``SO``, or the caller's own entry point) and
+    to ``prev_so`` (the previous slot's ``SO``, or the caller's own entry point; ``None``
+    leaves every slot of this level unbound, see :func:`_scan_in_binding`) and
     ``fromSO`` to whatever it gates -- a leaf instrument's own ``SO``, or (recursively) a
     nested sub-chain's own final ``SO``, mirroring exactly how :func:`~warptap.sib_insert.
     _insert_chain` threads ``prev_so``/wires a hierarchy slot's ``nested_so``. A
@@ -622,9 +638,11 @@ def _render_chain_instances(chain, prev_so: str) -> tuple:
     reference, for the caller to thread as its own ``prev_so`` (top level) or bind into an
     enclosing SIB's own ``fromSO`` (nested)."""
     lines: List[str] = []
+    bound = prev_so is not None
     for node in chain:
+        scan_in = prev_so if bound else None
         if isinstance(node, ScanMuxNode):
-            mux_lines, prev_so = _render_scan_mux_instance(node, prev_so)
+            mux_lines, prev_so = _render_scan_mux_instance(node, scan_in)
             lines.extend(mux_lines)
             continue
 
@@ -644,7 +662,7 @@ def _render_chain_instances(chain, prev_so: str) -> tuple:
                 node.nested, prev_so=f"{sib_instance}.toSI"
             )
             lines.append(
-                f"Instance {sib_instance} Of {SIB_MODULE_TYPE} {{ InputPort SI = {prev_so}; "
+                f"Instance {sib_instance} Of {SIB_MODULE_TYPE} {{ {_scan_in_binding(scan_in)}"
                 f"InputPort fromSO = {nested_final_so}; }}"
             )
             lines.extend(nested_lines)
@@ -656,7 +674,7 @@ def _render_chain_instances(chain, prev_so: str) -> tuple:
                 )
             instr_instance = f"{INSTRUMENT_MODULE_PREFIX}{node.instrument.name}"
             lines.append(
-                f"Instance {sib_instance} Of {SIB_MODULE_TYPE} {{ InputPort SI = {prev_so}; "
+                f"Instance {sib_instance} Of {SIB_MODULE_TYPE} {{ {_scan_in_binding(scan_in)}"
                 f"InputPort fromSO = {instr_instance}.SO; }}"
             )
             lines.append(
@@ -667,15 +685,21 @@ def _render_chain_instances(chain, prev_so: str) -> tuple:
     return lines, prev_so
 
 
-def render_sib_instances(graph: PhysicalGraph) -> List[str]:
+def render_sib_instances(
+    graph: PhysicalGraph, *, bind_top_level_scan_ins: bool = True
+) -> List[str]:
     """One ``Instance <sib> Of warptap_sib { InputPort SI = <prev>.SO; }`` per slot in
     ``graph.chain`` (and, recursively, in any nested sub-chain -- see
     :func:`_render_chain_instances`), TDI-side-first -- ``SI`` bound to the previous slot's
     ``SO``, or to the top module's own ``TDI`` for the first slot, mirroring
     :mod:`warptap.sib_insert`'s own ``prev_so`` threading exactly. Each leaf instrument gets
     its own ``Instance <instr> Of warptap_instr_<name> { InputPort SI = <sib>.toSI; }``,
-    nested behind its gating SIB's own host-side scan-out."""
-    lines, _final_so = _render_chain_instances(graph.chain, prev_so=TDI)
+    nested behind its gating SIB's own host-side scan-out.
+
+    ``bind_top_level_scan_ins=False`` leaves the top-level slots' ``SI`` unbound, for an
+    AccessLink listing them to connect (:func:`to_icl`); nested slots stay bound either way."""
+    entry = TDI if bind_top_level_scan_ins else None
+    lines, _final_so = _render_chain_instances(graph.chain, prev_so=entry)
     return lines
 
 
@@ -729,19 +753,25 @@ def to_icl(
 
     Emits: ``render_sib_module_type()`` once, one ``render_scan_mux_module()`` per distinct
     :class:`~warptap.icl_model.ScanMuxNode` (any depth/branch), one ``render_instrument_
-    module()`` per distinct instrument, then the top module -- a ``ScanInterface`` naming the
-    five real JTAG pins (:mod:`warptap.tap_ports`), the SIB/mux/instrument ``Instance``
-    statements (``render_sib_instances``), and (when ``include_access_link``) a trailing
-    ``AccessLink warptap_tap Of STD_1149_1_2001`` block: ``BSDLEntity <entity>;`` then
-    ``EXTEST { ScanInterface { <last slot>.client; } }`` -- the instruction that selects the
-    network (:data:`warptap.bsdl_emit.NETWORK_ACCESS_BSDL_INSTRUCTION`), named exactly as
-    :func:`warptap.bsdl_emit.to_bsdl` declares it, so the ICL and the BSDL agree, and the
-    ``client`` interface of the slot whose ``SO`` drives ``tdo``. The module docstring lists the
-    sources that confirmed this syntax, why that slot, and what is still unconfirmed. No
-    ``ActiveSignals`` clause: it names signals the AccessLink itself provides, and warptap's
-    network needs none. The last slot works here whether it's a SIB or a mux -- both module
-    kinds declare the identically-shaped ``ScanInterface client { Port SI; Port SEL;
-    Port SO; }``.
+    module()`` per distinct instrument, then the top module, in one of two forms.
+
+    With ``include_access_link`` (the default), the top module holds the SIB/mux/instrument
+    ``Instance`` statements (``render_sib_instances``) with the top-level slots' ``SI`` unbound,
+    then a trailing ``AccessLink warptap_tap Of STD_1149_1_2001`` block: ``BSDLEntity <entity>;``
+    then ``<instruction> { ScanInterface { <slot>.client; ... } }``, which lists the ``client``
+    interface of every top-level slot from TDI to TDO (a SIB and a mux both declare the same
+    ``ScanInterface client { Port SI; Port SEL; Port SO; }``). The instruction is the one that
+    selects the network (:data:`warptap.bsdl_emit.NETWORK_ACCESS_BSDL_INSTRUCTION`, or see
+    ``ijtag_access``), named exactly as :func:`warptap.bsdl_emit.to_bsdl` declares it, so the
+    ICL and the BSDL agree. The top module declares no TAP ports: the AccessLink stands for the
+    TAP. No ``ActiveSignals`` clause: it names signals the AccessLink itself provides, and
+    warptap's network needs none. The module docstring lists the sources for this shape and
+    what is still unconfirmed.
+
+    With ``include_access_link=False``, the top module declares the five JTAG pins and a
+    ``ScanInterface tap`` naming them (:mod:`warptap.tap_ports`), and chains the slots itself:
+    ``tdi`` into the first top-level slot's ``SI``, each slot's ``SO`` into the next one's, and
+    the last one's ``SO`` as ``tdo``'s ``Source``.
 
     ``bsdl_entity_name`` sets the ``BSDLEntity`` name (default: ``root.name``, the top module's
     name); pass the same string given to :func:`warptap.bsdl_emit.to_bsdl` when the BSDL file's
@@ -753,15 +783,13 @@ def to_icl(
     it for a TAP inserted with an ``ijtag_access_opcode``, whose BSDL (``to_bsdl`` given the same
     opcode) declares that instruction.
 
-    ``include_access_link`` defaults to ``True``. ``include_access_link=False`` output is
-    unchanged by everything above (pinned byte-for-byte by ``tests/test_icl_emit_golden.py``).
-    The vendored ``Honza255/icl_parser`` -- Stage 10's own live-validation oracle -- raises "Not
-    supported" for `AccessLink` regardless of what's inside it (verified directly against the
-    real library, not assumed), and additionally mis-lexes an ordinarily formatted AccessLink
-    header (see the module docstring), so callers validating against that specific tool should
-    pass ``include_access_link=False``; that is a real limitation of that one external tool, not
-    of the ICL this function emits, and is documented here rather than silently worked around.
-    Raises :class:`IclEmitError` for anything v1 can't represent."""
+    ``include_access_link=False`` output is pinned byte-for-byte by
+    ``tests/test_icl_emit_golden.py``. The vendored ``Honza255/icl_parser`` -- Stage 10's own
+    live-validation oracle -- raises "Not supported" for any ``AccessLink`` regardless of what's
+    inside it (verified directly against the real library, not assumed), so callers validating
+    against that tool, and :func:`warptap.icl_import.import_icl`, need
+    ``include_access_link=False``; that is a limitation of that one external tool, not of the
+    ICL this function emits. Raises :class:`IclEmitError` for anything v1 can't represent."""
     if include_access_link:
         if not graph.chain:
             raise IclEmitError(
@@ -783,35 +811,44 @@ def to_icl(
     for instrument in seen_instruments.values():
         module_type_blocks.append(render_instrument_module(instrument))
 
-    instance_lines = render_sib_instances(graph)
-    tdo_slot = _slot_instance_name(graph.chain[-1]) if graph.chain else None
-    last_so = f"{tdo_slot}.SO" if graph.chain else TDI
-    # Both a SibNode's own SO (render_sib_module_type's SR) and a ScanMuxNode's own SO
-    # (render_scan_mux_module's SO/SELREG pairing, now correctly scalar per
-    # _scan_port_bit_ref's own docstring) are always exactly 1 bit -- tdo, the real physical
-    # TDO pin, stays scalar unconditionally, matching every other top-level TAP pin here.
-    top_lines = [
-        f"Module {root.name} {{",
-        f"    ScanInPort {TDI};",
-        f"    ScanOutPort {TDO} {{ Source {last_so if graph.chain else TDI}; }}",
-        f"    TCKPort {TCK};",
-        f"    TMSPort {TMS};",
-        f"    TRSTPort {TRST_N};",
-        "    ScanInterface tap { "
-        + " ".join(f"Port {p};" for p in (TDI, TDO, TCK, TMS, TRST_N))
-        + " }",
-        "",
-    ]
-    top_lines.extend(f"    {line}" for line in instance_lines)
     if include_access_link:
-        top_lines.append("")
-        top_lines.append("    AccessLink warptap_tap Of STD_1149_1_2001 {")
-        top_lines.append(f"        BSDLEntity {bsdl_entity_name or root.name};")
+        # The AccessLink stands for the TAP: no TAP ports here, and the top-level slots' SI are
+        # left for its list to connect, first-listed nearest TDI (see the module docstring).
+        top_lines = [f"Module {root.name} {{"]
+        top_lines.extend(
+            f"    {line}" for line in render_sib_instances(graph, bind_top_level_scan_ins=False)
+        )
         instruction = (
             IJTAG_ACCESS_BSDL_INSTRUCTION if ijtag_access else NETWORK_ACCESS_BSDL_INSTRUCTION
         )
-        top_lines.append(f"        {instruction} {{ ScanInterface {{ {tdo_slot}.client; }} }}")
-        top_lines.append("    }")
+        top_lines += [
+            "",
+            "    AccessLink warptap_tap Of STD_1149_1_2001 {",
+            f"        BSDLEntity {bsdl_entity_name or root.name};",
+            f"        {instruction} {{ ScanInterface {{",
+            *(f"            {_slot_instance_name(slot)}.client;" for slot in graph.chain),
+            "        } }",
+            "    }",
+        ]
+    else:
+        last_so = f"{_slot_instance_name(graph.chain[-1])}.SO" if graph.chain else TDI
+        # Both a SibNode's own SO (render_sib_module_type's SR) and a ScanMuxNode's own SO
+        # (render_scan_mux_module's SO/SELREG pairing, now correctly scalar per
+        # _scan_port_bit_ref's own docstring) are always exactly 1 bit -- tdo, the real physical
+        # TDO pin, stays scalar unconditionally, matching every other top-level TAP pin here.
+        top_lines = [
+            f"Module {root.name} {{",
+            f"    ScanInPort {TDI};",
+            f"    ScanOutPort {TDO} {{ Source {last_so}; }}",
+            f"    TCKPort {TCK};",
+            f"    TMSPort {TMS};",
+            f"    TRSTPort {TRST_N};",
+            "    ScanInterface tap { "
+            + " ".join(f"Port {p};" for p in (TDI, TDO, TCK, TMS, TRST_N))
+            + " }",
+            "",
+        ]
+        top_lines.extend(f"    {line}" for line in render_sib_instances(graph))
     top_lines.append("}")
 
     return "\n\n".join(module_type_blocks) + "\n\n" + "\n".join(top_lines) + "\n"

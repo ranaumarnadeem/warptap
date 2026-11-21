@@ -45,13 +45,27 @@ def test_realistic_network_renders_one_module_per_distinct_type():
 
 def test_realistic_network_chains_all_three_sibs_tdi_side_first():
     graph, root = build_sib_plan(_SPECS, top_name="chip")
-    text = to_icl(graph, root)
+    text = to_icl(graph, root, include_access_link=False)
 
     assert "InputPort SI = tdi;" in text
     assert "InputPort SI = warptap_sib_sensor_a.SO;" in text
     assert "InputPort SI = warptap_sib_status_b.SO;" in text
     # The final SIB's SO feeds the top module's own tdo.
     assert "Source warptap_sib_ctrl_write.SO;" in text
+
+
+def test_realistic_network_access_link_lists_all_three_sibs_tdi_side_first():
+    graph, root = build_sib_plan(_SPECS, top_name="chip")
+    text = to_icl(graph, root)
+
+    assert (
+        "{ ScanInterface {\n"
+        "            warptap_sib_sensor_a.client;\n"
+        "            warptap_sib_status_b.client;\n"
+        "            warptap_sib_ctrl_write.client;\n"
+        "        } }"
+    ) in text
+    assert "InputPort SI = tdi;" not in text
 
 
 def test_realistic_network_has_no_endmodule_anywhere():
