@@ -92,15 +92,19 @@ pdl.iApply()
 ### 4. Emit a pattern file
 
 Every op `PDLInterpreter` recorded is sitting in `pdl.program`. It holds data-register scans
-only, so put the instruction load in front: the network moves only while EXTEST is loaded, and
-every reset loads IDCODE. Then render it as whichever ATE format you need:
+only, so put the instruction load in front: the network moves only while IJTAG_ACCESS, its own
+instruction (opcode `1100`), is loaded, and every reset loads IDCODE. Then render it as
+whichever ATE format you need:
 
 ```python
 from warptap import select_instruction, to_svf
-from warptap.tap_model import OPCODE_EXTEST
+from warptap.tap_model import OPCODE_IJTAG_ACCESS
 
-print(to_svf(select_instruction(OPCODE_EXTEST) + pdl.program))
+print(to_svf(select_instruction(OPCODE_IJTAG_ACCESS) + pdl.program))
 ```
+
+A TAP inserted with `ijtag_access_opcode=None` selects the network with EXTEST instead; load
+`OPCODE_EXTEST` for it (see [The network's instruction](reference/insertion.md#the-networks-instruction)).
 
 `to_stapl`/`to_stil` render the identical `pdl.program` as STAPL/STIL instead. `to_icl`
 describes the inserted network's own topology as real ICL text. Every exception this library

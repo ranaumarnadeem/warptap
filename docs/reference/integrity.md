@@ -22,6 +22,11 @@ assert result.passed, result.failures  # the first mismatch of each failing test
 program_json = program.to_json()  # a warptap-tck-program file, for a tool without warptap
 ```
 
+`build_integrity_program(..., tap=TapConfig(...))` names the TAP the program is for. The default
+`TapConfig()` is the one `insert_test_access` inserts by default: IJTAG_ACCESS at `1100` selects
+the network, and the program also checks that EXTEST and SAMPLE/PRELOAD act as BYPASS. For a TAP
+inserted with `ijtag_access_opcode=None`, use `TapConfig(ijtag_access_opcode=None)`.
+
 ::: warptap.tap_integrity
     options:
       members: [build_integrity_program, check_integrity, select_instruction, TapConfig, IntegrityProgram, IntegrityTest, TckCycle, IntegrityResult, IntegrityFailure, TapIntegrityError, TRST_LEAD_IN, TMS_RESET_LEAD_IN]

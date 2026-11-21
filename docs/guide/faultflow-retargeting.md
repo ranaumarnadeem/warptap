@@ -9,7 +9,7 @@ pattern through it, returning the accumulated ops.
 
 ```python
 from warptap import retarget_faultflow_patterns, select_instruction, to_stil
-from warptap.tap_model import OPCODE_EXTEST
+from warptap.tap_model import OPCODE_IJTAG_ACCESS
 
 patterns = json.loads(exported_patterns_path.read_text())
 
@@ -21,8 +21,8 @@ ops = retarget_faultflow_patterns(
     clock_pulse_count=1,
 )
 
-# The ops are data-register scans only; the network moves only while EXTEST is loaded.
-print(to_stil(select_instruction(OPCODE_EXTEST) + ops, pulse_periods={"sysclk": "20ns"}))
+# The ops are data-register scans only; the network moves only while IJTAG_ACCESS is loaded.
+print(to_stil(select_instruction(OPCODE_IJTAG_ACCESS) + ops, pulse_periods={"sysclk": "20ns"}))
 ```
 
 `clock_port`/`clock_pulse_count` matter when a pattern's own capture depends on a real

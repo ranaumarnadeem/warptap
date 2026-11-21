@@ -5,12 +5,13 @@ warptap inserts. It writes two kinds of file:
 
 - **TAP-only**, for a SIB-network design: the file the ICL `AccessLink` written by
   [`to_icl`](icl.md) points at, so ICL, BSDL and PDL together say how to reach the network. It
-  declares no boundary register, so tools that require one will reject it.
+  declares IJTAG_ACCESS (`1100`), the instruction that selects the network, and no boundary
+  register, so tools that require one will reject it.
 - **Chip-level**, for a design with a boundary-scan register (`insert_bsr`): every port with its
   declared range, the boundary register cell by cell, and EXTEST, SAMPLE and PRELOAD selecting
   it.
 
-See the module docstring below for the exact scope, what `EXTEST` means for a SIB network, and
+See the module docstring below for the exact scope, which instruction selects a SIB network, and
 what is (and is not) independently validated.
 
 ```python
@@ -33,6 +34,12 @@ Give `to_bsdl` the same `tdo_drive` as well ([The TDO pin](insertion.md#the-tdo-
 default the inserted TDO is tri-stated outside the shift states and the `DESIGN_WARNING` says
 nothing about it; with `"low"` it says the TAP is not fully IEEE 1149.1 conformant, and with
 `"enable_port"` that the pad does the tri-state, enabled by `tdo_oe`.
+
+Give it the same `ijtag_access_opcode` too
+([The network's instruction](insertion.md#the-networks-instruction)). By default both have
+IJTAG_ACCESS at `1100`, and `REGISTER_ACCESS` gives EXTEST, SAMPLE and PRELOAD the BYPASS
+register, which is what they select there. For a TAP inserted with `ijtag_access_opcode=None`,
+pass `to_bsdl` the same `None`: the file then names EXTEST as the network's instruction.
 
 ## A boundary-scan design
 
