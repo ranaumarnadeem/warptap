@@ -267,8 +267,9 @@ def test_five_consecutive_tms1_cycles_reach_reset_from_any_state():
 
 def test_network_access_instruction_is_extest_and_decodes_from_its_opcode():
     """The instruction named to consumers (ICL AccessLink, BSDL) as the one that reaches the
-    IJTAG network: rtl/tap_core.v routes external_dr_tdo for it, so it must be one of the
-    instructions with no built-in data register (EXTEST/SAMPLE_PRELOAD), never IDCODE/BYPASS."""
+    IJTAG network of a TAP inserted with ijtag_access_opcode=None, TapModel's default:
+    rtl/tap_core.v routes external_dr_tdo for it, so it must be one of the instructions with no
+    built-in data register (EXTEST/SAMPLE_PRELOAD), never IDCODE/BYPASS."""
     assert NETWORK_ACCESS_INSTRUCTION is Instruction.EXTEST
     assert decode_instruction(OPCODE_EXTEST, 4) is NETWORK_ACCESS_INSTRUCTION
     assert NETWORK_ACCESS_INSTRUCTION not in (Instruction.IDCODE, Instruction.BYPASS)
@@ -345,3 +346,11 @@ def test_the_ijtag_access_opcode_follows_the_ir_width():
     assert ijtag_access_opcode_error(0b11100, ir_width=5) is None
     assert "BYPASS" in ijtag_access_opcode_error(0b11111, ir_width=5)
     assert ijtag_access_opcode_error(0b1111, ir_width=5) is None
+    # The default opcode needs 4 bits; the error says what to pass instead.
+    assert ijtag_access_opcode_error(OPCODE_IJTAG_ACCESS, ir_width=5) is None
+    problem = ijtag_access_opcode_error(OPCODE_IJTAG_ACCESS, ir_width=3)
+    assert "does not fit a 3-bit instruction register" in problem
+    assert "ijtag_access_opcode=None" in problem
+    with pytest.raises(TapModelError, match="does not fit"):
+        TapModel(ir_width=3, ijtag_access_opcode=OPCODE_IJTAG_ACCESS)
+    assert TapModel(ir_width=3).network_instruction is Instruction.EXTEST  # the default: None

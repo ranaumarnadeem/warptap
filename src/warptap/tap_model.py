@@ -37,10 +37,11 @@ OPCODE_IDCODE = 0b0001
 
 # The opcode of IJTAG_ACCESS, the instruction that selects the IJTAG network: the default
 # ``ijtag_access_opcode`` of insert_sib_network, insert_test_access, to_bsdl (without a boundary
-# register) and TapConfig, so the TAP warptap inserts has it unless asked for EXTEST instead
-# (``ijtag_access_opcode=None``). TapModel's default is None. The only 4-bit value at least two
-# bits from each of EXTEST, SAMPLE/PRELOAD, IDCODE and BYPASS, so one corrupted IR bit can't turn
-# a board instruction into it.
+# register), TapConfig and sib_overshift.expected_probe_tdo, so the TAP warptap inserts has it
+# unless asked for EXTEST instead (``ijtag_access_opcode=None``), and to_icl's AccessLink names
+# it by default. TapModel's default is None. The only 4-bit value at least two bits from each of
+# EXTEST, SAMPLE/PRELOAD, IDCODE and BYPASS, so one corrupted IR bit can't turn a board
+# instruction into it.
 OPCODE_IJTAG_ACCESS = 0b1100
 
 # The pattern Capture-IR loads is deliberately equal to OPCODE_IDCODE: if a shift sequence

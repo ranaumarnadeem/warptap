@@ -39,8 +39,8 @@ module sib_cell (
                                   // otherwise flicker it off mid-shift, freezing the nested
                                   // SIB the moment this one's shift_ff happens to read 0.
     input  wire select,          // AND-ed into every local action; sib_insert.py wires a
-                                  // top-level SIB's to the TAP's EXTEST decode, so the
-                                  // network moves only on EXTEST DR scans
+                                  // top-level SIB's to the TAP's decode of the network's
+                                  // instruction, so the network moves only on its DR scans
     input  wire capture_dr,
     input  wire shift_dr,
     input  wire update_dr,
