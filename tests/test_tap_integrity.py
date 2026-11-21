@@ -40,6 +40,9 @@ from warptap.tap_model import (
 
 MARGIN = 4
 
+_EXTEST = TapConfig(ijtag_access_opcode=None)  # the network selected by EXTEST
+_IJTAG_ACCESS = TapConfig(ijtag_access_opcode=OPCODE_IJTAG_ACCESS)
+
 _FLAT = [
     InstrumentSpec(
         "ctrl", width=2, capture_value=0,
@@ -75,8 +78,8 @@ _TAP_PATHS = [
 ]
 
 
-def test_tests_run_in_order():
-    names = [t.name for t in _program().tests]
+def test_tests_run_in_order_with_extest():
+    names = [t.name for t in _program(tap=_EXTEST).tests]
     assert names[:3] == ["reset_instruction", "instruction_register", "bypass"]
     assert names[3:15] == [f"opcode_{op:04b}" for op in range(16) if op not in (0, 1, 2, 15)]
     assert names[15:] == [
@@ -88,7 +91,7 @@ def test_tests_run_in_order():
 
 
 def test_tap_paths_and_network_hold_can_be_left_out():
-    names = [t.name for t in _program(tap_paths=False, network_hold=False).tests]
+    names = [t.name for t in _program(tap=_EXTEST, tap_paths=False, network_hold=False).tests]
     assert names[15:] == [
         "idcode", "network_closed",
         "open_sib_ctrl", "open_sib_status", "open_sib_stub", "open_all",
@@ -155,7 +158,7 @@ def test_without_idcode_the_reset_instruction_is_bypass():
 
 
 def test_opcodes_follow_the_ir_width():
-    names = [t.name for t in _program(tap=TapConfig(ir_width=5)).tests]
+    names = [t.name for t in _program(tap=TapConfig(ir_width=5, ijtag_access_opcode=None)).tests]
     assert sum(n.startswith("opcode_") for n in names) == 32 - 4
     assert "opcode_00011" in names
     assert not any(n.startswith("opcode_") for n in [t.name for t in _program(
@@ -250,10 +253,10 @@ def test_captures_overwrite_a_register_holding_the_complement():
     assert bits == [0, 1] + [0] + _sentinel(1 + MARGIN)[:MARGIN]
 
 
-def test_sample_preload_shows_the_network_tail_without_moving_it():
+def test_with_extest_sample_preload_shows_the_network_tail_without_moving_it():
     """open_all left the last SIB (stub's) open, so its bit, 1, is on TDO for the whole
     scan; the network isn't selected, so network_hold then captures it unchanged."""
-    program = _program()
+    program = _program(tap=_EXTEST)
     bits = _shifted(program, "sample_preload")[4:]
     assert bits == [1] * (3 + MARGIN)
 
@@ -357,8 +360,6 @@ def test_select_instruction_checks_the_opcode_width():
 
 # --- a TAP with IJTAG_ACCESS ----------------------------------------------------------------------
 
-_IJTAG_ACCESS = TapConfig(ijtag_access_opcode=OPCODE_IJTAG_ACCESS)
-
 
 def test_with_ijtag_access_extest_and_sample_preload_are_tested_as_bypass():
     """EXTEST's and SAMPLE/PRELOAD's opcodes join the unimplemented ones (BYPASS), IJTAG_ACCESS's
@@ -393,9 +394,9 @@ def test_with_ijtag_access_the_network_is_selected_by_its_opcode():
             tdi = [c.tdi for c in program.cycles if c.test == name and c.shift][:4]
             assert tdi == bits_from_int(OPCODE_IJTAG_ACCESS, 4)
     # The network's own tests read what the EXTEST program's read: only the TAP differs.
-    default = _program()
+    extest = _program(tap=_EXTEST)
     for name in ("network_closed", "open_all", "network_hold", "write_readback_ctrl"):
-        assert _shifted(program, name)[4:] == _shifted(default, name)[4:]
+        assert _shifted(program, name)[4:] == _shifted(extest, name)[4:]
 
 
 def test_an_ijtag_access_program_round_trips_through_json_and_says_so():
@@ -405,7 +406,10 @@ def test_an_ijtag_access_program_round_trips_through_json_and_says_so():
     loaded = IntegrityProgram.from_json(data)
     assert loaded.tap == _IJTAG_ACCESS
     assert loaded.cycles == program.cycles
-    assert "ijtag_access_opcode" not in _program().to_json()["tap"]  # default JSON unchanged
+    # An EXTEST program's JSON is as before: no opcode, which reads back as EXTEST.
+    extest = _program(tap=_EXTEST).to_json()
+    assert "ijtag_access_opcode" not in extest["tap"]
+    assert IntegrityProgram.from_json(extest).tap == _EXTEST
 
 
 @pytest.mark.parametrize("opcode", [0b0000, 0b0010, 0b0001, 0b1111, 0b10000])

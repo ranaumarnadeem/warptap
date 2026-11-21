@@ -52,10 +52,13 @@ def test_access_link_entity_and_instruction_are_declared_in_the_bsdl(case, entit
     assert icl_instruction in _network_instructions(bsdl)
 
 
-def test_the_named_instruction_is_opcode_0000_as_the_bsdl_declares():
+def test_the_extest_named_instruction_is_opcode_0000_as_the_bsdl_declares():
     graph, root = CASES["flat_read_write"]()
-    (instruction,) = _INSTRUCTION.findall(to_icl(graph, root, include_access_link=True))
-    assert parse_bsdl(to_bsdl("chip", tck_max_freq_hz=10e6)).opcodes[instruction] == ["0000"]
+    icl = to_icl(graph, root, include_access_link=True, ijtag_access=False)
+    (instruction,) = _INSTRUCTION.findall(icl)
+    bsdl = to_bsdl("chip", tck_max_freq_hz=10e6, ijtag_access_opcode=None)
+    assert instruction == "EXTEST"
+    assert parse_bsdl(bsdl).opcodes[instruction] == ["0000"]
 
 
 @pytest.mark.parametrize("ijtag_access", [False, True])

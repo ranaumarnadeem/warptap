@@ -118,14 +118,17 @@ def _trivial_netlist(fixtures_dir, yosys_command):
 
 def test_the_default_value_keeps_the_plain_tap_core_import(fixtures_dir, yosys_command, monkeypatch):
     """Re-importing tap_core through ``chparam`` changes Yosys's output even at the default
-    value, so the default must never take that path."""
+    value, so the default must never take that path. Checked where nothing else asks for it:
+    with ``ijtag_access_opcode=None``, whose network EXTEST selects at tap_core's own opcode."""
 
     def forbidden(*args, **kwargs):
         raise AssertionError("ingest_with_params called for the default IDCODE value")
 
     monkeypatch.setattr(sib_insert, "ingest_with_params", forbidden)
     netlist, graph = _trivial_netlist(fixtures_dir, yosys_command)
-    insert_sib_network(netlist, "trivial", graph, yosys_command=yosys_command)
+    insert_sib_network(
+        netlist, "trivial", graph, yosys_command=yosys_command, ijtag_access_opcode=None
+    )
     assert "tap_core" in netlist.to_json()["modules"]
 
 
@@ -139,6 +142,9 @@ def test_a_custom_value_is_baked_into_tap_core_via_chparam(fixtures_dir, yosys_c
 
     monkeypatch.setattr(sib_insert, "ingest_with_params", spy)
     netlist, graph = _trivial_netlist(fixtures_dir, yosys_command)
-    insert_sib_network(netlist, "trivial", graph, idcode_value=_CUSTOM, yosys_command=yosys_command)
+    insert_sib_network(
+        netlist, "trivial", graph, idcode_value=_CUSTOM, yosys_command=yosys_command,
+        ijtag_access_opcode=None,
+    )
     assert calls == [("tap_core", {"IDCODE_VALUE": _CUSTOM})]
     assert "tap_core" in netlist.to_json()["modules"]

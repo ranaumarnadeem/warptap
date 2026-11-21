@@ -247,14 +247,14 @@ def test_a_random_walk_matches_the_model_every_cycle(
 
 
 def test_only_the_decode_and_tap_core_change(fixtures_dir, yosys_command):
-    """The decode compares with IJTAG_ACCESS's opcode, under its own name; without the option
-    it is the EXTEST decode it always was."""
+    """The decode compares with IJTAG_ACCESS's opcode, under its own name; with
+    ijtag_access_opcode=None it is the EXTEST decode it always was."""
     netlist, _ = _netlist(fixtures_dir, yosys_command, ijtag_access_opcode=OPCODE_IJTAG_ACCESS)
     cells = netlist.to_json()["modules"]["real_signal"]["cells"]
     assert "warptap_ijtag_extest_decode" not in cells
     assert cells["warptap_ijtag_access_decode"]["connections"]["B"] == ["0", "0", "1", "1"]
 
-    netlist, _ = _netlist(fixtures_dir, yosys_command)
+    netlist, _ = _netlist(fixtures_dir, yosys_command, ijtag_access_opcode=None)
     cells = netlist.to_json()["modules"]["real_signal"]["cells"]
     assert "warptap_ijtag_access_decode" not in cells
     assert cells["warptap_ijtag_extest_decode"]["connections"]["B"] == ["0", "0", "0", "0"]
