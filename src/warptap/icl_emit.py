@@ -556,9 +556,16 @@ def render_instrument_module(instrument: InstrumentNode) -> str:
     return "\n".join(lines)
 
 
-def _render_scan_mux_instance(node: ScanMuxNode, prev_so: str) -> tuple:
+def _scan_in_binding(prev_so: str | None) -> str:
+    """A slot's ``InputPort SI = <prev_so>; `` binding, or nothing when ``prev_so`` is ``None``
+    (a top-level slot under an AccessLink, which makes that connection itself)."""
+    return "" if prev_so is None else f"InputPort SI = {prev_so}; "
+
+
+def _render_scan_mux_instance(node: ScanMuxNode, prev_so: str | None) -> tuple:
     """One :class:`~warptap.icl_model.ScanMuxNode`'s own ``Instance ... Of
-    warptap_scan_mux_<name>`` binds ``SI`` to ``prev_so`` and each ``fromArmK`` to that arm's
+    warptap_scan_mux_<name>`` binds ``SI`` to ``prev_so`` (unless it's ``None``, see
+    :func:`_scan_in_binding`) and each ``fromArmK`` to that arm's
     own gated content -- a leaf instrument's own ``SO``, or (recursively) a nested sub-chain's
     own final ``SO`` -- directly generalizing :func:`_render_chain_instances`'s own SibNode
     ``fromSO`` binding to N arms instead of one. Like :func:`render_instrument_module`'s own
@@ -602,7 +609,7 @@ def _render_scan_mux_instance(node: ScanMuxNode, prev_so: str) -> tuple:
                 f"{{ InputPort SI = {mux_instance}.toSI; }}"
             )
     lines = [
-        f"Instance {mux_instance} Of {mux_instance} {{ InputPort SI = {prev_so}; "
+        f"Instance {mux_instance} Of {mux_instance} {{ {_scan_in_binding(prev_so)}"
         + " ".join(arm_bindings)
         + " }"
     ]
@@ -610,9 +617,10 @@ def _render_scan_mux_instance(node: ScanMuxNode, prev_so: str) -> tuple:
     return lines, f"{mux_instance}.SO"
 
 
-def _render_chain_instances(chain, prev_so: str) -> tuple:
+def _render_chain_instances(chain, prev_so: str | None) -> tuple:
     """One level of a chain: each slot's own ``Instance <sib> Of warptap_sib`` binds ``SI``
-    to ``prev_so`` (the previous slot's ``SO``, or the caller's own entry point) and
+    to ``prev_so`` (the previous slot's ``SO``, or the caller's own entry point; ``None``
+    leaves every slot of this level unbound, see :func:`_scan_in_binding`) and
     ``fromSO`` to whatever it gates -- a leaf instrument's own ``SO``, or (recursively) a
     nested sub-chain's own final ``SO``, mirroring exactly how :func:`~warptap.sib_insert.
     _insert_chain` threads ``prev_so``/wires a hierarchy slot's ``nested_so``. A
@@ -622,9 +630,11 @@ def _render_chain_instances(chain, prev_so: str) -> tuple:
     reference, for the caller to thread as its own ``prev_so`` (top level) or bind into an
     enclosing SIB's own ``fromSO`` (nested)."""
     lines: List[str] = []
+    bound = prev_so is not None
     for node in chain:
+        scan_in = prev_so if bound else None
         if isinstance(node, ScanMuxNode):
-            mux_lines, prev_so = _render_scan_mux_instance(node, prev_so)
+            mux_lines, prev_so = _render_scan_mux_instance(node, scan_in)
             lines.extend(mux_lines)
             continue
 
@@ -644,7 +654,7 @@ def _render_chain_instances(chain, prev_so: str) -> tuple:
                 node.nested, prev_so=f"{sib_instance}.toSI"
             )
             lines.append(
-                f"Instance {sib_instance} Of {SIB_MODULE_TYPE} {{ InputPort SI = {prev_so}; "
+                f"Instance {sib_instance} Of {SIB_MODULE_TYPE} {{ {_scan_in_binding(scan_in)}"
                 f"InputPort fromSO = {nested_final_so}; }}"
             )
             lines.extend(nested_lines)
@@ -656,7 +666,7 @@ def _render_chain_instances(chain, prev_so: str) -> tuple:
                 )
             instr_instance = f"{INSTRUMENT_MODULE_PREFIX}{node.instrument.name}"
             lines.append(
-                f"Instance {sib_instance} Of {SIB_MODULE_TYPE} {{ InputPort SI = {prev_so}; "
+                f"Instance {sib_instance} Of {SIB_MODULE_TYPE} {{ {_scan_in_binding(scan_in)}"
                 f"InputPort fromSO = {instr_instance}.SO; }}"
             )
             lines.append(
@@ -667,15 +677,21 @@ def _render_chain_instances(chain, prev_so: str) -> tuple:
     return lines, prev_so
 
 
-def render_sib_instances(graph: PhysicalGraph) -> List[str]:
+def render_sib_instances(
+    graph: PhysicalGraph, *, bind_top_level_scan_ins: bool = True
+) -> List[str]:
     """One ``Instance <sib> Of warptap_sib { InputPort SI = <prev>.SO; }`` per slot in
     ``graph.chain`` (and, recursively, in any nested sub-chain -- see
     :func:`_render_chain_instances`), TDI-side-first -- ``SI`` bound to the previous slot's
     ``SO``, or to the top module's own ``TDI`` for the first slot, mirroring
     :mod:`warptap.sib_insert`'s own ``prev_so`` threading exactly. Each leaf instrument gets
     its own ``Instance <instr> Of warptap_instr_<name> { InputPort SI = <sib>.toSI; }``,
-    nested behind its gating SIB's own host-side scan-out."""
-    lines, _final_so = _render_chain_instances(graph.chain, prev_so=TDI)
+    nested behind its gating SIB's own host-side scan-out.
+
+    ``bind_top_level_scan_ins=False`` leaves the top-level slots' ``SI`` unbound, for an
+    AccessLink listing them to connect (:func:`to_icl`); nested slots stay bound either way."""
+    entry = TDI if bind_top_level_scan_ins else None
+    lines, _final_so = _render_chain_instances(graph.chain, prev_so=entry)
     return lines
 
 
