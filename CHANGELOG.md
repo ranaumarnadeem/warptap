@@ -68,6 +68,12 @@ implementation stage.
   as before. No tool available elaborates an AccessLink, so the new shape is checked against
   the ICL grammar and the published examples only. faultflow's tests that match the old
   AccessLink text need updating when it moves to this version.
+- **`insert_sib_network` and `insert_bsr` refuse an `ir_width` other than 4 and an
+  `opcode_extest` other than `0b0000`**, with `SibInsertError`/`BsrInsertError`, before
+  touching the netlist. Neither was ever passed to `rtl/tap_core.v`, so another value built a
+  design whose decode didn't match its TAP: `tap_core`'s Update-IR turns an opcode it doesn't
+  know into BYPASS, so the network or boundary register could never be selected. `TapModel`
+  and `TapConfig` still model other widths.
 
 ### Added
 
