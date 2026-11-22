@@ -5,6 +5,8 @@ implementation stage.
 
 ## [Unreleased]
 
+## [0.0.7] - 2026-11-22
+
 ### Behavior changes
 
 - **The inserted TAP selects the IJTAG network with IJTAG_ACCESS by default, not EXTEST.** IEEE

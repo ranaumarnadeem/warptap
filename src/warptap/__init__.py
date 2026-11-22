@@ -89,7 +89,7 @@ from warptap.wsp_ir import WspReset
 from warptap.wsp_play import WspPlayError, WspRow, to_wsp_rows
 from warptap.yosys_io import YosysError, ingest, write_verilog_from_json
 
-__version__ = "0.0.6"
+__version__ = "0.0.7"
 
 __all__ = [
     "__version__",
